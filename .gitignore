@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment variables (contains passwords)
+.env
+
+# Build outputs
+build/
+dist/
+
+# Logs
+logs/
+*.log
+
+# Uploads (user-generated content)
+uploads/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Prisma generated
+**/generated/prisma
+
+# Temp files
+*.tmp

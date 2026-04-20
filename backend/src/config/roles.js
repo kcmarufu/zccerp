@@ -1,0 +1,159 @@
+/**
+ * Role-Based Access Control Configuration
+ * Defines permissions for each role in the system
+ */
+
+const ROLES = {
+  GENERAL_USER: 'GENERAL_USER',
+  PROGRAM_LEAD: 'PROGRAM_LEAD',
+  HEAD_OF_PROGRAMS: 'HEAD_OF_PROGRAMS',
+  FINANCE_CLERK: 'FINANCE_CLERK'
+};
+
+const PERMISSIONS = {
+  // Request permissions
+  CREATE_REQUEST: 'create_request',
+  VIEW_OWN_REQUESTS: 'view_own_requests',
+  VIEW_DEPARTMENT_REQUESTS: 'view_department_requests',
+  VIEW_ALL_REQUESTS: 'view_all_requests',
+  EDIT_REQUEST: 'edit_request',
+  DELETE_REQUEST: 'delete_request',
+  SUBMIT_REQUEST: 'submit_request',
+  
+  // Approval permissions
+  APPROVE_AS_LEAD: 'approve_as_lead',
+  APPROVE_AS_HOP: 'approve_as_hop',
+  APPROVE_AS_FINANCE: 'approve_as_finance',
+  REJECT_REQUEST: 'reject_request',
+  
+  // Budget permissions
+  VIEW_BUDGET_LINES: 'view_budget_lines',
+  MANAGE_BUDGET_LINES: 'manage_budget_lines',
+  TOP_UP_BUDGET: 'top_up_budget',
+  
+  // Reports
+  VIEW_REPORTS: 'view_reports',
+  EXPORT_DATA: 'export_data',
+  
+  // User management
+  VIEW_USERS: 'view_users',
+  MANAGE_USERS: 'manage_users'
+};
+
+const ROLE_PERMISSIONS = {
+  [ROLES.GENERAL_USER]: [
+    PERMISSIONS.CREATE_REQUEST,
+    PERMISSIONS.VIEW_OWN_REQUESTS,
+    PERMISSIONS.EDIT_REQUEST,
+    PERMISSIONS.DELETE_REQUEST,
+    PERMISSIONS.SUBMIT_REQUEST,
+    PERMISSIONS.VIEW_BUDGET_LINES
+  ],
+  
+  [ROLES.PROGRAM_LEAD]: [
+    PERMISSIONS.VIEW_OWN_REQUESTS,
+    PERMISSIONS.VIEW_DEPARTMENT_REQUESTS,
+    PERMISSIONS.APPROVE_AS_LEAD,
+    PERMISSIONS.REJECT_REQUEST,
+    PERMISSIONS.VIEW_BUDGET_LINES,
+    PERMISSIONS.VIEW_REPORTS
+  ],
+  
+  [ROLES.HEAD_OF_PROGRAMS]: [
+    PERMISSIONS.VIEW_OWN_REQUESTS,
+    PERMISSIONS.VIEW_ALL_REQUESTS,
+    PERMISSIONS.APPROVE_AS_HOP,
+    PERMISSIONS.REJECT_REQUEST,
+    PERMISSIONS.VIEW_BUDGET_LINES,
+    PERMISSIONS.VIEW_REPORTS
+    // Note: EXPORT_DATA removed - only Finance can access Dispatch Desk
+  ],
+  
+  [ROLES.FINANCE_CLERK]: [
+    PERMISSIONS.VIEW_ALL_REQUESTS,
+    PERMISSIONS.APPROVE_AS_FINANCE,
+    PERMISSIONS.REJECT_REQUEST,
+    PERMISSIONS.VIEW_BUDGET_LINES,
+    PERMISSIONS.MANAGE_BUDGET_LINES,
+    PERMISSIONS.TOP_UP_BUDGET,
+    PERMISSIONS.VIEW_REPORTS,
+    PERMISSIONS.EXPORT_DATA,
+    PERMISSIONS.VIEW_USERS
+  ]
+};
+
+// Request status workflow
+const REQUEST_STATUS = {
+  DRAFT: 'DRAFT',
+  PENDING_LEAD_APPROVAL: 'PENDING_LEAD_APPROVAL',
+  PENDING_HOP_APPROVAL: 'PENDING_HOP_APPROVAL',
+  PENDING_FINANCE_APPROVAL: 'PENDING_FINANCE_APPROVAL',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED',
+  CANCELLED: 'CANCELLED'
+};
+
+// Valid status transitions
+const STATUS_TRANSITIONS = {
+  [REQUEST_STATUS.DRAFT]: [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.CANCELLED],
+  [REQUEST_STATUS.PENDING_LEAD_APPROVAL]: [REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.REJECTED],
+  [REQUEST_STATUS.PENDING_HOP_APPROVAL]: [REQUEST_STATUS.PENDING_FINANCE_APPROVAL, REQUEST_STATUS.REJECTED],
+  [REQUEST_STATUS.PENDING_FINANCE_APPROVAL]: [REQUEST_STATUS.APPROVED, REQUEST_STATUS.REJECTED],
+  [REQUEST_STATUS.APPROVED]: [],
+  [REQUEST_STATUS.REJECTED]: [],
+  [REQUEST_STATUS.CANCELLED]: []
+};
+
+// Check if user has permission
+const hasPermission = (role, permission) => {
+  const permissions = ROLE_PERMISSIONS[role];
+  return permissions && permissions.includes(permission);
+};
+
+// Check if status transition is valid
+const isValidTransition = (currentStatus, newStatus) => {
+  const validTransitions = STATUS_TRANSITIONS[currentStatus];
+  return validTransitions && validTransitions.includes(newStatus);
+};
+
+// Get required role for approval based on current status
+const getRequiredApprovalRole = (currentStatus) => {
+  switch (currentStatus) {
+    case REQUEST_STATUS.PENDING_LEAD_APPROVAL:
+      return ROLES.PROGRAM_LEAD;
+    case REQUEST_STATUS.PENDING_HOP_APPROVAL:
+      return ROLES.HEAD_OF_PROGRAMS;
+    case REQUEST_STATUS.PENDING_FINANCE_APPROVAL:
+      return ROLES.FINANCE_CLERK;
+    default:
+      return null;
+  }
+};
+
+// Get next status after approval
+const getNextApprovalStatus = (currentStatus) => {
+  switch (currentStatus) {
+    case REQUEST_STATUS.DRAFT:
+      return REQUEST_STATUS.PENDING_LEAD_APPROVAL;
+    case REQUEST_STATUS.PENDING_LEAD_APPROVAL:
+      return REQUEST_STATUS.PENDING_HOP_APPROVAL;
+    case REQUEST_STATUS.PENDING_HOP_APPROVAL:
+      return REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
+    case REQUEST_STATUS.PENDING_FINANCE_APPROVAL:
+      return REQUEST_STATUS.APPROVED;
+    default:
+      return null;
+  }
+};
+
+module.exports = {
+  ROLES,
+  PERMISSIONS,
+  ROLE_PERMISSIONS,
+  REQUEST_STATUS,
+  STATUS_TRANSITIONS,
+  hasPermission,
+  isValidTransition,
+  getRequiredApprovalRole,
+  getNextApprovalStatus
+};
