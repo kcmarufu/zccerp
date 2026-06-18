@@ -37,10 +37,13 @@ import {
   Receipt as RequestIcon,
   AccountBalance as DonorIcon,
   History as HistoryIcon,
-  OpenInNew as OpenIcon
+  OpenInNew as OpenIcon,
+  TableChart as ExcelIcon,
+  ExpandMore as LoadMoreIcon
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
+import * as XLSX from 'xlsx';
 
 import { budgetService } from '../../services/budgetService';
 import { BudgetLine, BudgetTransaction, Request } from '../../types';
@@ -109,9 +112,14 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
     total_approved_amount: number;
     total_pending_amount: number;
   } | null>(null);
+  // pagination: how many rows are visible (starts at 10, +10 per click)
+  const [txVisible, setTxVisible] = useState(10);
+  const [reqVisible, setReqVisible] = useState(10);
 
   useEffect(() => {
     if (open && budgetLineId) {
+      setTxVisible(10);
+      setReqVisible(10);
       fetchBudgetDetails();
       fetchRequests();
     }
@@ -152,6 +160,7 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
       case 'APPROVED': return 'success';
       case 'REJECTED': return 'error';
       case 'DRAFT': return 'default';
+      case 'PENDING_ADMIN_APPROVAL': return 'info';
       case 'PENDING_LEAD_APPROVAL':
       case 'PENDING_HOP_APPROVAL':
       case 'PENDING_FINANCE_APPROVAL':
@@ -174,6 +183,43 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
   const handleViewRequest = (requestId: number) => {
     navigate(`/finance/requests/${requestId}`);
     onClose();
+  };
+
+  const exportTransactionsExcel = () => {
+    if (!budgetDetails) return;
+    const wb = XLSX.utils.book_new();
+    const headers = ['Date', 'Type', 'Amount ($)', 'Balance Before ($)', 'Balance After ($)', 'Description', 'By'];
+    const rows = budgetDetails.transactions.map(tx => [
+      format(new Date(tx.created_at), 'dd MMM yyyy HH:mm'),
+      tx.transaction_type,
+      (tx.transaction_type === 'DEDUCTION' ? '-' : '+') + Number(tx.amount).toFixed(2),
+      Number(tx.balance_before).toFixed(2),
+      Number(tx.balance_after).toFixed(2),
+      tx.description || '',
+      `${tx.first_name || ''} ${tx.last_name || ''}`.trim()
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    ws['!cols'] = [18, 14, 12, 16, 16, 35, 18].map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
+    XLSX.writeFile(wb, `transactions-${budgetDetails.budget_code}-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+  };
+
+  const exportRequestsExcel = () => {
+    if (!budgetDetails) return;
+    const wb = XLSX.utils.book_new();
+    const headers = ['Request Code', 'Requester', 'Department', 'Status', 'Amount ($)', 'Date'];
+    const rows = requests.map(r => [
+      r.request_code,
+      `${r.requester_first_name || ''} ${r.requester_last_name || ''}`.trim(),
+      r.department_code || '',
+      r.status.replace(/_/g, ' '),
+      Number(r.amount_from_budget || 0).toFixed(2),
+      r.created_at ? format(new Date(r.created_at), 'dd MMM yyyy') : ''
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    ws['!cols'] = [20, 22, 14, 24, 12, 14].map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Requests');
+    XLSX.writeFile(wb, `requests-${budgetDetails.budget_code}-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 
   if (!open) return null;
@@ -429,127 +475,189 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
 
             {/* Requests Tab */}
             <TabPanel value={tabValue} index={1}>
-              {requestSummary && (
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  <strong>{requestSummary.total_requests}</strong> total requests | 
-                  <strong> {formatCurrency(requestSummary.total_approved_amount)}</strong> approved | 
-                  <strong> {formatCurrency(requestSummary.total_pending_amount)}</strong> pending
-                </Alert>
-              )}
-              
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
+                {requestSummary && (
+                  <Alert severity="info" sx={{ flex: 1, mr: 2, py: 0.5 }}>
+                    <strong>{requestSummary.total_requests}</strong> total requests |&nbsp;
+                    <strong>{formatCurrency(requestSummary.total_approved_amount)}</strong> approved |&nbsp;
+                    <strong>{formatCurrency(requestSummary.total_pending_amount)}</strong> pending
+                  </Alert>
+                )}
+                {requests.length > 0 && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<ExcelIcon />}
+                    onClick={exportRequestsExcel}
+                    sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+                  >
+                    Export Excel
+                  </Button>
+                )}
+              </Box>
+
               {requests.length === 0 ? (
                 <Box textAlign="center" py={4}>
                   <Typography color="text.secondary">No requests found for this budget line</Typography>
                 </Box>
               ) : (
-                <TableContainer>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Request Code</TableCell>
-                        <TableCell>Requester</TableCell>
-                        <TableCell>Department</TableCell>
-                        <TableCell>Status</TableCell>
-                        <TableCell align="right">Amount</TableCell>
-                        <TableCell>Date</TableCell>
-                        <TableCell align="center">Action</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {requests.map((request) => (
-                        <TableRow key={request.id} hover>
-                          <TableCell>
-                            <Typography fontWeight="medium">{request.request_code}</Typography>
-                          </TableCell>
-                          <TableCell>
-                            {request.requester_first_name} {request.requester_last_name}
-                          </TableCell>
-                          <TableCell>
-                            <Chip label={request.department_code} size="small" variant="outlined" />
-                          </TableCell>
-                          <TableCell>
-                            <Chip 
-                              label={request.status.replace(/_/g, ' ')} 
-                              size="small" 
-                              color={getStatusColor(request.status)}
-                            />
-                          </TableCell>
-                          <TableCell align="right">
-                            {formatCurrency(request.amount_from_budget)}
-                          </TableCell>
-                          <TableCell>
-                            {format(new Date(request.created_at), 'MMM d, yyyy')}
-                          </TableCell>
-                          <TableCell align="center">
-                            <Tooltip title="View Request">
-                              <IconButton size="small" onClick={() => handleViewRequest(request.id)}>
-                                <OpenIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                          </TableCell>
+                <>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Request Code</TableCell>
+                          <TableCell>Requester</TableCell>
+                          <TableCell>Department</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell align="right">Amount</TableCell>
+                          <TableCell>Date</TableCell>
+                          <TableCell align="center">Action</TableCell>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
+                      </TableHead>
+                      <TableBody>
+                        {requests.slice(0, reqVisible).map((request) => (
+                          <TableRow key={request.id} hover>
+                            <TableCell>
+                              <Typography fontWeight="medium">{request.request_code}</Typography>
+                            </TableCell>
+                            <TableCell>
+                              {request.requester_first_name} {request.requester_last_name}
+                            </TableCell>
+                            <TableCell>
+                              <Chip label={request.department_code} size="small" variant="outlined" />
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                label={request.status.replace(/_/g, ' ')}
+                                size="small"
+                                color={getStatusColor(request.status)}
+                              />
+                            </TableCell>
+                            <TableCell align="right">
+                              {formatCurrency(request.amount_from_budget)}
+                            </TableCell>
+                            <TableCell>
+                              {format(new Date(request.created_at), 'MMM d, yyyy')}
+                            </TableCell>
+                            <TableCell align="center">
+                              <Tooltip title="View Request">
+                                <IconButton size="small" onClick={() => handleViewRequest(request.id)}>
+                                  <OpenIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                  {reqVisible < requests.length && (
+                    <Box display="flex" justifyContent="center" mt={1.5}>
+                      <Button
+                        size="small"
+                        variant="text"
+                        startIcon={<LoadMoreIcon />}
+                        onClick={() => setReqVisible(v => v + 10)}
+                      >
+                        Load More ({requests.length - reqVisible} remaining)
+                      </Button>
+                    </Box>
+                  )}
+                  <Typography variant="caption" color="text.secondary" display="block" textAlign="right" mt={0.5}>
+                    Showing {Math.min(reqVisible, requests.length)} of {requests.length}
+                  </Typography>
+                </>
               )}
             </TabPanel>
 
             {/* Transactions Tab */}
             <TabPanel value={tabValue} index={2}>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
+                <Typography variant="body2" color="text.secondary">
+                  {budgetDetails.transactions.length} transaction{budgetDetails.transactions.length !== 1 ? 's' : ''}
+                </Typography>
+                {budgetDetails.transactions.length > 0 && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<ExcelIcon />}
+                    onClick={exportTransactionsExcel}
+                  >
+                    Export Excel
+                  </Button>
+                )}
+              </Box>
               {budgetDetails.transactions.length === 0 ? (
                 <Box textAlign="center" py={4}>
                   <Typography color="text.secondary">No transactions found</Typography>
                 </Box>
               ) : (
-                <TableContainer>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Date</TableCell>
-                        <TableCell>Type</TableCell>
-                        <TableCell align="right">Amount</TableCell>
-                        <TableCell align="right">Balance Before</TableCell>
-                        <TableCell align="right">Balance After</TableCell>
-                        <TableCell>Description</TableCell>
-                        <TableCell>By</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {budgetDetails.transactions.map((tx) => (
-                        <TableRow key={tx.id} hover>
-                          <TableCell>
-                            {format(new Date(tx.created_at), 'MMM d, yyyy HH:mm')}
-                          </TableCell>
-                          <TableCell>
-                            <Chip 
-                              label={tx.transaction_type} 
-                              size="small"
-                              color={tx.transaction_type === 'DEDUCTION' ? 'error' : 'success'}
-                            />
-                          </TableCell>
-                          <TableCell align="right">
-                            <Typography 
-                              color={tx.transaction_type === 'DEDUCTION' ? 'error' : 'success.main'}
-                              fontWeight="medium"
-                            >
-                              {tx.transaction_type === 'DEDUCTION' ? '-' : '+'}
-                              {formatCurrency(tx.amount)}
-                            </Typography>
-                          </TableCell>
-                          <TableCell align="right">{formatCurrency(tx.balance_before)}</TableCell>
-                          <TableCell align="right">{formatCurrency(tx.balance_after)}</TableCell>
-                          <TableCell>
-                            <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
-                              {tx.description}
-                            </Typography>
-                          </TableCell>
-                          <TableCell>{tx.first_name} {tx.last_name}</TableCell>
+                <>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Date</TableCell>
+                          <TableCell>Type</TableCell>
+                          <TableCell align="right">Amount</TableCell>
+                          <TableCell align="right">Balance Before</TableCell>
+                          <TableCell align="right">Balance After</TableCell>
+                          <TableCell>Description</TableCell>
+                          <TableCell>By</TableCell>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
+                      </TableHead>
+                      <TableBody>
+                        {budgetDetails.transactions.slice(0, txVisible).map((tx) => (
+                          <TableRow key={tx.id} hover>
+                            <TableCell>
+                              {format(new Date(tx.created_at), 'MMM d, yyyy HH:mm')}
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                label={tx.transaction_type}
+                                size="small"
+                                color={tx.transaction_type === 'DEDUCTION' ? 'error' : 'success'}
+                              />
+                            </TableCell>
+                            <TableCell align="right">
+                              <Typography
+                                color={tx.transaction_type === 'DEDUCTION' ? 'error' : 'success.main'}
+                                fontWeight="medium"
+                              >
+                                {tx.transaction_type === 'DEDUCTION' ? '-' : '+'}
+                                {formatCurrency(tx.amount)}
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="right">{formatCurrency(tx.balance_before)}</TableCell>
+                            <TableCell align="right">{formatCurrency(tx.balance_after)}</TableCell>
+                            <TableCell>
+                              <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
+                                {tx.description}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>{tx.first_name} {tx.last_name}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                  {txVisible < budgetDetails.transactions.length && (
+                    <Box display="flex" justifyContent="center" mt={1.5}>
+                      <Button
+                        size="small"
+                        variant="text"
+                        startIcon={<LoadMoreIcon />}
+                        onClick={() => setTxVisible(v => v + 10)}
+                      >
+                        Load More ({budgetDetails.transactions.length - txVisible} remaining)
+                      </Button>
+                    </Box>
+                  )}
+                  <Typography variant="caption" color="text.secondary" display="block" textAlign="right" mt={0.5}>
+                    Showing {Math.min(txVisible, budgetDetails.transactions.length)} of {budgetDetails.transactions.length}
+                  </Typography>
+                </>
               )}
             </TabPanel>
           </Box>

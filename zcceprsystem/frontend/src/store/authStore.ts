@@ -15,6 +15,8 @@ interface AuthStore extends AuthState {
   setLoading: (loading: boolean) => void;
   hasRole: (...roles: UserRole[]) => boolean;
   hasPermission: (permission: string) => boolean;
+  /** True for ADMIN, or for HEAD_OF_PROGRAMS/PROGRAM_LEAD in the Finance (AF) dept */
+  isFinanceManager: () => boolean;
 }
 
 // Role-based permissions mapping
@@ -38,7 +40,15 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'view_reports',
     'export_data',
     'view_users',
-    'manage_users'
+    'manage_users',
+    // Procurement
+    'create_purchase_request',
+    'view_purchase_requests',
+    'approve_purchase_request',
+    'manage_quotations',
+    'manage_vendors',
+    'committee_review',
+    'proc_finance_approve'
   ],
   GENERAL_USER: [
     'create_request',
@@ -46,19 +56,29 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'edit_request',
     'delete_request',
     'submit_request',
-    'view_budget_lines'
+    'view_budget_lines',
+    // Procurement: can create and view own purchase requests
+    'create_purchase_request',
+    'view_purchase_requests'
   ],
   PROGRAM_LEAD: [
     'create_request',
     'view_own_requests',
     'view_department_requests',
+    'view_all_requests',
     'edit_request',
     'delete_request',
     'submit_request',
     'approve_as_lead',
     'reject_request',
     'view_budget_lines',
-    'view_reports'
+    'manage_budget_lines',
+    'top_up_budget',
+    'view_reports',
+    'export_data',
+    // Procurement: dept-level approval only
+    'view_purchase_requests',
+    'approve_purchase_request'
   ],
   HEAD_OF_PROGRAMS: [
     'view_own_requests',
@@ -66,8 +86,13 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'approve_as_hop',
     'reject_request',
     'view_budget_lines',
-    'view_reports'
-    // Note: export_data removed - only Finance can access Dispatch Desk
+    'manage_budget_lines',
+    'top_up_budget',
+    'view_reports',
+    'export_data',
+    // Procurement: dept-level approval only
+    'view_purchase_requests',
+    'approve_purchase_request'
   ],
   FINANCE_CLERK: [
     'view_all_requests',
@@ -78,7 +103,25 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'top_up_budget',
     'view_reports',
     'export_data',
-    'view_users'
+    'view_users',
+    // Procurement: finance-level and final approval
+    'view_purchase_requests',
+    'approve_purchase_request',
+    'proc_finance_approve'
+  ],
+  PROCUREMENT_OFFICER: [
+    'view_purchase_requests',
+    'manage_quotations',
+    'manage_vendors',
+    'view_reports',
+    'view_budget_lines',
+    'export_data'
+  ],
+  PROCUREMENT_COMMITTEE: [
+    'view_purchase_requests',
+    'committee_review',
+    'view_reports',
+    'view_budget_lines'
   ]
 };
 
@@ -155,11 +198,19 @@ export const useAuthStore = create<AuthStore>()(
         if (!user) return false;
         const permissions = ROLE_PERMISSIONS[user.role] || [];
         return permissions.includes(permission);
+      },
+
+      isFinanceManager: () => {
+        const { user } = get();
+        if (!user) return false;
+        if (user.role === 'ADMIN') return true;
+        return ['HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'].includes(user.role)
+          && user.department_code === 'AF';
       }
     }),
     {
       name: 'auth-storage',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         user: state.user,
         accessToken: state.accessToken,

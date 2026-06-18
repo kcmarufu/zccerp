@@ -14,6 +14,7 @@ import 'react-toastify/dist/ReactToastify.css';
 // Components
 import Navigation from './components/layout/Navigation';
 import ProtectedRoute from './components/common/ProtectedRoute';
+import InactivityTimer from './components/common/InactivityTimer';
 
 // Pages
 import LoginPage from './pages/LoginPage';
@@ -26,22 +27,26 @@ import ApprovalsPage from './pages/ApprovalsPage';
 import BudgetListPage from './pages/BudgetListPage';
 import BudgetManagement from './components/budgets/BudgetManagement';
 import DonorManagementPage from './pages/DonorManagementPage';
+import ProjectManagementPage from './pages/ProjectManagementPage';
 import DispatchDesk from './components/dispatch/DispatchDesk';
 import ReconciliationPage from './pages/ReconciliationPage';
 import ComingSoonPage from './pages/ComingSoonPage';
-import AssetRegisterPage from './pages/AssetRegisterPage';
 import FinancialReportsPage from './pages/FinancialReportsPage';
 
-// Module Pages
-import ProjectsPage from './pages/modules/ProjectsPage';
-import ProcurementPage from './pages/modules/ProcurementPage';
-import CompliancePage from './pages/modules/CompliancePage';
-import MonitoringEvalPage from './pages/modules/MonitoringEvalPage';
-import GrantDonorPage from './pages/modules/GrantDonorPage';
+// Procurement Module Pages
+import ProcurementDashboard from './pages/procurement/ProcurementDashboard';
+import PurchaseRequestList from './pages/procurement/PurchaseRequestList';
+import PurchaseRequestForm from './pages/procurement/PurchaseRequestForm';
+import PurchaseRequestDetail from './pages/procurement/PurchaseRequestDetail';
+import VendorDatabase from './pages/procurement/VendorDatabase';
+import ProcurementApprovalsPage from './pages/procurement/ProcurementApprovalsPage';
 
 // Admin Pages (lazy load when created)
 const UserManagementPage = React.lazy(() => import('./pages/admin/UserManagementPage'));
 const AccessControlPage = React.lazy(() => import('./pages/admin/AccessControlPage'));
+const OverallAdminPage = React.lazy(() => import('./pages/admin/OverallAdminPage'));
+const DepartmentManagementPage = React.lazy(() => import('./pages/admin/DepartmentManagementPage'));
+const SystemSettingsPage = React.lazy(() => import('./pages/admin/SystemSettingsPage'));
 
 // HR Module Pages (lazy load)
 const HRDashboardPage = React.lazy(() => import('./pages/hr/HRDashboardPage'));
@@ -130,9 +135,13 @@ const queryClient = new QueryClient({
 });
 
 // Role constants
-const APPROVER_ROLES: UserRole[] = ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK'];
+const APPROVER_ROLES: UserRole[] = ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK', 'ADMIN'];
 const FINANCE_ROLES: UserRole[] = ['FINANCE_CLERK'];
 const ADMIN_ROLES: UserRole[] = ['ADMIN'];
+// Roles that can manage partners/projects/budget lines (Finance HOP, Finance Lead, Super Admin)
+const FINANCE_MANAGERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'];
+// All roles that access finance pages (managers + clerks)
+const ALL_FINANCE_ROLES: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'];
 
 const App: React.FC = () => {
   return (
@@ -140,6 +149,7 @@ const App: React.FC = () => {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <BrowserRouter>
+          <InactivityTimer />
           <Routes>
             {/* Public Routes */}
             <Route path="/login" element={<LoginPage />} />
@@ -175,6 +185,14 @@ const App: React.FC = () => {
                         }
                       />
                       <Route
+                        path="/finance/requests/:requestId/edit"
+                        element={
+                          <ProtectedRoute requiredPermission="create_request">
+                            <RequestForm />
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
                         path="/finance/requests/:requestId"
                         element={<RequestDetailPage />}
                       />
@@ -195,17 +213,17 @@ const App: React.FC = () => {
                         element={<ReconciliationPage />}
                       />
 
-                      {/* Dispatch */}
+                      {/* Dispatch — Finance Clerks + Admin */}
                       <Route
                         path="/finance/dispatch"
                         element={
-                          <ProtectedRoute allowedRoles={FINANCE_ROLES}>
+                          <ProtectedRoute allowedRoles={['FINANCE_CLERK', 'ADMIN']}>
                             <DispatchDesk />
                           </ProtectedRoute>
                         }
                       />
 
-                      {/* Budgets */}
+                      {/* Budgets — all finance roles can view */}
                       <Route
                         path="/finance/budgets"
                         element={
@@ -214,104 +232,85 @@ const App: React.FC = () => {
                           </ProtectedRoute>
                         }
                       />
+                      {/* Budget Management — only Finance HOP, Finance Lead, Admin */}
                       <Route
                         path="/finance/budgets/manage"
                         element={
-                          <ProtectedRoute allowedRoles={FINANCE_ROLES}>
+                          <ProtectedRoute allowedRoles={FINANCE_MANAGERS}>
                             <BudgetManagement />
                           </ProtectedRoute>
                         }
                       />
 
-                      {/* Donors */}
+                      {/* Donors/Partners — all finance roles can view; editing gated inside page */}
                       <Route
                         path="/finance/donors"
                         element={
-                          <ProtectedRoute allowedRoles={FINANCE_ROLES}>
+                          <ProtectedRoute allowedRoles={ALL_FINANCE_ROLES}>
                             <DonorManagementPage />
                           </ProtectedRoute>
                         }
                       />
 
-                      {/* ========== Asset Management Module ========== */}
-                      <Route path="/assets" element={<AssetRegisterPage />} />
-                      <Route path="/assets/tracking" element={<AssetRegisterPage />} />
+                      {/* Projects — all finance roles can view; deleting gated inside page */}
+                      <Route
+                        path="/finance/projects"
+                        element={
+                          <ProtectedRoute allowedRoles={ALL_FINANCE_ROLES}>
+                            <ProjectManagementPage />
+                          </ProtectedRoute>
+                        }
+                      />
+
+                      {/* ========== Asset Management Module (Coming Soon) ========== */}
+                      <Route path="/assets" element={<ComingSoonPage module="Asset Management" />} />
+                      <Route path="/assets/*" element={<ComingSoonPage module="Asset Management" />} />
 
                       {/* ========== Human Resources Module ========== */}
-                      <Route path="/hr" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <HRDashboardPage />
-                        </Suspense>
-                      } />
-                      <Route path="/hr/employees" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <EmployeeDirectoryPage />
-                        </Suspense>
-                      } />
-                      <Route path="/hr/leave" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <LeaveManagementPage />
-                        </Suspense>
-                      } />
-                      <Route path="/hr/timesheets" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <TimesheetManagementPage />
-                        </Suspense>
-                      } />
-                      <Route path="/hr/performance" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <PerformanceReviewPage />
-                        </Suspense>
-                      } />
-                      <Route path="/hr/training" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <TrainingRecordsPage />
-                        </Suspense>
-                      } />
-                      <Route path="/hr/payroll" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <PayrollPage />
-                        </Suspense>
-                      } />
-                      <Route path="/hr/disciplinary" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <DisciplinaryRecordsPage />
-                        </Suspense>
-                      } />
-                      <Route path="/hr/exit" element={
-                        <Suspense fallback={<div>Loading...</div>}>
-                          <ExitClearancePage />
-                        </Suspense>
-                      } />
+                      {/* ========== Human Resources Module (Temporarily Disabled) ========== */}
+                      <Route path="/hr" element={<ComingSoonPage module="Human Resources" />} />
+                      <Route path="/hr/*" element={<ComingSoonPage module="Human Resources" />} />
 
                       {/* ========== Reports & Analytics ========== */}
                       <Route path="/reports/finance" element={<FinancialReportsPage />} />
                       <Route path="/reports/budgets" element={<FinancialReportsPage />} />
 
-                      {/* ========== Projects & Programs Module ========== */}
-                      <Route path="/projects" element={<ProjectsPage />} />
-                      <Route path="/projects/milestones" element={<ProjectsPage />} />
+                      {/* ========== Projects & Programs Module (Coming Soon) ========== */}
+                      <Route path="/projects" element={<ComingSoonPage module="Projects & Programs" />} />
+                      <Route path="/projects/*" element={<ComingSoonPage module="Projects & Programs" />} />
 
                       {/* ========== Procurement Module ========== */}
-                      <Route path="/procurement" element={<ProcurementPage />} />
-                      <Route path="/procurement/vendors" element={<ProcurementPage />} />
-                      <Route path="/procurement/tenders" element={<ProcurementPage />} />
+                      <Route path="/procurement" element={<ProcurementDashboard />} />
+                      <Route path="/procurement/requests" element={<PurchaseRequestList />} />
+                      <Route path="/procurement/requests/create" element={<PurchaseRequestForm />} />
+                      <Route path="/procurement/requests/:id" element={<PurchaseRequestDetail />} />
+                      <Route path="/procurement/requests/:id/edit" element={<PurchaseRequestForm />} />
+                      <Route path="/procurement/approvals" element={<ProcurementApprovalsPage />} />
+                      <Route path="/procurement/vendors" element={<ProtectedRoute allowedRoles={['PROCUREMENT_OFFICER', 'ADMIN'] as UserRole[]}><VendorDatabase /></ProtectedRoute>} />
 
-                      {/* ========== Grants & Donor Management Module ========== */}
-                      <Route path="/grants" element={<GrantDonorPage />} />
-                      <Route path="/grants/donors" element={<GrantDonorPage />} />
-                      <Route path="/grants/fund-tracking" element={<GrantDonorPage />} />
+                      {/* ========== Grants & Donor Management Module (Coming Soon) ========== */}
+                      <Route path="/grants" element={<ComingSoonPage module="Grants & Partners" />} />
+                      <Route path="/grants/*" element={<ComingSoonPage module="Grants & Partners" />} />
 
-                      {/* ========== Compliance & Audit Module ========== */}
-                      <Route path="/compliance" element={<CompliancePage />} />
-                      <Route path="/compliance/audit" element={<CompliancePage />} />
-                      <Route path="/compliance/documents" element={<CompliancePage />} />
+                      {/* ========== Compliance & Audit Module (Coming Soon) ========== */}
+                      <Route path="/compliance" element={<ComingSoonPage module="Compliance & Audit" />} />
+                      <Route path="/compliance/*" element={<ComingSoonPage module="Compliance & Audit" />} />
 
-                      {/* ========== Monitoring & Evaluation Module ========== */}
-                      <Route path="/me" element={<MonitoringEvalPage />} />
-                      <Route path="/me/indicators" element={<MonitoringEvalPage />} />
+                      {/* ========== Monitoring & Evaluation Module (Coming Soon) ========== */}
+                      <Route path="/me" element={<ComingSoonPage module="Monitoring & Evaluation" />} />
+                      <Route path="/me/*" element={<ComingSoonPage module="Monitoring & Evaluation" />} />
 
                       {/* ========== Administration Module ========== */}
+                      <Route
+                        path="/admin/overview"
+                        element={
+                          <ProtectedRoute allowedRoles={ADMIN_ROLES}>
+                            <Suspense fallback={<div>Loading...</div>}>
+                              <OverallAdminPage />
+                            </Suspense>
+                          </ProtectedRoute>
+                        }
+                      />
                       <Route
                         path="/admin/users"
                         element={
@@ -332,7 +331,27 @@ const App: React.FC = () => {
                           </ProtectedRoute>
                         }
                       />
-                      <Route path="/admin/settings" element={<ComingSoonPage module="System Settings" />} />
+                      <Route
+                        path="/admin/departments"
+                        element={
+                          <ProtectedRoute allowedRoles={ADMIN_ROLES}>
+                            <Suspense fallback={<div>Loading...</div>}>
+                              <DepartmentManagementPage />
+                            </Suspense>
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route path="/admin" element={<Navigate to="/admin/overview" replace />} />
+                      <Route
+                        path="/admin/settings"
+                        element={
+                          <ProtectedRoute allowedRoles={ADMIN_ROLES}>
+                            <Suspense fallback={<div>Loading...</div>}>
+                              <SystemSettingsPage />
+                            </Suspense>
+                          </ProtectedRoute>
+                        }
+                      />
 
                       {/* Legacy route redirects */}
                       <Route path="/requests" element={<Navigate to="/finance/requests" replace />} />

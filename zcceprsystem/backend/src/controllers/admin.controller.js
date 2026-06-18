@@ -9,6 +9,116 @@ const { query } = require('../config/database');
 class AdminController {
 
   /**
+   * Super-admin overview across core modules.
+   * GET /api/admin/overview
+   */
+  async getOverallOverview(req, res) {
+    const safe = async (sql, params = [], fallback = []) => {
+      try {
+        return await query(sql, params);
+      } catch (error) {
+        return fallback;
+      }
+    };
+
+    try {
+      const [
+        users,
+        departments,
+        requests,
+        budgets,
+        assets,
+        hrEmployees,
+        recentApprovals,
+        recentBudgetTransactions,
+        roleDistribution,
+        departmentDistribution
+      ] = await Promise.all([
+        safe('SELECT COUNT(*) as total, SUM(CASE WHEN is_active = TRUE THEN 1 ELSE 0 END) as active FROM users'),
+        safe('SELECT COUNT(*) as total FROM departments WHERE is_active = TRUE'),
+        safe(
+          `SELECT COUNT(*) as total,
+                  SUM(CASE WHEN status IN ('PENDING_LEAD_APPROVAL', 'PENDING_HOP_APPROVAL', 'PENDING_FINANCE_APPROVAL', 'PENDING_RECONCILIATION', 'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE') THEN 1 ELSE 0 END) as pending,
+                  SUM(CASE WHEN status IN ('APPROVED', 'DISPATCHED', 'RECONCILED') THEN 1 ELSE 0 END) as approved,
+                  SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END) as rejected
+           FROM requests`
+        ),
+        safe(
+          `SELECT COUNT(*) as total,
+                  COALESCE(SUM(allocated_amount), 0) as allocated,
+                  COALESCE(SUM(spent_amount), 0) as spent
+           FROM budget_lines
+           WHERE is_active = TRUE`
+        ),
+        safe('SELECT COUNT(*) as total, SUM(CASE WHEN is_active = TRUE THEN 1 ELSE 0 END) as active FROM assets', [], [{ total: 0, active: 0 }]),
+        safe('SELECT COUNT(*) as total, SUM(CASE WHEN employment_status = \'ACTIVE\' THEN 1 ELSE 0 END) as active FROM hr_employees', [], [{ total: 0, active: 0 }]),
+        safe(
+          `SELECT al.created_at,
+                  al.action,
+                  al.approver_role,
+                  al.comments,
+                  r.request_code,
+                  CONCAT(u.first_name, ' ', u.last_name) as actor_name
+           FROM approval_logs al
+           LEFT JOIN requests r ON r.id = al.request_id
+           LEFT JOIN users u ON u.id = al.approver_id
+           ORDER BY al.created_at DESC
+           LIMIT 15`
+        ),
+        safe(
+          `SELECT bt.created_at,
+                  bt.transaction_type,
+                  bt.amount,
+                  bl.budget_code,
+                  CONCAT(u.first_name, ' ', u.last_name) as actor_name
+           FROM budget_transactions bt
+           LEFT JOIN budget_lines bl ON bl.id = bt.budget_line_id
+           LEFT JOIN users u ON u.id = bt.performed_by
+           ORDER BY bt.created_at DESC
+           LIMIT 15`
+        ),
+        safe(
+          `SELECT r.role_name as role, COUNT(*) as count
+           FROM users u
+           JOIN roles r ON u.role_id = r.id
+           GROUP BY r.role_name
+           ORDER BY count DESC`
+        ),
+        safe(
+          `SELECT d.department_name, d.department_code,
+                  COUNT(u.id) as user_count,
+                  COALESCE(SUM(CASE WHEN u.is_active = TRUE THEN 1 ELSE 0 END), 0) as active_users
+           FROM departments d
+           LEFT JOIN users u ON u.department_id = d.id
+           GROUP BY d.id, d.department_name, d.department_code
+           ORDER BY d.department_name`
+        )
+      ]);
+
+      return res.json({
+        success: true,
+        data: {
+          summary: {
+            users: users[0] || { total: 0, active: 0 },
+            departments: departments[0] || { total: 0 },
+            requests: requests[0] || { total: 0, pending: 0, approved: 0, rejected: 0 },
+            budgets: budgets[0] || { total: 0, allocated: 0, spent: 0 },
+            assets: assets[0] || { total: 0, active: 0 },
+            hrEmployees: hrEmployees[0] || { total: 0, active: 0 }
+          },
+          roleDistribution,
+          departmentDistribution,
+          recentApprovals,
+          recentBudgetTransactions
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching admin overview:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch admin overview' });
+    }
+  }
+
+  /**
    * Get all users with department and role info
    * GET /api/admin/users
    */
@@ -87,12 +197,19 @@ class AdminController {
         return res.status(400).json({ success: false, error: 'Invalid role' });
       }
 
+      // Auto-generate unique employee_id (format: EMP0001)
+      const maxRes = await query(
+        "SELECT MAX(CAST(SUBSTRING(employee_id, 4) AS UNSIGNED)) as mx FROM users WHERE employee_id REGEXP '^EMP[0-9]+$'"
+      );
+      const nextNum = (maxRes[0]?.mx || 0) + 1;
+      const employee_id = `EMP${String(nextNum).padStart(4, '0')}`;
+
       const hashedPassword = await bcrypt.hash(password, 12);
 
       const result = await query(
-        `INSERT INTO users (email, password_hash, first_name, last_name, role_id, department_id, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, TRUE, NOW(), NOW())`,
-        [email, hashedPassword, first_name, last_name, roles[0].id, department_id]
+        `INSERT INTO users (employee_id, email, password_hash, first_name, last_name, role_id, department_id, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, NOW(), NOW())`,
+        [employee_id, email, hashedPassword, first_name, last_name, roles[0].id, department_id]
       );
 
       res.status(201).json({
@@ -230,6 +347,187 @@ class AdminController {
     } catch (error) {
       console.error('Error toggling user status:', error);
       res.status(500).json({ success: false, error: 'Failed to toggle user status' });
+    }
+  }
+
+  /**
+   * Permanently delete a user (Admin only)
+   * DELETE /api/admin/users/:userId
+   */
+  async deleteUser(req, res) {
+    try {
+      const { userId } = req.params;
+      const targetId = parseInt(userId);
+
+      // Prevent self-deletion
+      if (targetId === req.user.id) {
+        return res.status(400).json({ success: false, error: 'You cannot delete your own account' });
+      }
+
+      const users = await query(
+        `SELECT u.id, u.email, r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?`,
+        [targetId]
+      );
+      if (users.length === 0) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      const targetUser = users[0];
+
+      // Prevent deleting the last admin account
+      if (targetUser.role_name === 'ADMIN') {
+        const adminCount = await query(
+          `SELECT COUNT(*) as cnt FROM users u JOIN roles r ON u.role_id = r.id WHERE r.role_name = 'ADMIN' AND u.is_active = TRUE`
+        );
+        if ((adminCount[0]?.cnt || 0) <= 1) {
+          return res.status(400).json({ success: false, error: 'Cannot delete the last active admin account' });
+        }
+      }
+
+      // Check if user has associated requests — deactivate instead of hard delete if so
+      const requestCount = await query('SELECT COUNT(*) as cnt FROM requests WHERE requester_id = ?', [targetId]);
+      if ((requestCount[0]?.cnt || 0) > 0) {
+        // Soft delete — deactivate instead
+        await query('UPDATE users SET is_active = FALSE, updated_at = NOW() WHERE id = ?', [targetId]);
+        return res.json({ success: true, message: 'User has existing requests — account deactivated instead of deleted', softDelete: true });
+      }
+
+      await query('DELETE FROM users WHERE id = ?', [targetId]);
+      res.json({ success: true, message: 'User deleted successfully' });
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      res.status(500).json({ success: false, error: 'Failed to delete user' });
+    }
+  }
+
+  // ============================================================================
+  // DEPARTMENT MANAGEMENT
+  // ============================================================================
+
+  /**
+   * Get all departments with user counts
+   * GET /api/admin/departments
+   */
+  async getDepartments(req, res) {
+    try {
+      const departments = await query(
+        `SELECT d.id, d.department_name, d.department_code, d.description, d.is_active, d.created_at,
+                COUNT(u.id) as user_count,
+                COALESCE(SUM(CASE WHEN u.is_active = TRUE THEN 1 ELSE 0 END), 0) as active_user_count
+         FROM departments d
+         LEFT JOIN users u ON u.department_id = d.id
+         GROUP BY d.id, d.department_name, d.department_code, d.description, d.is_active, d.created_at
+         ORDER BY d.department_name`
+      );
+      res.json({ success: true, data: departments });
+    } catch (error) {
+      console.error('Error fetching departments:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch departments' });
+    }
+  }
+
+  /**
+   * Create a new department
+   * POST /api/admin/departments
+   */
+  async createDepartment(req, res) {
+    try {
+      const { department_name, department_code, description } = req.body;
+      if (!department_name || !department_code) {
+        return res.status(400).json({ success: false, error: 'Department name and code are required' });
+      }
+
+      const existing = await query(
+        'SELECT id FROM departments WHERE department_name = ? OR department_code = ?',
+        [department_name, department_code.toUpperCase()]
+      );
+      if (existing.length > 0) {
+        return res.status(400).json({ success: false, error: 'Department name or code already exists' });
+      }
+
+      const result = await query(
+        `INSERT INTO departments (department_name, department_code, description, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, TRUE, NOW(), NOW())`,
+        [department_name, department_code.toUpperCase(), description || null]
+      );
+      res.status(201).json({ success: true, message: 'Department created', data: { id: result.insertId } });
+    } catch (error) {
+      console.error('Error creating department:', error);
+      res.status(500).json({ success: false, error: 'Failed to create department' });
+    }
+  }
+
+  /**
+   * Update a department
+   * PUT /api/admin/departments/:id
+   */
+  async updateDepartment(req, res) {
+    try {
+      const { id } = req.params;
+      const { department_name, department_code, description, is_active } = req.body;
+
+      const depts = await query('SELECT id FROM departments WHERE id = ?', [id]);
+      if (depts.length === 0) {
+        return res.status(404).json({ success: false, error: 'Department not found' });
+      }
+
+      // Check uniqueness
+      if (department_name || department_code) {
+        const conflict = await query(
+          'SELECT id FROM departments WHERE (department_name = ? OR department_code = ?) AND id != ?',
+          [department_name || '', (department_code || '').toUpperCase(), id]
+        );
+        if (conflict.length > 0) {
+          return res.status(400).json({ success: false, error: 'Department name or code already used by another department' });
+        }
+      }
+
+      let updateSql = 'UPDATE departments SET updated_at = NOW()';
+      const params = [];
+      if (department_name) { updateSql += ', department_name = ?'; params.push(department_name); }
+      if (department_code) { updateSql += ', department_code = ?'; params.push(department_code.toUpperCase()); }
+      if (description !== undefined) { updateSql += ', description = ?'; params.push(description); }
+      if (is_active !== undefined) { updateSql += ', is_active = ?'; params.push(is_active); }
+      updateSql += ' WHERE id = ?';
+      params.push(id);
+
+      await query(updateSql, params);
+      res.json({ success: true, message: 'Department updated' });
+    } catch (error) {
+      console.error('Error updating department:', error);
+      res.status(500).json({ success: false, error: 'Failed to update department' });
+    }
+  }
+
+  /**
+   * Delete a department
+   * DELETE /api/admin/departments/:id
+   */
+  async deleteDepartment(req, res) {
+    try {
+      const { id } = req.params;
+
+      const userCount = await query(
+        'SELECT COUNT(*) as cnt FROM users WHERE department_id = ?', [id]
+      );
+      if ((userCount[0]?.cnt || 0) > 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot delete department — it has ${userCount[0].cnt} user(s) assigned. Reassign users first.`
+        });
+      }
+
+      const depts = await query('SELECT id FROM departments WHERE id = ?', [id]);
+      if (depts.length === 0) {
+        return res.status(404).json({ success: false, error: 'Department not found' });
+      }
+
+      // Soft delete — deactivate
+      await query('UPDATE departments SET is_active = FALSE, updated_at = NOW() WHERE id = ?', [id]);
+      res.json({ success: true, message: 'Department deactivated' });
+    } catch (error) {
+      console.error('Error deleting department:', error);
+      res.status(500).json({ success: false, error: 'Failed to delete department' });
     }
   }
 

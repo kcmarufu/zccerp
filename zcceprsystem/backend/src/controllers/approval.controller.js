@@ -50,6 +50,12 @@ class ApprovalController {
           );
           break;
 
+        case ROLES.ADMIN:
+          result = await approvalService.approveAsAdmin(
+            requestId, approverId, comments, version, ipAddress
+          );
+          break;
+
         default:
           return res.status(403).json({
             success: false,

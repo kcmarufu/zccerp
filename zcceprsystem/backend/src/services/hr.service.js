@@ -5,6 +5,8 @@
  */
 
 const { query, transaction } = require('../config/database');
+const { ROLES } = require('../config/roles');
+const leaveApproval = require('./leaveApproval.service');
 
 class HRService {
 
@@ -13,7 +15,7 @@ class HRService {
   // ========================================================================
 
   async getEmployees(filters = {}) {
-    const { page = 1, limit = 25, search, departmentId, status, employmentType } = filters;
+    const { page = 1, limit = 25, search, departmentId, status, employmentType, userId } = filters;
     const offset = (page - 1) * limit;
     let where = ['1=1'];
     let params = [];
@@ -24,6 +26,7 @@ class HRService {
       params.push(s, s, s, s);
     }
     if (departmentId) { where.push('e.department_id = ?'); params.push(departmentId); }
+    if (userId) { where.push('e.user_id = ?'); params.push(userId); }
     if (status) { where.push('e.employment_status = ?'); params.push(status); }
     if (employmentType) { where.push('e.employment_type = ?'); params.push(employmentType); }
 
@@ -300,129 +303,346 @@ class HRService {
   // LEAVE MANAGEMENT
   // ========================================================================
 
+  // ------------------------------------------------------------------
+  // Leave types — HR Office manages deductible / accrual-target flags
+  // ------------------------------------------------------------------
+
   async getLeaveTypes() {
-    return await query(`SELECT * FROM hr_leave_types WHERE is_active = 1 ORDER BY leave_name`);
+    return await query(
+      `SELECT id, leave_code, leave_name, description,
+              default_days_per_year, is_paid, requires_documentation,
+              max_carry_forward, is_active,
+              is_deductible, is_accrual_target, monthly_accrual_days
+       FROM hr_leave_types
+       WHERE is_active = 1
+       ORDER BY leave_name`
+    );
   }
 
-  async getLeaveRequests(filters = {}) {
-    const { page = 1, limit = 25, employeeId, departmentId, status, year } = filters;
-    const offset = (page - 1) * limit;
-    let where = ['1=1'];
-    let params = [];
+  async updateLeaveType(id, data) {
+    return await transaction(async (connection) => {
+      const [existing] = await connection.execute(
+        `SELECT id FROM hr_leave_types WHERE id = ?`, [id]
+      );
+      if (existing.length === 0) throw new Error('Leave type not found');
 
-    if (employeeId) { where.push('lr.employee_id = ?'); params.push(employeeId); }
+      const fields = [];
+      const params = [];
+
+      const setFlag = (column, value) => {
+        fields.push(`${column} = ?`);
+        params.push(value ? 1 : 0);
+      };
+
+      if (data.is_deductible !== undefined)     setFlag('is_deductible',     data.is_deductible);
+      if (data.is_accrual_target !== undefined) setFlag('is_accrual_target', data.is_accrual_target);
+      if (data.monthly_accrual_days !== undefined) {
+        const v = Number(data.monthly_accrual_days);
+        if (!Number.isFinite(v) || v < 0) throw new Error('monthly_accrual_days must be a non-negative number');
+        fields.push('monthly_accrual_days = ?'); params.push(v);
+      }
+      if (data.leave_name !== undefined) { fields.push('leave_name = ?'); params.push(data.leave_name); }
+      if (data.description !== undefined) { fields.push('description = ?'); params.push(data.description); }
+      if (data.default_days_per_year !== undefined) {
+        const v = Number(data.default_days_per_year);
+        if (!Number.isFinite(v) || v < 0) throw new Error('default_days_per_year must be a non-negative number');
+        fields.push('default_days_per_year = ?'); params.push(v);
+      }
+      if (data.max_carry_forward !== undefined) {
+        const v = Number(data.max_carry_forward);
+        if (!Number.isFinite(v) || v < 0) throw new Error('max_carry_forward must be a non-negative number');
+        fields.push('max_carry_forward = ?'); params.push(v);
+      }
+      if (data.is_active !== undefined) setFlag('is_active', data.is_active);
+
+      if (fields.length === 0) throw new Error('No fields to update');
+
+      // At most one accrual target — clear all others first if turning this on.
+      if (data.is_accrual_target === true || data.is_accrual_target === 1) {
+        await connection.execute(
+          `UPDATE hr_leave_types SET is_accrual_target = 0 WHERE id <> ?`, [id]
+        );
+      }
+
+      params.push(id);
+      await connection.execute(
+        `UPDATE hr_leave_types SET ${fields.join(', ')} WHERE id = ?`,
+        params
+      );
+
+      const [rows] = await connection.execute(
+        `SELECT id, leave_code, leave_name, description,
+                default_days_per_year, is_paid, requires_documentation,
+                max_carry_forward, is_active,
+                is_deductible, is_accrual_target, monthly_accrual_days
+         FROM hr_leave_types WHERE id = ?`, [id]
+      );
+      return rows[0];
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Leave requests
+  // ------------------------------------------------------------------
+
+  async getLeaveRequests(filters = {}) {
+    const {
+      page = 1, limit = 25,
+      employeeId, departmentId, status, year,
+      pendingForApprover,    // { id, role, department_id } — when set, overrides other filters with role-based scope
+    } = filters;
+    const offset = (page - 1) * limit;
+    const where = ['1=1'];
+    const params = [];
+
+    if (employeeId)   { where.push('lr.employee_id = ?'); params.push(employeeId); }
     if (departmentId) { where.push('e.department_id = ?'); params.push(departmentId); }
-    if (status) { where.push('lr.status = ?'); params.push(status); }
-    if (year) { where.push('YEAR(lr.start_date) = ?'); params.push(year); }
+    if (status)       { where.push('lr.status = ?');       params.push(status); }
+    if (year)         { where.push('YEAR(lr.start_date) = ?'); params.push(year); }
+
+    if (pendingForApprover) {
+      where.push("lr.status = 'PENDING'");
+      const frag = leaveApproval.pendingForApproverWhereClause(pendingForApprover);
+      where.push(frag.sql);
+      params.push(...frag.params);
+    }
 
     const countResult = await query(
-      `SELECT COUNT(*) as total FROM hr_leave_requests lr JOIN hr_employees e ON lr.employee_id = e.id WHERE ${where.join(' AND ')}`,
+      `SELECT COUNT(*) AS total
+       FROM hr_leave_requests lr
+       JOIN hr_employees e ON lr.employee_id = e.id
+       LEFT JOIN users  req_u ON e.user_id   = req_u.id
+       LEFT JOIN roles  req_r ON req_u.role_id = req_r.id
+       WHERE ${where.join(' AND ')}`,
       [...params]
     );
 
-    const sql = `
-      SELECT lr.*, lr.days_requested as total_days,
-             lt.leave_name as leave_type_name,
-             CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-             e.department_id, d.department_name,
-             CONCAT(au.first_name, ' ', au.last_name) as approved_by_name,
-             lr.rejection_reason as approval_comments
-      FROM hr_leave_requests lr
-      JOIN hr_employees e ON lr.employee_id = e.id
-      JOIN hr_leave_types lt ON lr.leave_type_id = lt.id
-      LEFT JOIN departments d ON e.department_id = d.id
-      LEFT JOIN users au ON lr.approved_by = au.id
-      WHERE ${where.join(' AND ')}
-      ORDER BY lr.created_at DESC
-      LIMIT ${Number(limit)} OFFSET ${Number(offset)}
-    `;
-    const data = await query(sql, [...params]);
+    const data = await query(
+      `SELECT lr.id, lr.employee_id, lr.leave_type_id,
+              lr.start_date, lr.end_date, lr.days_requested AS total_days,
+              lr.reason, lr.status,
+              lr.approved_by, lr.approved_at, lr.rejection_reason,
+              lr.created_at,
+              lt.leave_name AS leave_type_name,
+              lt.is_deductible, lt.is_accrual_target,
+              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              e.department_id,
+              d.department_name,
+              COALESCE(req_r.role_name, 'GENERAL_USER') AS requester_role,
+              CONCAT(au.first_name, ' ', au.last_name) AS approved_by_name
+       FROM hr_leave_requests lr
+       JOIN hr_employees    e     ON lr.employee_id   = e.id
+       JOIN hr_leave_types  lt    ON lr.leave_type_id = lt.id
+       LEFT JOIN departments d    ON e.department_id  = d.id
+       LEFT JOIN users  req_u     ON e.user_id        = req_u.id
+       LEFT JOIN roles  req_r     ON req_u.role_id    = req_r.id
+       LEFT JOIN users  au        ON lr.approved_by   = au.id
+       WHERE ${where.join(' AND ')}
+       ORDER BY lr.created_at DESC
+       LIMIT ${Number(limit)} OFFSET ${Number(offset)}`,
+      [...params]
+    );
 
-    return { data, total: countResult[0].total, page, limit, totalPages: Math.ceil(countResult[0].total / limit) };
+    return {
+      data,
+      total: countResult[0].total,
+      page, limit,
+      totalPages: Math.ceil(countResult[0].total / limit),
+    };
   }
 
-  async createLeaveRequest(data, requestedBy) {
+  /**
+   * Submit a leave request.
+   * - Only deductible leave types check / reserve from the balance.
+   * - Approver is computed at the time of action (not stored on the row), so
+   *   role/department changes between submission and approval are honoured.
+   */
+  async createLeaveRequest(data, requestedByUserId) {
     return await transaction(async (connection) => {
-      // Get employee record for the user
+      // Locate the employee record for this user.
       const [employees] = await connection.execute(
-        `SELECT id FROM hr_employees WHERE user_id = ? OR id = ?`,
-        [requestedBy, data.employee_id || 0]
+        `SELECT e.id, e.department_id, e.user_id
+         FROM hr_employees e
+         WHERE e.user_id = ?
+            OR e.id      = ?
+         LIMIT 1`,
+        [requestedByUserId, data.employee_id || 0]
       );
       if (employees.length === 0) throw new Error('Employee record not found');
-      const employeeId = data.employee_id || employees[0].id;
+      const employee = employees[0];
+      const employeeId = data.employee_id || employee.id;
 
-      // Calculate days
+      // Block submitting for someone else unless the caller is the same employee.
+      if (data.employee_id && Number(data.employee_id) !== Number(employee.id)) {
+        // Only ADMIN-level may submit on someone's behalf; controller is
+        // responsible for that gate. We just check the employee row exists.
+        const [target] = await connection.execute(
+          `SELECT id FROM hr_employees WHERE id = ?`, [data.employee_id]
+        );
+        if (target.length === 0) throw new Error('Target employee not found');
+      }
+
+      // Validate dates.
       const startDate = new Date(data.start_date);
-      const endDate = new Date(data.end_date);
-      const diffTime = Math.abs(endDate - startDate);
-      const daysRequested = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+      const endDate   = new Date(data.end_date);
+      if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+        throw new Error('Invalid start_date or end_date');
+      }
+      if (endDate < startDate) {
+        throw new Error('End date must be on or after start date');
+      }
+      const daysRequested =
+        Math.ceil(Math.abs(endDate - startDate) / 86_400_000) + 1;
 
-      // Check leave balance
-      const year = startDate.getFullYear();
-      const [balances] = await connection.execute(
-        `SELECT * FROM hr_leave_balances WHERE employee_id = ? AND leave_type_id = ? AND fiscal_year = ?`,
-        [employeeId, data.leave_type_id, year]
+      // Look up the leave type to decide whether the balance is touched.
+      const [types] = await connection.execute(
+        `SELECT id, leave_name, is_deductible
+         FROM hr_leave_types
+         WHERE id = ? AND is_active = 1`,
+        [data.leave_type_id]
       );
+      if (types.length === 0) throw new Error('Leave type not found or inactive');
+      const leaveType = types[0];
 
-      if (balances.length > 0) {
-        const bal = balances[0];
-        const available = Number(bal.entitlement) + Number(bal.carried_forward) - Number(bal.taken) - Number(bal.pending);
-        if (available < daysRequested) {
-          throw new Error(`Insufficient leave balance. Available: ${available} days, Requested: ${daysRequested} days`);
+      // Reserve balance only for deductible types.
+      if (leaveType.is_deductible) {
+        const year = startDate.getFullYear();
+        const [balances] = await connection.execute(
+          `SELECT * FROM hr_leave_balances
+           WHERE employee_id = ? AND leave_type_id = ? AND fiscal_year = ?
+           FOR UPDATE`,
+          [employeeId, data.leave_type_id, year]
+        );
+
+        let balance = balances[0];
+        if (!balance) {
+          // Lazily create a zeroed balance row so non-deductible flips don't
+          // leave the employee blocked. Entitlement starts at 0 and accrues.
+          await connection.execute(
+            `INSERT INTO hr_leave_balances
+               (employee_id, leave_type_id, fiscal_year,
+                entitlement, carried_forward, taken, pending)
+             VALUES (?, ?, ?, 0, 0, 0, 0)`,
+            [employeeId, data.leave_type_id, year]
+          );
+          const [refetch] = await connection.execute(
+            `SELECT * FROM hr_leave_balances
+             WHERE employee_id = ? AND leave_type_id = ? AND fiscal_year = ?`,
+            [employeeId, data.leave_type_id, year]
+          );
+          balance = refetch[0];
         }
-        // Increment pending
+
+        const available =
+          Number(balance.entitlement) +
+          Number(balance.carried_forward) -
+          Number(balance.taken) -
+          Number(balance.pending);
+
+        if (available < daysRequested) {
+          throw new Error(
+            `Insufficient ${leaveType.leave_name} balance — available ${available} day(s), requested ${daysRequested}.`
+          );
+        }
+
         await connection.execute(
           `UPDATE hr_leave_balances SET pending = pending + ? WHERE id = ?`,
-          [daysRequested, bal.id]
+          [daysRequested, balance.id]
         );
       }
 
       const [result] = await connection.execute(
-        `INSERT INTO hr_leave_requests (employee_id, leave_type_id, start_date, end_date,
-         days_requested, reason, status)
+        `INSERT INTO hr_leave_requests
+           (employee_id, leave_type_id, start_date, end_date,
+            days_requested, reason, status)
          VALUES (?, ?, ?, ?, ?, ?, 'PENDING')`,
-        [employeeId, data.leave_type_id, data.start_date, data.end_date, daysRequested, data.reason || null]
+        [
+          employeeId, data.leave_type_id,
+          data.start_date, data.end_date,
+          daysRequested, data.reason || null,
+        ]
       );
 
       return { id: result.insertId, days_requested: daysRequested };
     });
   }
 
-  async approveLeaveRequest(leaveRequestId, approverId, comments, approved = true) {
+  /**
+   * Single-stage approval. Approver is validated via leaveApproval service
+   * which encodes the role-based routing rules.
+   *
+   *   approver = { id, role, department_id }   (from req.user)
+   */
+  async approveLeaveRequest(leaveRequestId, approver, { approved = true, comments = null } = {}) {
     return await transaction(async (connection) => {
-      const [requests] = await connection.execute(
-        `SELECT lr.*, e.department_id FROM hr_leave_requests lr 
-         JOIN hr_employees e ON lr.employee_id = e.id
-         WHERE lr.id = ? FOR UPDATE`,
+      const [rows] = await connection.execute(
+        `SELECT lr.*, e.department_id AS employee_department_id,
+                e.user_id           AS employee_user_id,
+                req_r.role_name     AS requester_role,
+                lt.is_deductible    AS leave_is_deductible
+         FROM hr_leave_requests lr
+         JOIN hr_employees    e     ON lr.employee_id   = e.id
+         JOIN hr_leave_types  lt    ON lr.leave_type_id = lt.id
+         LEFT JOIN users      req_u ON e.user_id        = req_u.id
+         LEFT JOIN roles      req_r ON req_u.role_id    = req_r.id
+         WHERE lr.id = ?
+         FOR UPDATE`,
         [leaveRequestId]
       );
-      if (requests.length === 0) throw new Error('Leave request not found');
-      const request = requests[0];
-      if (request.status !== 'PENDING') throw new Error('Leave request is not pending');
+      if (rows.length === 0) throw new Error('Leave request not found');
+      const request = rows[0];
+
+      if (request.status !== 'PENDING') {
+        throw new Error(`Cannot act on a leave request with status "${request.status}"`);
+      }
+
+      // Build the requester context for the routing check.
+      const requesterContext = {
+        userId:       request.employee_user_id,
+        role:         request.requester_role || ROLES.GENERAL_USER,
+        departmentId: request.employee_department_id,
+      };
+
+      await leaveApproval.assertCanApprove(approver, requesterContext);
 
       const newStatus = approved ? 'APPROVED' : 'REJECTED';
+
       await connection.execute(
-        `UPDATE hr_leave_requests SET status = ?, approved_by = ?, rejection_reason = ?, 
-         approved_at = NOW() WHERE id = ?`,
-        [newStatus, approverId, approved ? null : (comments || null), leaveRequestId]
+        `UPDATE hr_leave_requests
+         SET status            = ?,
+             approved_by       = ?,
+             approved_at       = NOW(),
+             rejection_reason  = ?
+         WHERE id = ?`,
+        [
+          newStatus,
+          approver.id,
+          approved ? null : (comments || null),
+          leaveRequestId,
+        ]
       );
 
-      // Update leave balance
-      const year = new Date(request.start_date).getFullYear();
-      if (approved) {
-        // Move from pending to taken
-        await connection.execute(
-          `UPDATE hr_leave_balances SET pending = GREATEST(pending - ?, 0), 
-           taken = taken + ? WHERE employee_id = ? AND leave_type_id = ? AND fiscal_year = ?`,
-          [request.days_requested, request.days_requested, request.employee_id, request.leave_type_id, year]
-        );
-      } else {
-        // Restore: remove from pending
-        await connection.execute(
-          `UPDATE hr_leave_balances SET pending = GREATEST(pending - ?, 0) 
-           WHERE employee_id = ? AND leave_type_id = ? AND fiscal_year = ?`,
-          [request.days_requested, request.employee_id, request.leave_type_id, year]
-        );
+      // Balance adjustments only for deductible types.
+      if (request.leave_is_deductible) {
+        const year = new Date(request.start_date).getFullYear();
+        if (newStatus === 'APPROVED') {
+          await connection.execute(
+            `UPDATE hr_leave_balances
+             SET pending = GREATEST(pending - ?, 0),
+                 taken   = taken + ?
+             WHERE employee_id = ? AND leave_type_id = ? AND fiscal_year = ?`,
+            [request.days_requested, request.days_requested,
+             request.employee_id, request.leave_type_id, year]
+          );
+        } else {
+          await connection.execute(
+            `UPDATE hr_leave_balances
+             SET pending = GREATEST(pending - ?, 0)
+             WHERE employee_id = ? AND leave_type_id = ? AND fiscal_year = ?`,
+            [request.days_requested,
+             request.employee_id, request.leave_type_id, year]
+          );
+        }
       }
 
       return { id: leaveRequestId, status: newStatus };
@@ -432,19 +652,101 @@ class HRService {
   async getLeaveBalances(employeeId, year) {
     const currentYear = year || new Date().getFullYear();
     return await query(
-      `SELECT lb.*, lt.leave_name as leave_type_name,
-              lt.default_days_per_year as max_days_per_year,
-              lb.entitlement as total_days,
-              lb.taken as used_days,
-              lb.pending as pending_days,
-              (lb.entitlement + lb.carried_forward - lb.taken - lb.pending) as remaining_days,
-              lb.fiscal_year as year
+      `SELECT lb.*, lt.leave_name AS leave_type_name,
+              lt.default_days_per_year AS max_days_per_year,
+              lt.is_deductible, lt.is_accrual_target, lt.monthly_accrual_days,
+              lb.entitlement AS total_days,
+              lb.taken       AS used_days,
+              lb.pending     AS pending_days,
+              (lb.entitlement + lb.carried_forward - lb.taken - lb.pending) AS remaining_days,
+              lb.fiscal_year AS year
        FROM hr_leave_balances lb
        JOIN hr_leave_types lt ON lb.leave_type_id = lt.id
        WHERE lb.employee_id = ? AND lb.fiscal_year = ?
        ORDER BY lt.leave_name`,
       [employeeId, currentYear]
     );
+  }
+
+  // ------------------------------------------------------------------
+  // Monthly leave accrual
+  //   +monthly_accrual_days (default 2.5) on the 25th of each month, once.
+  //   Idempotent via UNIQUE(employee_id, leave_type_id, fiscal_year, month).
+  // ------------------------------------------------------------------
+
+  async runMonthlyAccrual({ now = new Date(), triggeredByUserId = null } = {}) {
+    const year  = now.getFullYear();
+    const month = now.getMonth() + 1;
+
+    // Find the (single) accrual-target leave type.
+    const targets = await query(
+      `SELECT id, leave_code, leave_name, monthly_accrual_days
+       FROM hr_leave_types
+       WHERE is_active = 1 AND is_accrual_target = 1
+       LIMIT 1`
+    );
+    if (targets.length === 0) {
+      return { ran: false, reason: 'No accrual-target leave type configured', credited: 0 };
+    }
+    const target = targets[0];
+    const days = Number(target.monthly_accrual_days) || 0;
+    if (days <= 0) {
+      return { ran: false, reason: 'Accrual target has monthly_accrual_days = 0', credited: 0 };
+    }
+
+    // Active employees only.
+    const employees = await query(
+      `SELECT id FROM hr_employees WHERE employment_status = 'ACTIVE'`
+    );
+    if (employees.length === 0) {
+      return { ran: true, credited: 0, skipped: 0, leave_type: target.leave_name };
+    }
+
+    let credited = 0;
+    let skipped  = 0;
+
+    for (const emp of employees) {
+      try {
+        await transaction(async (connection) => {
+          // INSERT into idempotency log first. If a row already exists for this
+          // (employee, type, year, month) the UNIQUE constraint trips and we
+          // skip the balance update.
+          await connection.execute(
+            `INSERT INTO hr_leave_accrual_log
+               (employee_id, leave_type_id, fiscal_year, accrual_month, days_added, triggered_by)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [emp.id, target.id, year, month, days, triggeredByUserId]
+          );
+
+          // Ensure a balance row exists for this year, then top up entitlement.
+          await connection.execute(
+            `INSERT INTO hr_leave_balances
+               (employee_id, leave_type_id, fiscal_year,
+                entitlement, carried_forward, taken, pending)
+             VALUES (?, ?, ?, ?, 0, 0, 0)
+             ON DUPLICATE KEY UPDATE entitlement = entitlement + VALUES(entitlement)`,
+            [emp.id, target.id, year, days]
+          );
+        });
+        credited += 1;
+      } catch (err) {
+        if (err && err.code === 'ER_DUP_ENTRY') {
+          skipped += 1;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    return {
+      ran: true,
+      year, month,
+      leave_type: target.leave_name,
+      days_per_employee: days,
+      credited,
+      skipped,
+      total_employees: employees.length,
+    };
   }
 
   // ========================================================================
@@ -865,8 +1167,9 @@ class HRService {
     );
 
     const sql = `
-      SELECT ec.*, CONCAT(e.first_name, ' ', e.last_name) as employee_name,
+          SELECT ec.*, CONCAT(e.first_name, ' ', e.last_name) as employee_name,
              e.employee_number, e.position_title, d.department_name
+            ,e.department_id
       FROM hr_exit_clearance ec
       JOIN hr_employees e ON ec.employee_id = e.id
       LEFT JOIN departments d ON e.department_id = d.id

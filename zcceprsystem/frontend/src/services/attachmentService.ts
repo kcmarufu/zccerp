@@ -1,4 +1,4 @@
-import api from './api';
+import api, { API_BASE_URL } from './api';
 
 export interface Attachment {
   id: number;
@@ -89,22 +89,22 @@ class AttachmentService {
   }
 
   /**
-   * Download attachment
+   * Download attachment via one-time token — uses native browser download
+   * to avoid all axios blob / CORS issues.
    */
   async downloadAttachment(id: number, originalName: string): Promise<void> {
-    const response = await api.get(`/attachments/${id}/download`, {
-      responseType: 'blob',
-    });
+    // Step 1: get a short-lived one-time token (normal JSON request, always works)
+    const { data } = await api.get(`/attachments/${id}/download-token`);
+    const token: string = data.token;
 
-    // Create blob link to download
-    const url = window.URL.createObjectURL(new Blob([response.data]));
+    // Step 2: trigger a native browser download — no XHR, no CORS, no blob handling
+    const url = `${API_BASE_URL}/attachments/dl/${token}`;
     const link = document.createElement('a');
     link.href = url;
     link.setAttribute('download', originalName);
     document.body.appendChild(link);
     link.click();
     link.remove();
-    window.URL.revokeObjectURL(url);
   }
 
   /**

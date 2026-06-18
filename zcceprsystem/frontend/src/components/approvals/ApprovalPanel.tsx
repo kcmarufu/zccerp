@@ -29,7 +29,8 @@ import {
   Grid,
   IconButton,
   Tooltip,
-  LinearProgress
+  LinearProgress,
+  MenuItem
 } from '@mui/material';
 import {
   CheckCircle as ApproveIcon,
@@ -37,7 +38,8 @@ import {
   Visibility as ViewIcon,
   Warning as WarningIcon,
   Info as InfoIcon,
-  Download as DownloadIcon
+  Download as DownloadIcon,
+  FilterList as FilterIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { format } from 'date-fns';
@@ -46,6 +48,7 @@ import { Request, BudgetImpact, ApprovalPayload } from '../../types';
 import { approvalService } from '../../services/approvalService';
 import attachmentService, { Attachment } from '../../services/attachmentService';
 import { useAuthStore } from '../../store/authStore';
+import api from '../../services/api';
 
 const ApprovalPanel: React.FC = () => {
   const navigate = useNavigate();
@@ -60,6 +63,26 @@ const ApprovalPanel: React.FC = () => {
   const [comments, setComments] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [requestAttachments, setRequestAttachments] = useState<Attachment[]>([]);
+
+  // Department filter state
+  const [departments, setDepartments] = useState<{ id: number; department_name: string; department_code: string }[]>([]);
+  const [deptFilter, setDeptFilter] = useState<string>('');
+
+  // Fetch departments for filter dropdown
+  useEffect(() => {
+    api.get('/departments').then(res => {
+      if (res.data?.success) setDepartments(res.data.data);
+    }).catch(() => { /* non-critical */ });
+  }, []);
+
+  // Derived: apply department filter client-side
+  const filteredRequests = (() => {
+    if (!deptFilter) return pendingRequests;
+    if (deptFilter === '__MY_DEPT__') {
+      return pendingRequests.filter(r => r.department_id === (user as any)?.department_id);
+    }
+    return pendingRequests.filter(r => r.department_id === parseInt(deptFilter));
+  })();
 
   // Fetch pending approvals
   useEffect(() => {
@@ -159,6 +182,7 @@ const ApprovalPanel: React.FC = () => {
 
   const getStatusColor = (status: string): 'warning' | 'info' | 'success' | 'error' | 'default' => {
     switch (status) {
+      case 'PENDING_ADMIN_APPROVAL': return 'info';
       case 'PENDING_LEAD_APPROVAL': return 'warning';
       case 'PENDING_HOP_APPROVAL': return 'info';
       case 'PENDING_FINANCE_APPROVAL': return 'success';
@@ -206,7 +230,36 @@ const ApprovalPanel: React.FC = () => {
           </Typography>
         </Paper>
       ) : (
-        <TableContainer component={Paper}>
+        <>
+          {/* Department Filter */}
+          <Paper elevation={1} sx={{ p: 2, mb: 2 }}>
+            <Grid container spacing={2} alignItems="center">
+              <Grid item xs={12} sm={6} md={4}>
+                <TextField
+                  select
+                  label="Filter by Department"
+                  size="small"
+                  fullWidth
+                  value={deptFilter}
+                  onChange={e => setDeptFilter(e.target.value)}
+                  InputProps={{ startAdornment: <FilterIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 18 }} /> }}
+                >
+                  <MenuItem value="">All Departments</MenuItem>
+                  <MenuItem value="__MY_DEPT__">My Department</MenuItem>
+                  {departments.map(d => (
+                    <MenuItem key={d.id} value={String(d.id)}>{d.department_name}</MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+              <Grid item xs={12} sm={6} md={8}>
+                <Typography variant="body2" color="text.secondary">
+                  Showing {filteredRequests.length} of {pendingRequests.length} pending approval(s)
+                </Typography>
+              </Grid>
+            </Grid>
+          </Paper>
+
+          <TableContainer component={Paper}>
           <Table>
             <TableHead>
               <TableRow sx={{ backgroundColor: 'grey.100' }}>
@@ -221,7 +274,11 @@ const ApprovalPanel: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {pendingRequests.map((request) => (
+              {pendingRequests.length === 0 ? (
+                <TableRow><TableCell colSpan={8} align="center"><Typography py={3} color="text.secondary">No pending approvals</Typography></TableCell></TableRow>
+              ) : filteredRequests.length === 0 ? (
+                <TableRow><TableCell colSpan={8} align="center"><Typography py={3} color="text.secondary">No approvals match the selected department filter</Typography></TableCell></TableRow>
+              ) : filteredRequests.map((request) => (
                 <TableRow 
                   key={request.id}
                   hover
@@ -292,7 +349,8 @@ const ApprovalPanel: React.FC = () => {
               ))}
             </TableBody>
           </Table>
-        </TableContainer>
+          </TableContainer>
+        </>
       )}
 
       {/* Approval/Rejection Dialog */}

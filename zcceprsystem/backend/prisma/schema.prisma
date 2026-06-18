@@ -66,6 +66,7 @@ model Donor {
   created_by          Int?
   
   creator             User?        @relation("DonorCreatedBy", fields: [created_by], references: [id], onDelete: SetNull)
+  projects            Project[]
   budget_lines        BudgetLine[]
   requests            Request[]
   
@@ -74,6 +75,40 @@ model Donor {
   @@index([is_active])
   @@index([created_by])
   @@map("donors")
+}
+
+// ============================================================================
+// PROJECT (Donor → Projects → Budget Lines hierarchy)
+// ============================================================================
+
+model Project {
+  id                Int      @id @default(autoincrement())
+  project_code      String   @unique @db.VarChar(50)
+  project_name      String   @db.VarChar(255)
+  donor_id          Int
+  department_id     Int?
+  description       String?  @db.Text
+  start_date        DateTime?
+  end_date          DateTime?
+  total_budget      Decimal  @default(0.00) @db.Decimal(15, 2)
+  last_request_seq  Int      @default(0)   // per-project float requisition sequence counter
+  is_active         Boolean  @default(true)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+  created_by        Int?
+
+  donor             Donor       @relation(fields: [donor_id], references: [id], onDelete: Restrict)
+  department        Department? @relation(fields: [department_id], references: [id], onDelete: SetNull)
+  creator           User?       @relation("ProjectCreatedBy", fields: [created_by], references: [id], onDelete: SetNull)
+
+  budget_lines      BudgetLine[]
+  requests          Request[]
+  per_diem_claims   PerDiemClaim[]
+
+  @@index([donor_id])
+  @@index([project_code])
+  @@index([is_active])
+  @@map("projects")
 }
 
 // ============================================================================
@@ -92,6 +127,8 @@ model Department {
   users           User[]
   budget_lines    BudgetLine[]
   requests        Request[]
+  routed_requests Request[] @relation("RequestRoutingDept")
+  projects        Project[]
   
   @@index([department_code])
   @@index([is_active])
@@ -120,7 +157,9 @@ model User {
   budget_lines_created  BudgetLine[] @relation("BudgetCreatedBy")
   budget_transactions   BudgetTransaction[]
   donors_created        Donor[] @relation("DonorCreatedBy")
+  projects_created      Project[] @relation("ProjectCreatedBy")
   attachments_uploaded  Attachment[] @relation("AttachmentUploadedBy")
+  per_diem_claims       PerDiemClaim[]
   
   @@index([email])
   @@index([department_id])
@@ -133,7 +172,8 @@ model BudgetLine {
   id               Int      @id @default(autoincrement())
   budget_code      String   @unique @db.VarChar(50)
   budget_name      String   @db.VarChar(255)
-  donor_id         Int                    // CHANGED: Budget lines belong to donors
+  donor_id         Int                    // Budget lines belong to donors (top level)
+  project_id       Int?                   // Budget lines belong to a project under the donor
   department_id    Int?                   // OPTIONAL: Can still track which dept uses it
   category         String?  @db.VarChar(100)  // e.g., "Operations", "Equipment", "Personnel"
   fiscal_year      Int
@@ -147,13 +187,16 @@ model BudgetLine {
   created_by       Int?
   
   donor            Donor      @relation(fields: [donor_id], references: [id], onDelete: Restrict)
+  project          Project?   @relation(fields: [project_id], references: [id], onDelete: SetNull)
   department       Department? @relation(fields: [department_id], references: [id], onDelete: SetNull)
   creator          User?      @relation("BudgetCreatedBy", fields: [created_by], references: [id], onDelete: SetNull)
   
   request_items       RequestItem[]
   budget_transactions BudgetTransaction[]
+  per_diem_claims     PerDiemClaim[]
   
   @@index([donor_id])
+  @@index([project_id])
   @@index([department_id])
   @@index([fiscal_year])
   @@index([is_active])
@@ -166,11 +209,14 @@ model Request {
   request_code        String    @unique @db.VarChar(50)
   requester_id        Int
   department_id       Int
-  donor_id            Int?                  // NEW: Track which donor this request is for
+  donor_id            Int?                  // Track which donor this request is for
+  project_id          Int?                  // Track which project (under the donor)
+  routing_department_id Int?               // Cross-dept: project-owning dept to route approval to
   status              String    @default("DRAFT") @db.VarChar(50)
   total_amount        Decimal   @default(0.00) @db.Decimal(15, 2)
   justification       String?   @db.Text
   priority            String    @default("MEDIUM") @db.VarChar(10)
+  has_per_diem_claim  Boolean   @default(false)
   
   submitted_at        DateTime?
   lead_approved_at    DateTime?
@@ -186,17 +232,104 @@ model Request {
   department          Department    @relation(fields: [department_id], references: [id], onDelete: Restrict)
   status_ref          RequestStatus @relation(fields: [status], references: [status_name], onDelete: Restrict)
   donor               Donor?        @relation(fields: [donor_id], references: [id], onDelete: SetNull)
+  project             Project?      @relation(fields: [project_id], references: [id], onDelete: SetNull)
+  routing_department  Department?   @relation("RequestRoutingDept", fields: [routing_department_id], references: [id], onDelete: SetNull)
   
   items               RequestItem[]
   approval_logs       ApprovalLog[]
   budget_transactions BudgetTransaction[]
+  per_diem_claim      PerDiemClaim?
   
   @@index([requester_id])
   @@index([department_id])
   @@index([donor_id])
+  @@index([project_id])
+  @@index([routing_department_id])
   @@index([status])
   @@index([created_at])
   @@map("requests")
+}
+
+// ============================================================================
+// TRAVEL & PER DIEM CLAIM
+// ============================================================================
+
+model PerDiemClaim {
+  id                         Int      @id @default(autoincrement())
+  request_id                 Int      @unique
+  full_name                  String   @db.VarChar(255)
+  designation                String   @db.VarChar(255)
+  project_id                 Int?
+  strategic_focus            String?  @db.VarChar(255)
+  budget_line_id             Int?
+  trip_start_date            DateTime? @db.Date
+  trip_end_date              DateTime? @db.Date
+  total_claimed              Decimal  @default(0.00) @db.Decimal(15, 2)
+  less_outstanding_advance   Decimal  @default(0.00) @db.Decimal(15, 2)
+  amount_payable             Decimal  @default(0.00) @db.Decimal(15, 2)
+  advance_reconciliation_due DateTime? @db.Date
+  reconciled_at              DateTime?
+  created_by                 Int
+  created_at                 DateTime @default(now())
+  updated_at                 DateTime @updatedAt
+
+  request     Request     @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  project     Project?    @relation(fields: [project_id], references: [id], onDelete: SetNull)
+  budget_line BudgetLine? @relation(fields: [budget_line_id], references: [id], onDelete: SetNull)
+  creator     User        @relation(fields: [created_by], references: [id], onDelete: Restrict)
+
+  trip_items        PerDiemTripItem[]
+  cost_distribution PerDiemCostDistribution[]
+
+  @@index([request_id])
+  @@index([project_id])
+  @@index([created_by])
+  @@map("per_diem_claims")
+}
+
+model PerDiemTripItem {
+  id              Int      @id @default(autoincrement())
+  claim_id        Int
+  row_order       Int      @default(0)
+  trip_date       DateTime @db.Date
+  from_location   String   @db.VarChar(255)
+  to_location     String   @db.VarChar(255)
+  departure_time  String   @db.VarChar(5)   // HH:MM
+  arrival_time    String   @db.VarChar(5)   // HH:MM
+  purpose         String   @db.VarChar(500)
+  breakfast       Boolean  @default(false)
+  lunch           Boolean  @default(false)
+  dinner          Boolean  @default(false)
+  overnight_stay  Boolean  @default(false)
+  rate_breakfast  Decimal  @default(0.00) @db.Decimal(10, 2)
+  rate_lunch      Decimal  @default(0.00) @db.Decimal(10, 2)
+  rate_dinner     Decimal  @default(0.00) @db.Decimal(10, 2)
+  rate_overnight  Decimal  @default(0.00) @db.Decimal(10, 2)
+  line_total      Decimal  @default(0.00) @db.Decimal(15, 2)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  claim PerDiemClaim @relation(fields: [claim_id], references: [id], onDelete: Cascade)
+
+  @@index([claim_id])
+  @@map("per_diem_trip_items")
+}
+
+model PerDiemCostDistribution {
+  id              Int      @id @default(autoincrement())
+  claim_id        Int
+  row_order       Int      @default(0)
+  account_name    String   @db.VarChar(255)
+  account_code    String   @db.VarChar(100)
+  partner_project String?  @db.VarChar(255)
+  amount          Decimal  @default(0.00) @db.Decimal(15, 2)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  claim PerDiemClaim @relation(fields: [claim_id], references: [id], onDelete: Cascade)
+
+  @@index([claim_id])
+  @@map("per_diem_cost_distribution")
 }
 
 model RequestItem {

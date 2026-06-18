@@ -27,7 +27,9 @@ interface BudgetSummary {
 interface CreateBudgetPayload {
   budgetCode: string;
   budgetName: string;
-  departmentId: number;
+  departmentId?: number;
+  donorId?: number;
+  projectCode?: string;
   fiscalYear: number;
   allocatedAmount: number;
   description?: string;
@@ -120,8 +122,14 @@ export const budgetService = {
   },
 
   // Get financial reports data (variance, donor summary, trends)
-  getReports: async (fiscalYear?: number): Promise<ApiResponse<any>> => {
-    const response = await api.get('/budgets/reports', { params: fiscalYear ? { fiscalYear } : {} });
+  getReports: async (fiscalYear?: number, donorId?: number, projectId?: number, dateFrom?: string, dateTo?: string): Promise<ApiResponse<any>> => {
+    const params: any = {};
+    if (fiscalYear) params.fiscalYear = fiscalYear;
+    if (donorId) params.donorId = donorId;
+    if (projectId) params.projectId = projectId;
+    if (dateFrom) params.dateFrom = dateFrom;
+    if (dateTo) params.dateTo = dateTo;
+    const response = await api.get('/budgets/reports', { params });
     return response.data;
   }
 };

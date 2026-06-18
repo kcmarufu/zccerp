@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import {
   Box,
@@ -43,28 +43,30 @@ import {
   Send as SendIcon,
   CloudUpload as UploadIcon,
   AttachFile as FileIcon,
-  Close as CloseIcon
+  Close as CloseIcon,
+  FlightTakeoff as TripIcon,
+  Warning as WarningIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { v4 as uuidv4 } from 'uuid';
 
-import { BudgetLine, Priority, RequestFormData, RequestFormItem, Currency, RequestCategory } from '../../types';
+import {
+  BudgetLine, RequestFormData, RequestFormItem, Currency, RequestCategory, Project,
+  PerDiemClaimFormData, PerDiemRates
+} from '../../types';
 import { requestService } from '../../services/requestService';
 import { budgetService } from '../../services/budgetService';
 import donorService, { Donor } from '../../services/donorService';
+import projectService from '../../services/projectService';
 import attachmentService from '../../services/attachmentService';
+import perDiemService from '../../services/perDiemService';
+import { reconciliationService } from '../../services/reconciliationService';
+import TravelClaimSection from './TravelClaimSection';
 import { useAuthStore } from '../../store/authStore';
 
 const generateId = () => {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 };
-
-const PRIORITY_OPTIONS: { value: Priority; label: string; color: 'default' | 'info' | 'warning' | 'error' }[] = [
-  { value: 'LOW', label: 'Low', color: 'default' },
-  { value: 'MEDIUM', label: 'Medium', color: 'info' },
-  { value: 'HIGH', label: 'High', color: 'warning' },
-  { value: 'URGENT', label: 'Urgent', color: 'error' }
-];
 
 const CURRENCY_OPTIONS: { value: Currency; label: string; symbol: string }[] = [
   { value: 'ZIG', label: 'ZIG (Zimbabwe Gold)', symbol: 'ZiG' },
@@ -72,18 +74,37 @@ const CURRENCY_OPTIONS: { value: Currency; label: string; symbol: string }[] = [
 ];
 
 const CATEGORY_OPTIONS: { value: RequestCategory; label: string; description: string; defaultUnit: string }[] = [
-  { value: 'PROCUREMENT', label: 'Procurement / Items', description: 'Purchase of goods, supplies or equipment', defaultUnit: 'EACH' },
-  { value: 'TRANSPORT', label: 'Transport', description: 'Travel costs, fuel, vehicle hire', defaultUnit: 'TRIP' },
-  { value: 'ACCOMMODATION', label: 'Accommodation', description: 'Hotel, lodging, housing costs', defaultUnit: 'NIGHT' },
-  { value: 'REIMBURSEMENT', label: 'Reimbursement', description: 'Reimbursement for stakeholders or staff', defaultUnit: 'LUMPSUM' },
-  { value: 'PER_DIEM', label: 'Per Diem / Allowances', description: 'Daily allowances, per diem for field staff', defaultUnit: 'DAY' },
-  { value: 'TRAINING', label: 'Training / Workshop', description: 'Training costs, workshop facilitation', defaultUnit: 'SESSION' },
-  { value: 'MAINTENANCE', label: 'Maintenance / Repairs', description: 'Equipment repairs, service costs', defaultUnit: 'SERVICE' },
-  { value: 'OTHER', label: 'Other', description: 'Any other expenditure type', defaultUnit: 'EACH' }
+  // Core float categories
+  { value: 'PROCUREMENT',         label: 'Procurement / Items',            description: 'Purchase of goods, supplies or equipment',                     defaultUnit: 'EACH'     },
+  { value: 'TRANSPORT',           label: 'Transport',                      description: 'Travel costs, fuel, vehicle hire',                              defaultUnit: 'TRIP'     },
+  { value: 'ACCOMMODATION',       label: 'Accommodation',                  description: 'Hotel, lodging, housing costs',                                 defaultUnit: 'NIGHT'    },
+  { value: 'REIMBURSEMENT',       label: 'Reimbursement',                  description: 'Reimbursement for stakeholders or staff',                       defaultUnit: 'LUMPSUM'  },
+  { value: 'PER_DIEM',            label: 'Per Diem / Allowances',          description: 'Daily allowances, per diem for field staff',                    defaultUnit: 'DAY'      },
+  { value: 'TRAINING',            label: 'Training / Workshop',            description: 'Training costs, workshop facilitation',                         defaultUnit: 'SESSION'  },
+  { value: 'MAINTENANCE',         label: 'Maintenance / Repairs',          description: 'Equipment repairs, service costs',                              defaultUnit: 'SERVICE'  },
+  // NGO-specific categories
+  { value: 'CAPACITY_BUILDING',   label: 'Capacity Building',              description: 'Staff capacity strengthening, institutional development',       defaultUnit: 'SESSION'  },
+  { value: 'COMMUNITY_OUTREACH',  label: 'Community Outreach',             description: 'Community mobilisation, awareness campaigns',                   defaultUnit: 'EVENT'    },
+  { value: 'FIELD_OPERATIONS',    label: 'Field Operations & Logistics',   description: 'Field mission costs, operational logistics',                    defaultUnit: 'TRIP'     },
+  { value: 'MEAL',                label: 'Monitoring, Evaluation & Learning (MEAL)', description: 'M&E activities, data collection, surveys',             defaultUnit: 'ACTIVITY' },
+  { value: 'RESEARCH',            label: 'Research & Documentation',       description: 'Research, reporting, documentation costs',                      defaultUnit: 'LUMPSUM'  },
+  { value: 'ADVOCACY',            label: 'Advocacy & Communications',      description: 'Advocacy campaigns, media, publications',                       defaultUnit: 'LUMPSUM'  },
+  { value: 'BENEFICIARY_SUPPORT', label: 'Beneficiary Support',            description: 'Direct support to beneficiaries, cash transfers',               defaultUnit: 'PERSON'   },
+  { value: 'IT_SYSTEMS',          label: 'IT & Systems',                   description: 'Technology, software, ICT equipment',                           defaultUnit: 'EACH'     },
+  { value: 'OFFICE_SUPPLIES',     label: 'Office Supplies & Consumables',  description: 'Stationery, consumables, printing',                             defaultUnit: 'EACH'     },
+  { value: 'UTILITIES',           label: 'Utilities & Internet',           description: 'Electricity, water, internet bills',                            defaultUnit: 'MONTH'    },
+  { value: 'VEHICLE_FLEET',       label: 'Vehicle Fleet',                  description: 'Vehicle maintenance, fuel, fleet management',                   defaultUnit: 'SERVICE'  },
+  { value: 'SECURITY',            label: 'Security Services',              description: 'Security guarding, surveillance, alarms',                       defaultUnit: 'MONTH'    },
+  { value: 'STAFF_WELFARE',       label: 'Staff Welfare',                  description: 'Staff wellbeing, medical, team-building',                       defaultUnit: 'LUMPSUM'  },
+  { value: 'AUDIT_COMPLIANCE',    label: 'Audit & Compliance',             description: 'External audits, compliance reviews',                           defaultUnit: 'SERVICE'  },
+  { value: 'LEGAL_CONSULTANCY',   label: 'Legal & Consultancy',            description: 'Legal fees, professional consultancy',                          defaultUnit: 'SERVICE'  },
+  { value: 'SUBSCRIPTIONS',       label: 'Subscriptions & Memberships',    description: 'Annual subscriptions, membership fees',                         defaultUnit: 'YEAR'     },
+  { value: 'OTHER',               label: 'Other',                          description: 'Any other expenditure type',                                    defaultUnit: 'EACH'     }
 ];
 
 const UNIT_OF_MEASURE_OPTIONS = [
-  'EACH', 'TRIP', 'NIGHT', 'DAY', 'LUMPSUM', 'SESSION', 'SERVICE', 'KG', 'LITRE', 'BOX', 'ROLL', 'SET', 'PACK', 'PERSON', 'MONTH', 'HOUR'
+  'EACH', 'TRIP', 'NIGHT', 'DAY', 'LUMPSUM', 'SESSION', 'SERVICE', 'KG', 'LITRE',
+  'BOX', 'ROLL', 'SET', 'PACK', 'PERSON', 'MONTH', 'HOUR', 'EVENT', 'ACTIVITY', 'YEAR'
 ];
 
 const defaultItem: RequestFormItem = {
@@ -100,29 +121,51 @@ const defaultItem: RequestFormItem = {
 
 const RequestForm: React.FC = () => {
   const navigate = useNavigate();
+  const { requestId } = useParams<{ requestId: string }>();
   const { user } = useAuthStore();
+  const isEditMode = Boolean(requestId);
   const [donors, setDonors] = useState<Donor[]>([]);
-  const [selectedDonors, setSelectedDonors] = useState<number[]>([]);
+  const [selectedDonorId, setSelectedDonorId] = useState<number | ''>('');
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [loadingProjects, setLoadingProjects] = useState(false);
   const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
-  // Multi-donor support: budget lines keyed by donor ID
-  const [donorBudgetLines, setDonorBudgetLines] = useState<Record<number, BudgetLine[]>>({});
-  const [allBudgetLines, setAllBudgetLines] = useState<BudgetLine[]>([]);
+  const [loadingBudgetLines, setLoadingBudgetLines] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [existingStatus, setExistingStatus] = useState<string | null>(null);
+  const [crossDeptWarning, setCrossDeptWarning] = useState<string | null>(null);
+  const [overdueBlocked, setOverdueBlocked] = useState(false);
+  const [overdueCount, setOverdueCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingProjectId = useRef<number | null>(null);
+
+  // ── Per Diem Claim state ──────────────────────────────────────────────────
+  const [hasPerDiemClaim, setHasPerDiemClaim] = useState(false);
+  const [perDiemRates, setPerDiemRates] = useState<PerDiemRates>({ breakfast: 10, lunch: 10, dinner: 10, overnight: 70, accommodation: 100 });
+  const [perDiemClaimData, setPerDiemClaimData] = useState<PerDiemClaimFormData>({
+    full_name: '',
+    designation: '',
+    project_id: null,
+    strategic_focus: '',
+    budget_line_id: null,
+    less_outstanding_advance: 0,
+    trip_items: [],
+    cost_distribution: [],
+  });
 
   const {
     control,
     handleSubmit,
     watch,
+    reset,
     setValue,
     formState: { errors }
   } = useForm<RequestFormData>({
     defaultValues: {
       justification: '',
-      priority: 'MEDIUM',
       currency: 'USD',
       isAdminRequest: false,
       items: [{ ...defaultItem, id: uuidv4() || generateId() }],
@@ -130,7 +173,7 @@ const RequestForm: React.FC = () => {
     }
   });
 
-  const { fields, append, remove } = useFieldArray({
+  const { fields, append, remove, replace } = useFieldArray({
     control,
     name: 'items'
   });
@@ -139,69 +182,191 @@ const RequestForm: React.FC = () => {
   const watchedCurrency = watch('currency');
   const watchedIsAdminRequest = watch('isAdminRequest');
 
-  // Fetch active donors on mount
+  // Fetch active donors + per diem rates on mount
   useEffect(() => {
-    const fetchDonors = async () => {
-      try {
-        const activeDonors = await donorService.getActiveDonors();
-        setDonors(activeDonors);
-        // Pre-load budget lines for all active donors (multi-donor support)
-        const donorBLMap: Record<number, BudgetLine[]> = {};
-        let allBLs: BudgetLine[] = [];
-        for (const donor of activeDonors) {
-          try {
-            const response = await donorService.getBudgetLinesByDonor(donor.id, { is_active: true });
-            if (response.success && response.data) {
-              donorBLMap[donor.id] = response.data;
-              allBLs = [...allBLs, ...response.data];
-            }
-          } catch (err) {
-            console.error(`Failed to fetch budget lines for donor ${donor.id}`, err);
-          }
-        }
-        // Also load all budget lines (including those without donors)
-        try {
-          const { budgetService } = await import('../../services/budgetService');
-          const blResponse = await budgetService.getAll({ isActive: true });
-          if (blResponse.success && blResponse.data) {
-            // Merge: add any budget lines not already in allBLs
-            const existingIds = new Set(allBLs.map(bl => bl.id));
-            const additional = blResponse.data.filter((bl: BudgetLine) => !existingIds.has(bl.id));
-            allBLs = [...allBLs, ...additional];
-          }
-        } catch (err) {
-          console.error('Failed to fetch all budget lines:', err);
-        }
-        setDonorBudgetLines(donorBLMap);
-        setAllBudgetLines(allBLs);
-      } catch (error) {
-        console.error('Failed to fetch donors:', error);
-        toast.error('Failed to load donors');
-      }
-    };
-    fetchDonors();
+    donorService.getActiveDonors()
+      .then(setDonors)
+      .catch(() => toast.error('Failed to load partners'));
+    perDiemService.getRates()
+      .then(setPerDiemRates)
+      .catch(() => { /* use defaults silently */ });
   }, []);
 
-  // Fetch budget lines when donors are selected (multi-donor filtering)
+  // Check overdue reconciliation compliance (only for new requests, not edit mode)
   useEffect(() => {
-    if (selectedDonors.length === 0) {
-      setBudgetLines(allBudgetLines);
-      return;
+    if (!isEditMode) {
+      reconciliationService.getOverdueCheck()
+        .then(res => {
+          setOverdueCount(res.overdueCount);
+          setOverdueBlocked(res.isBlocked);
+        })
+        .catch(() => { /* allow creation if check fails */ });
     }
-    // Combine budget lines from all selected donors
-    const combined: BudgetLine[] = [];
-    const seenIds = new Set<number>();
-    for (const donorId of selectedDonors) {
-      const lines = donorBudgetLines[donorId] || [];
-      for (const bl of lines) {
-        if (!seenIds.has(bl.id)) {
-          seenIds.add(bl.id);
-          combined.push(bl);
-        }
+  }, [isEditMode]);
+
+  // When "Requesting from Admin" is toggled, auto-select the Admin partner
+  // (donor_type === 'ADMIN') and its first project, locking those dropdowns.
+  // When unticked, reset partner/project so the user can pick freely.
+  useEffect(() => {
+    if (watchedIsAdminRequest) {
+      const adminDonor = donors.find(d => (d as any).donor_type === 'ADMIN');
+      if (adminDonor) {
+        setSelectedDonorId(adminDonor.id);
+      } else {
+        toast.warning('Admin partner not found. Please contact Finance to set it up.');
+      }
+    } else {
+      // Only clear if the currently selected donor is Admin
+      const adminDonor = donors.find(d => (d as any).donor_type === 'ADMIN');
+      if (adminDonor && selectedDonorId === adminDonor.id) {
+        setSelectedDonorId('');
+        setSelectedProject(null);
+        setProjects([]);
+        setBudgetLines([]);
       }
     }
-    setBudgetLines(combined);
-  }, [selectedDonors, donorBudgetLines, allBudgetLines]);
+  }, [watchedIsAdminRequest, donors]);
+
+  // When donor changes, fetch its projects and clear downstream
+  useEffect(() => {
+    setSelectedProject(null);
+    setProjects([]);
+    setBudgetLines([]);
+    if (!selectedDonorId) return;
+    setLoadingProjects(true);
+    projectService.getProjectsByDonor(Number(selectedDonorId))
+      .then((loaded) => {
+        setProjects(loaded);
+        // Auto-select the single project when Admin is chosen
+        if (watchedIsAdminRequest && loaded.length === 1) {
+          setSelectedProject(loaded[0]);
+        }
+      })
+      .catch(() => toast.error('Failed to load projects for this partner'))
+      .finally(() => setLoadingProjects(false));
+  }, [selectedDonorId]);
+
+  // When project changes, fetch its budget lines and check for cross-dept routing
+  useEffect(() => {
+    setBudgetLines([]);
+    setCrossDeptWarning(null);
+    if (!selectedProject) return;
+
+    // Cross-department warning
+    if (
+      selectedProject.department_id &&
+      user?.department_id &&
+      selectedProject.department_id !== user.department_id
+    ) {
+      const ownerDept = selectedProject.department_name || `Department ID ${selectedProject.department_id}`;
+      setCrossDeptWarning(
+        `This project is not assigned to your department. Your request will be routed to the HOP/Lead of the ${ownerDept} department for approval.`
+      );
+    }
+
+    setLoadingBudgetLines(true);
+    projectService.getProjectBudgetLines(selectedProject.id, { is_active: true })
+      .then(setBudgetLines)
+      .catch(() => toast.error('Failed to load budget lines'))
+      .finally(() => setLoadingBudgetLines(false));
+  }, [selectedProject, user?.department_id]);
+
+  // When projects load in edit mode, auto-select the pending project
+  useEffect(() => {
+    if (projects.length > 0 && pendingProjectId.current) {
+      const found = projects.find(p => p.id === pendingProjectId.current);
+      if (found) setSelectedProject(found);
+      pendingProjectId.current = null;
+    }
+  }, [projects]);
+
+  // Preload existing request when in edit mode.
+  useEffect(() => {
+    if (!isEditMode || !requestId) {
+      return;
+    }
+
+    const loadRequest = async () => {
+      try {
+        setIsLoading(true);
+        const response = await requestService.getById(Number(requestId));
+        if (!response.success || !response.data) {
+          toast.error('Failed to load request for editing');
+          navigate('/finance/requests');
+          return;
+        }
+
+        const data: any = response.data;
+        const request = data.request || data;
+        const items = (data.items || request.items || []).map((item: any) => ({
+          id: uuidv4() || generateId(),
+          category: item.category || 'PROCUREMENT',
+          itemDescription: item.itemDescription || item.item_description || item.description || '',
+          quantity: Number(item.quantity || 1),
+          unitOfMeasure: item.unitOfMeasure || item.unit_of_measure || 'EACH',
+          unitPrice: Number(item.unitPrice ?? item.unit_price ?? 0),
+          totalCost: Number(item.subtotal ?? item.total_price ?? 0),
+          budgetLineId: Number(item.budgetLineId ?? item.budget_line_id ?? '') || '',
+          notes: item.notes || ''
+        }));
+
+        if (!['DRAFT', 'REJECTED'].includes(request.status)) {
+          toast.error('Only draft or rejected requests can be edited');
+          navigate(`/finance/requests/${requestId}`);
+          return;
+        }
+
+        if (Number(request.requester_id) !== Number(user?.id)) {
+          toast.error('You can only edit your own requests');
+          navigate(`/finance/requests/${requestId}`);
+          return;
+        }
+
+        setExistingStatus(request.status);
+        reset({
+          justification: request.justification || '',
+          currency: 'USD',
+          isAdminRequest: false,
+          items: items.length > 0 ? items : [{ ...defaultItem, id: uuidv4() || generateId() }],
+          supportingDocuments: []
+        });
+
+        replace(items.length > 0 ? items : [{ ...defaultItem, id: uuidv4() || generateId() }]);
+
+        if (request.donor_id) {
+          setSelectedDonorId(Number(request.donor_id));
+          if (request.project_id) pendingProjectId.current = Number(request.project_id);
+        }
+
+        // Load existing per diem claim if present
+        if (request.has_per_diem_claim) {
+          setHasPerDiemClaim(true);
+          try {
+            const claim = await perDiemService.getClaim(Number(requestId));
+            if (claim) {
+              setPerDiemClaimData({
+                full_name: claim.full_name,
+                designation: claim.designation,
+                project_id: claim.project_id,
+                strategic_focus: claim.strategic_focus || '',
+                budget_line_id: claim.budget_line_id,
+                less_outstanding_advance: claim.less_outstanding_advance,
+                trip_items: claim.trip_items.map(t => ({ ...t, id: String(t.id) })),
+                cost_distribution: claim.cost_distribution.map(d => ({ ...d, id: String(d.id) })),
+              });
+            }
+          } catch (e) { /* claim may not exist yet */ }
+        }
+      } catch (error) {
+        toast.error('Failed to load request for editing');
+        navigate('/finance/requests');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadRequest();
+  }, [isEditMode, requestId, reset, replace, navigate, user?.id]);
 
   const calculateGrandTotal = useCallback(() => {
     return watchedItems.reduce((sum, item) => sum + ((item?.quantity || 1) * (item?.unitPrice || 0)), 0);
@@ -209,7 +374,7 @@ const RequestForm: React.FC = () => {
 
   const exceedsBudget = (item: RequestFormItem) => {
     if (!item.budgetLineId) return false;
-    const budgetLine = allBudgetLines.find(bl => bl.id === item.budgetLineId);
+    const budgetLine = budgetLines.find(bl => bl.id === item.budgetLineId);
     if (!budgetLine) return false;
     const itemTotal = (item.quantity || 1) * (item.unitPrice || 0);
     return itemTotal > budgetLine.balance;
@@ -217,17 +382,8 @@ const RequestForm: React.FC = () => {
 
   const getBudgetBalance = (budgetLineId: number | '') => {
     if (!budgetLineId) return null;
-    const budgetLine = allBudgetLines.find(bl => bl.id === budgetLineId);
+    const budgetLine = budgetLines.find(bl => bl.id === budgetLineId);
     return budgetLine?.balance || 0;
-  };
-
-  // Helper: determine donor from the first item's budget line
-  const getDonorFromItems = (items: RequestFormItem[]): number | null => {
-    if (!items || items.length === 0) return null;
-    const firstBLId = items[0]?.budgetLineId;
-    if (!firstBLId) return null;
-    const bl = allBudgetLines.find(b => b.id === firstBLId);
-    return bl?.donor_id || null;
   };
 
   const getCurrencySymbol = () => {
@@ -263,8 +419,8 @@ const RequestForm: React.FC = () => {
           toast.warning(`${file.name} is not a supported file type`);
           return false;
         }
-        if (file.size > 10 * 1024 * 1024) {
-          toast.warning(`${file.name} is too large (max 10MB)`);
+        if (file.size > 8 * 1024 * 1024) {
+          toast.warning(`${file.name} is too large (max 8MB)`);
           return false;
         }
         return true;
@@ -286,107 +442,113 @@ const RequestForm: React.FC = () => {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
+  // ── Shared per-diem save helper ───────────────────────────────────────────
+  const savePerDiemIfNeeded = async (resolvedRequestId: number) => {
+    if (hasPerDiemClaim) {
+      await perDiemService.upsertClaim(resolvedRequestId, perDiemClaimData);
+    } else {
+      // If user unchecked the toggle, remove any existing claim
+      try { await perDiemService.deleteClaim(resolvedRequestId); } catch (_) { /* no claim to delete */ }
+    }
+  };
+
+  const buildPayload = (data: RequestFormData) => ({
+    justification: data.justification,
+    donor_id: Number(selectedDonorId),
+    project_id: selectedProject!.id,
+    items: data.items.map(item => ({
+      itemDescription: item.itemDescription,
+      category: item.category || 'PROCUREMENT',
+      quantity: item.quantity || 1,
+      unitOfMeasure: item.unitOfMeasure || 'EACH',
+      unitPrice: item.unitPrice || 0,
+      budgetLineId: item.budgetLineId as number,
+      notes: item.notes || undefined
+    }))
+  });
+
   const handleSaveDraft = async (data: RequestFormData) => {
-    // Determine donor from first item's budget line if not explicitly selected
-    const effectiveDonorId = (selectedDonors.length === 1 ? selectedDonors[0] : null) || getDonorFromItems(data.items);
+    if (!selectedDonorId) { toast.error('Please select a partner'); return; }
+    if (!selectedProject) { toast.error('Please select a project'); return; }
     try {
       setIsSaving(true);
-      const payload = {
-        justification: data.justification,
-        priority: data.priority,
-        donor_id: effectiveDonorId,
-        items: data.items.map(item => ({
-          itemDescription: item.itemDescription,
-          category: item.category || 'PROCUREMENT',
-          quantity: item.quantity || 1,
-          unitOfMeasure: item.unitOfMeasure || 'EACH',
-          unitPrice: item.unitPrice || 0,
-          budgetLineId: item.budgetLineId as number,
-          notes: item.notes || undefined
-        }))
-      };
-      const response = await requestService.create(payload);
-      if (response.success && response.data) {
-        // Upload attachments if any
-        if (uploadedFiles.length > 0) {
-          try {
-            await attachmentService.uploadMultipleAttachments(
-              uploadedFiles,
-              'QUOTATION',
-              'REQUEST',
-              response.data.requestId,
-              'Supporting documents for request'
-            );
-          } catch (uploadError) {
-            console.error('Failed to upload attachments:', uploadError);
-            toast.warning('Draft saved but some attachments failed to upload');
+      const payload = buildPayload(data);
+      if (isEditMode && requestId) {
+        const updateResponse = await requestService.update(Number(requestId), payload);
+        if (updateResponse.success) {
+          if (uploadedFiles.length > 0) {
+            try {
+              await attachmentService.uploadMultipleAttachments(
+                uploadedFiles, 'QUOTATION', 'REQUEST', Number(requestId), 'Supporting documents for request'
+              );
+            } catch { toast.warning('Request updated but some attachments failed to upload'); }
           }
+          await savePerDiemIfNeeded(Number(requestId));
+          toast.success('Request saved successfully');
+          navigate(`/finance/requests/${requestId}`);
         }
-        toast.success(`Draft saved: ${response.data?.requestCode}`);
-        navigate('/finance/requests');
+      } else {
+        const createResponse = await requestService.create(payload);
+        if (createResponse.success && createResponse.data) {
+          if (uploadedFiles.length > 0) {
+            try {
+              await attachmentService.uploadMultipleAttachments(
+                uploadedFiles, 'QUOTATION', 'REQUEST', createResponse.data.requestId, 'Supporting documents for request'
+              );
+            } catch { toast.warning('Request created but some attachments failed to upload'); }
+          }
+          await savePerDiemIfNeeded(createResponse.data.requestId);
+          toast.success(`Request ${createResponse.data.requestCode} saved as draft`);
+          navigate('/finance/requests');
+        }
       }
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Failed to save draft');
+      toast.error(error.response?.data?.error || 'Failed to save request');
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleSaveAndSubmit = async (data: RequestFormData) => {
-    const effectiveDonorId = (selectedDonors.length === 1 ? selectedDonors[0] : null) || getDonorFromItems(data.items);
-    const hasOverage = data.items.some(item => exceedsBudget(item));
-    if (hasOverage) {
-      toast.error('Cannot submit: One or more items exceed budget balance');
-      return;
-    }
-
-    // Validate all items have descriptions & prices
-    const hasInvalid = data.items.some(item => !item.itemDescription || !item.unitPrice);
-    if (hasInvalid) {
-      toast.error('All items must have a description and unit price');
-      return;
-    }
+    if (!selectedDonorId) { toast.error('Please select a partner'); return; }
+    if (!selectedProject) { toast.error('Please select a project'); return; }
     try {
       setIsSubmitting(true);
-      const payload = {
-        justification: data.justification,
-        priority: data.priority,
-        donor_id: effectiveDonorId,
-        items: data.items.map(item => ({
-          itemDescription: item.itemDescription,
-          category: item.category || 'PROCUREMENT',
-          quantity: item.quantity || 1,
-          unitOfMeasure: item.unitOfMeasure || 'EACH',
-          unitPrice: item.unitPrice || 0,
-          budgetLineId: item.budgetLineId as number,
-          notes: item.notes || undefined
-        }))
-      };
-      const createResponse = await requestService.create(payload);
-      if (createResponse.success && createResponse.data) {
-        // Upload attachments if any
-        if (uploadedFiles.length > 0) {
-          try {
-            await attachmentService.uploadMultipleAttachments(
-              uploadedFiles,
-              'QUOTATION',
-              'REQUEST',
-              createResponse.data.requestId,
-              'Supporting documents for request'
-            );
-          } catch (uploadError) {
-            console.error('Failed to upload attachments:', uploadError);
-            toast.warning('Request created but some attachments failed to upload');
+      const payload = buildPayload(data);
+      if (isEditMode && requestId) {
+        const updateResponse = await requestService.update(Number(requestId), payload);
+        if (updateResponse.success) {
+          if (uploadedFiles.length > 0) {
+            try {
+              await attachmentService.uploadMultipleAttachments(
+                uploadedFiles, 'QUOTATION', 'REQUEST', Number(requestId), 'Supporting documents for request'
+              );
+            } catch { toast.warning('Request updated but some attachments failed to upload'); }
+          }
+          await savePerDiemIfNeeded(Number(requestId));
+          const submitResponse = await requestService.submit(Number(requestId));
+          if (submitResponse.success) {
+            toast.success(existingStatus === 'REJECTED' ? 'Request edited and resubmitted successfully' : 'Request submitted successfully');
+            navigate(`/finance/requests/${requestId}`);
           }
         }
-        
-        const submitResponse = await requestService.submit(createResponse.data.requestId);
-        if (submitResponse.success) {
-          const approvalRoute = data.isAdminRequest 
-            ? 'Admin -> Finance' 
-            : 'Program Lead or Head of Programs -> Finance';
-          toast.success(`Request ${createResponse.data.requestCode} submitted (${approvalRoute})`);
-          navigate('/finance/requests');
+      } else {
+        const createResponse = await requestService.create(payload);
+        if (createResponse.success && createResponse.data) {
+          if (uploadedFiles.length > 0) {
+            try {
+              await attachmentService.uploadMultipleAttachments(
+                uploadedFiles, 'QUOTATION', 'REQUEST', createResponse.data.requestId, 'Supporting documents for request'
+              );
+            } catch { toast.warning('Request created but some attachments failed to upload'); }
+          }
+          await savePerDiemIfNeeded(createResponse.data.requestId);
+          const submitResponse = await requestService.submit(createResponse.data.requestId);
+          if (submitResponse.success) {
+            const approvalRoute = data.isAdminRequest ? 'Admin -> Finance' : 'Program Lead or Head of Programs -> Finance';
+            toast.success(`Request ${createResponse.data.requestCode} submitted (${approvalRoute})`);
+            navigate('/finance/requests');
+          }
         }
       }
     } catch (error: any) {
@@ -406,63 +568,98 @@ const RequestForm: React.FC = () => {
 
   return (
     <Box>
+      {overdueBlocked && (
+        <Alert severity="error" sx={{ mb: 2 }} icon={<WarningIcon />}>
+          <Typography variant="subtitle2" fontWeight={700}>
+            Float Request Blocked — Overdue Reconciliations
+          </Typography>
+          <Typography variant="body2">
+            You have <strong>{overdueCount}</strong> overdue reconciliation{overdueCount !== 1 ? 's' : ''} that have not been submitted for approval.
+            You must submit your overdue reconciliations before creating a new float request.
+            Go to the <strong>Reconciliation</strong> module to submit them.
+          </Typography>
+        </Alert>
+      )}
       <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
         <Typography variant="h5" gutterBottom>
-          Create Float Request
+          {isEditMode ? (existingStatus === 'REJECTED' ? 'Edit & Resubmit Float Request' : 'Edit Float Request') : 'Create Float Request'}
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Submit a new float request with supporting documents. Select currency and routing options.
+          {isEditMode
+            ? 'Update the existing request details and optionally resubmit for approval.'
+            : 'Submit a new float request with supporting documents. Select currency and routing options.'}
         </Typography>
       </Paper>
 
       <form>
         <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
           <Typography variant="h6" gutterBottom>Request Details</Typography>
-          <Grid container spacing={3}>            {/* Donor Selection - Multi-select to filter budget lines */}
-            <Grid item xs={12}>
+          <Grid container spacing={3}>            {/* Partner Selection — locked when Admin request is active */}
+            <Grid item xs={12} md={6}>
               <Autocomplete
-                multiple
                 options={donors}
-                getOptionLabel={(donor) => `${donor.donor_name} (${donor.donor_code})`}
-                value={donors.filter(d => selectedDonors.includes(d.id))}
-                onChange={(_, newValue) => setSelectedDonors(newValue.map(d => d.id))}
-                disableCloseOnSelect
-                renderOption={(props, donor, { selected }) => (
-                  <li {...props}>
-                    <Checkbox checked={selected} sx={{ mr: 1 }} />
+                getOptionLabel={(d) => `${d.donor_name} (${d.donor_code})`}
+                value={donors.find(d => d.id === selectedDonorId) || null}
+                onChange={(_, newVal) => setSelectedDonorId(newVal ? newVal.id : '')}
+                disabled={watchedIsAdminRequest}
+                renderOption={(props, d) => (
+                  <Box component="li" {...props} key={d.id}>
                     <Box>
-                      <Typography variant="body1">{donor.donor_name}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {donor.donor_code} | {donor.currency_code} | FY{donor.fiscal_year}
-                        {donorBudgetLines[donor.id] ? ` | ${donorBudgetLines[donor.id].length} budget line(s)` : ''}
-                      </Typography>
+                      <Typography variant="body2" fontWeight={600}>{d.donor_name}</Typography>
+                      <Typography variant="caption" color="text.secondary">{d.donor_code} · {d.currency_code}</Typography>
                     </Box>
-                  </li>
+                  </Box>
                 )}
-                renderTags={(value, getTagProps) =>
-                  value.map((donor, index) => (
-                    <Chip
-                      {...getTagProps({ index })}
-                      key={donor.id}
-                      label={`${donor.donor_name} (${donor.donor_code})`}
-                      size="small"
-                      color="primary"
-                      variant="outlined"
-                    />
-                  ))
-                }
                 renderInput={(params) => (
                   <TextField
                     {...params}
-                    label="Filter by Donor(s) (Optional)"
-                    placeholder={selectedDonors.length === 0 ? "Select one or more donors to filter budget lines..." : ""}
+                    required
+                    label="Partner"
+                    placeholder="Search or select a partner..."
+                    helperText={watchedIsAdminRequest ? 'Auto-set to Admin partner' : 'Select the implementing partner for this request'}
                   />
                 )}
+                isOptionEqualToValue={(opt, val) => opt.id === val.id}
+                noOptionsText="No active partners found"
               />
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                Select one or more donors to filter budget lines. Leave empty to see all budget lines.
-              </Typography>
             </Grid>
+
+            {/* Project Selection — locked when Admin request is active (auto-selected) */}
+            <Grid item xs={12} md={6}>
+              <Autocomplete
+                options={projects}
+                loading={loadingProjects}
+                disabled={!selectedDonorId || watchedIsAdminRequest}
+                getOptionLabel={(p) => `${p.project_code} — ${p.project_name}`}
+                value={selectedProject}
+                onChange={(_, newVal) => setSelectedProject(newVal)}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    required
+                    label="Project"
+                    placeholder={selectedDonorId ? 'Search or select a project...' : 'Select a partner first'}
+                    helperText={watchedIsAdminRequest ? 'Auto-set to Admin project' : (selectedProject ? `${budgetLines.length} budget line(s) available` : 'Required — budget lines load after project is selected')}
+                    InputProps={{
+                      ...params.InputProps,
+                      endAdornment: <>{loadingProjects && <CircularProgress size={16} />}{params.InputProps.endAdornment}</>
+                    }}
+                  />
+                )}
+                isOptionEqualToValue={(opt, val) => opt.id === val.id}
+                noOptionsText={selectedDonorId ? 'No projects found for this partner' : 'Select a partner first'}
+              />
+            </Grid>
+
+            {/* Cross-department routing warning */}
+            {crossDeptWarning && (
+              <Grid item xs={12}>
+                <Alert severity="info" onClose={() => setCrossDeptWarning(null)}>
+                  {crossDeptWarning}
+                </Alert>
+              </Grid>
+            )}
+
             <Grid item xs={12} md={4}>
               <Controller
                 name="currency"
@@ -484,22 +681,7 @@ const RequestForm: React.FC = () => {
                 )}
               />
             </Grid>
-            <Grid item xs={12} md={4}>
-              <Controller
-                name="priority"
-                control={control}
-                render={({ field }) => (
-                  <TextField {...field} select label="Priority" fullWidth>
-                    {PRIORITY_OPTIONS.map(option => (
-                      <MenuItem key={option.value} value={option.value}>
-                        <Chip label={option.label} color={option.color} size="small" sx={{ mr: 1 }} />
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                )}
-              />
-            </Grid>
-            <Grid item xs={12} md={4}>
+            <Grid item xs={12} md={6}>
               <Controller
                 name="isAdminRequest"
                 control={control}
@@ -529,18 +711,18 @@ const RequestForm: React.FC = () => {
                 name="justification"
                 control={control}
                 rules={{ 
-                  required: 'Justification is required',
-                  minLength: { value: 20, message: 'Justification must be at least 20 characters' }
+                  required: 'Purpose of Float is required',
+                  minLength: { value: 20, message: 'Purpose of Float must be at least 20 characters' }
                 }}
                 render={({ field }) => (
                   <TextField
                     {...field}
-                    label="Justification / Purpose"
+                    label="Purpose of Float"
                     multiline
                     rows={3}
                     fullWidth
                     error={!!errors.justification}
-                    helperText={errors.justification?.message || 'Explain the purpose and necessity'}
+                    helperText={errors.justification?.message || 'Describe the activity and purpose for this float'}
                   />
                 )}
               />
@@ -548,19 +730,26 @@ const RequestForm: React.FC = () => {
           </Grid>
           {watchedIsAdminRequest && (
             <Alert severity="info" sx={{ mt: 2 }}>
-              <strong>Admin Request:</strong> This request will route to Admin Approver first, then Finance.
+              <strong>Admin Request:</strong> Partner and project are pre-set to <strong>Administration (Internal)</strong>.
+              Simply pick the budget line (Maintenance, Softwares, or Rentals) for each item.
+              Approval route: <strong>Admin → HR Lead / HOP → Finance</strong>.
             </Alert>
           )}
-          {selectedDonors.length > 0 && (
+          {selectedDonorId && selectedProject && (
             <Alert severity="success" sx={{ mt: 2 }}>
-              <strong>Filtering by {selectedDonors.length} Donor(s):</strong>{' '}
-              {selectedDonors.map(id => donors.find(d => d.id === id)?.donor_name).filter(Boolean).join(', ')} — {budgetLines.length} budget line(s) shown.
+              <strong>Partner:</strong> {donors.find(d => d.id === Number(selectedDonorId))?.donor_name} &nbsp;&bull;&nbsp;
+              <strong>Project:</strong> {selectedProject.project_code} — {selectedProject.project_name} &nbsp;&bull;&nbsp;
+              {loadingBudgetLines ? 'Loading budget lines...' : `${budgetLines.length} budget line(s) available`}
             </Alert>
           )}
-          {selectedDonors.length === 0 && allBudgetLines.length > 0 && (
+          {selectedDonorId && !selectedProject && (
             <Alert severity="info" sx={{ mt: 2 }}>
-              <strong>Multi-Donor Mode:</strong> Showing all {allBudgetLines.length} budget lines across {donors.length} donors.
-              Each line item can be assigned to a different donor's budget line.
+              {loadingProjects ? 'Loading projects...' : (projects.length > 0 ? `${projects.length} project(s) found — select a project to continue.` : 'No projects found for this partner. Please contact Finance.')}
+            </Alert>
+          )}
+          {!selectedDonorId && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              Select a <strong>Partner</strong> and <strong>Project</strong> to proceed with the request.
             </Alert>
           )}
         </Paper>
@@ -579,14 +768,19 @@ const RequestForm: React.FC = () => {
               variant="outlined" 
               startIcon={<AddIcon />} 
               onClick={handleAddItem}
-              disabled={allBudgetLines.length === 0}
+              disabled={!selectedProject || budgetLines.length === 0}
             >
               Add Item
             </Button>
           </Box>
-          {allBudgetLines.length === 0 && (
+          {(!selectedDonorId || !selectedProject) && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              No budget lines available. Please contact Finance to set up budget lines.
+              Select a partner and project above before adding items.
+            </Alert>
+          )}
+          {selectedProject && budgetLines.length === 0 && !loadingBudgetLines && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              No active budget lines for this project. Please contact Finance.
             </Alert>
           )}
           <TableContainer sx={{ overflowX: 'auto' }}>
@@ -736,12 +930,11 @@ const RequestForm: React.FC = () => {
                           control={control}
                           rules={{ required: 'Required' }}
                           render={({ field }) => {
-                            const availableLines = selectedDonors.length > 0 ? budgetLines : allBudgetLines;
-                            const selectedBL = availableLines.find(bl => bl.id === field.value) || null;
+                            const selectedBL = budgetLines.find(bl => bl.id === field.value) || null;
                             return (
                               <Autocomplete
                                 size="small"
-                                options={availableLines}
+                                options={budgetLines}
                                 value={selectedBL}
                                 onChange={(_, newValue) => field.onChange(newValue ? newValue.id : '')}
                                 getOptionLabel={(bl) =>
@@ -814,7 +1007,7 @@ const RequestForm: React.FC = () => {
         <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
           <Typography variant="h6" gutterBottom>Quotations & Supporting Documents</Typography>
           <Typography variant="body2" color="text.secondary" mb={2}>
-            Upload quotations and supporting documents (PDF, Word, Excel, Images). Max 10MB per file.
+            Upload quotations and supporting documents (PDF, Word, Excel, Images). Max 8MB per file.
           </Typography>
           <input
             type="file"
@@ -849,10 +1042,53 @@ const RequestForm: React.FC = () => {
           )}
         </Paper>
 
+        {/* ── Travel & Per Diem Claim Toggle ───────────────────────────────── */}
+        <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+          <Box display="flex" alignItems="center" gap={2}>
+            <TripIcon color="info" />
+            <Box flex={1}>
+              <Typography variant="h6">Travel &amp; Subsistence Claim</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Does this request include a travel / per diem claim?
+              </Typography>
+            </Box>
+            <Box display="flex" gap={1}>
+              <Button
+                variant={hasPerDiemClaim ? 'contained' : 'outlined'}
+                color="info"
+                size="small"
+                onClick={() => setHasPerDiemClaim(true)}
+                sx={{ minWidth: 60 }}
+              >
+                YES
+              </Button>
+              <Button
+                variant={!hasPerDiemClaim ? 'contained' : 'outlined'}
+                color="inherit"
+                size="small"
+                onClick={() => setHasPerDiemClaim(false)}
+                sx={{ minWidth: 60 }}
+              >
+                NO
+              </Button>
+            </Box>
+          </Box>
+        </Paper>
+
+        {hasPerDiemClaim && (
+          <TravelClaimSection
+            mode="edit"
+            value={perDiemClaimData}
+            onChange={setPerDiemClaimData}
+            projects={projects}
+            budgetLines={budgetLines}
+            rates={perDiemRates}
+          />
+        )}
+
         <Paper elevation={2} sx={{ p: 3 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center">
             <Button variant="outlined" onClick={() => navigate('/finance/requests')}>Cancel</Button>
-            <Box>
               <Button
                 variant="outlined"
                 startIcon={isSaving ? <CircularProgress size={20} /> : <SaveIcon />}
@@ -860,19 +1096,18 @@ const RequestForm: React.FC = () => {
                 disabled={isSaving || isSubmitting}
                 sx={{ mr: 2 }}
               >
-                Save as Draft
+                {isEditMode ? 'Save Changes' : 'Save as Draft'}
               </Button>
               <Button
                 variant="contained"
                 color="primary"
                 startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
                 onClick={handleSubmit(handleSaveAndSubmit)}
-                disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item))}
+                disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item)) || (overdueBlocked && !isEditMode)}
               >
-                Save & Submit for Approval
+                {isEditMode ? (existingStatus === 'REJECTED' ? 'Save & Resubmit' : 'Save & Submit') : 'Save & Submit for Approval'}
               </Button>
             </Box>
-          </Box>
         </Paper>
       </form>
     </Box>

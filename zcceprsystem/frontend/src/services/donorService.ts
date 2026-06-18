@@ -31,6 +31,8 @@ export interface Donor {
   };
   budget_lines?: any[];
   requests?: any[];
+  projects?: import('../types').Project[];
+  projects_count?: number;
   _count?: {
     budget_lines: number;
     requests: number;
@@ -53,6 +55,7 @@ export interface DonorStats {
 }
 
 export interface CreateDonorDto {
+  donor_code: string;
   donor_name: string;
   donor_type: 'INDIVIDUAL' | 'ORGANIZATION' | 'GOVERNMENT' | 'FOUNDATION';
   contact_person?: string;
@@ -124,6 +127,14 @@ class DonorService {
    */
   async deactivateDonor(id: number): Promise<{ message: string; donor: Donor }> {
     const response = await api.patch(`/donors/${id}/deactivate`);
+    return response.data;
+  }
+
+  /**
+   * Activate donor
+   */
+  async activateDonor(id: number): Promise<{ message: string; donor: Donor }> {
+    const response = await api.patch(`/donors/${id}/activate`);
     return response.data;
   }
 

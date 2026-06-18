@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Button, Chip, CircularProgress, Dialog, DialogTitle,
+  TableHead, TableRow, TablePagination, Button, Chip, CircularProgress, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, Grid, IconButton, Tooltip,
   Alert, MenuItem, Select, FormControl, InputLabel, Switch, FormControlLabel,
   Avatar, InputAdornment, Tabs, Tab, useTheme, alpha, Divider, Badge,
@@ -27,10 +27,14 @@ import {
   Visibility as ViewIcon,
   VisibilityOff as HideIcon,
   Email as EmailIcon,
-  ManageAccounts as ManageIcon
+  ManageAccounts as ManageIcon,
+  GetApp as ExportIcon,
+  PictureAsPdf as PdfIcon,
+  TableChart as ExcelIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { format } from 'date-fns';
+import * as XLSX from 'xlsx';
 import api from '../../services/api';
 import { useAuthStore } from '../../store/authStore';
 
@@ -72,6 +76,15 @@ const UserManagementPage: React.FC = () => {
   const [roles, setRoles] = useState<Role[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterRole, setFilterRole] = useState('');
+  const [filterDept, setFilterDept] = useState<number | ''>('');
+  const [filterStatus, setFilterStatus] = useState<'' | 'active' | 'inactive'>('');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
+  // Delete dialog
+  const [deleteTarget, setDeleteTarget] = useState<UserRecord | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Create/Edit dialog
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -229,35 +242,137 @@ const UserManagementPage: React.FC = () => {
     setProfileOpen(true);
   };
 
+  const handleDeleteUser = async () => {
+    if (!deleteTarget) return;
+    try {
+      setIsDeleting(true);
+      const res = await api.delete(`/admin/users/${deleteTarget.id}`);
+      if (res.data.softDelete) {
+        toast.info(res.data.message);
+      } else {
+        toast.success('User deleted successfully');
+      }
+      setDeleteTarget(null);
+      fetchUsers();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to delete user');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const getRoleColor = (role: string): 'success' | 'primary' | 'secondary' | 'warning' | 'error' | 'default' => {
     switch (role) {
       case 'ADMIN': return 'error';
       case 'FINANCE_CLERK': return 'success';
       case 'HEAD_OF_PROGRAMS': return 'secondary';
       case 'PROGRAM_LEAD': return 'primary';
+      case 'PROCUREMENT_OFFICER': return 'warning';
+      case 'PROCUREMENT_COMMITTEE': return 'warning';
       default: return 'default';
     }
   };
 
   const getRoleLabel = (role: string) => {
     switch (role) {
-      case 'ADMIN': return 'System Admin';
+      case 'ADMIN': return 'Super Administrator';
       case 'FINANCE_CLERK': return 'Finance Clerk';
       case 'HEAD_OF_PROGRAMS': return 'Head of Programs';
       case 'PROGRAM_LEAD': return 'Program Lead';
       case 'GENERAL_USER': return 'General User';
+      case 'PROCUREMENT_OFFICER': return 'Procurement Officer';
+      case 'PROCUREMENT_COMMITTEE': return 'Procurement Committee';
       default: return role?.replace(/_/g, ' ') || 'Unknown';
     }
   };
 
-  const filteredUsers = users.filter(u =>
-    (u.first_name + ' ' + u.last_name + ' ' + u.email + ' ' + (u.department_name || ''))
-      .toLowerCase()
-      .includes(searchQuery.toLowerCase())
-  );
+  const filteredUsers = users.filter(u => {
+    const textMatch = (u.first_name + ' ' + u.last_name + ' ' + u.email + ' ' + (u.department_name || ''))
+      .toLowerCase().includes(searchQuery.toLowerCase());
+    const roleMatch = !filterRole || (u.role || u.role_name) === filterRole;
+    const deptMatch = !filterDept || u.department_id === filterDept;
+    const statusMatch = !filterStatus || (filterStatus === 'active' ? u.is_active : !u.is_active);
+    return textMatch && roleMatch && deptMatch && statusMatch;
+  });
+
+  const handleExportExcel = () => {
+    const exportData = filteredUsers.map(u => ({
+      'First Name': u.first_name,
+      'Last Name': u.last_name,
+      'Email': u.email,
+      'Role': getRoleLabel(u.role || u.role_name || ''),
+      'Department': u.department_name || '-',
+      'Status': u.is_active ? 'Active' : 'Inactive',
+      'Last Login': u.last_login ? format(new Date(u.last_login), 'dd/MM/yyyy HH:mm') : 'Never',
+      'Created': format(new Date(u.created_at), 'dd/MM/yyyy')
+    }));
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Users');
+    ws['!cols'] = [20, 20, 30, 25, 25, 10, 20, 15].map(w => ({ wch: w }));
+    XLSX.writeFile(wb, `users_export_${format(new Date(), 'yyyyMMdd_HHmm')}.xlsx`);
+    toast.success('Excel file downloaded');
+  };
+
+  const handleExportPDF = () => {
+    try {
+      const safeText = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const safeDate = (d: any) => {
+        if (!d) return 'Never';
+        try { const dt = new Date(d); return isNaN(dt.getTime()) ? 'N/A' : format(dt, 'dd/MM/yyyy'); }
+        catch { return 'N/A'; }
+      };
+      const rows = filteredUsers.map(u => `
+        <tr>
+          <td>${safeText(u.first_name + ' ' + u.last_name)}</td>
+          <td>${safeText(u.email)}</td>
+          <td>${safeText(getRoleLabel(u.role || u.role_name || ''))}</td>
+          <td>${safeText(u.department_name || '-')}</td>
+          <td>${u.is_active ? 'Active' : 'Inactive'}</td>
+          <td>${safeDate(u.last_login)}</td>
+        </tr>`).join('');
+      const html = `<html><head><title>User Management Report</title>
+        <style>
+          body { font-family: Arial, sans-serif; font-size: 12px; margin: 20px; color:#1a1a1a; }
+          .org { font-size: 11px; font-weight: bold; color: #006064; letter-spacing: .4px; }
+          h2 { color: #006064; margin: 4px 0 6px; border-bottom: 2px solid #006064; padding-bottom: 4px; }
+          .meta { color: #666; margin-bottom: 16px; }
+          table { width: 100%; border-collapse: collapse; }
+          th { background: #006064; color: white; padding: 8px; text-align: left; }
+          td { padding: 7px 8px; border-bottom: 1px solid #ddd; }
+          tr:nth-child(even) td { background: #f7f7f7; }
+          .footer { margin-top: 18px; padding-top: 8px; border-top: 1.5px solid #e0e0e0; font-size: 10px; color: #999; display:flex; justify-content:space-between; }
+          @media print { body { margin: 0; } }
+        </style></head>
+        <body>
+          <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
+          <h2>User Management Report</h2>
+          <p class="meta">Generated: ${format(new Date(), 'dd/MM/yyyy HH:mm')} &nbsp;|&nbsp; Total: ${filteredUsers.length} users</p>
+          <table>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Department</th><th>Status</th><th>Last Login</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <div class="footer"><span>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</span><span>Generated: ${format(new Date(), 'dd/MM/yyyy HH:mm')}</span></div>
+        </body></html>`;
+      const printWindow = window.open('', '_blank', 'width=900,height=650');
+      if (!printWindow) { toast.warning('Pop-up blocked — please allow pop-ups for this site.'); return; }
+      printWindow.document.open();
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.onload = () => { printWindow.focus(); printWindow.print(); };
+    } catch (err) {
+      console.error('PDF export error:', err);
+      toast.error('Failed to generate PDF report');
+    }
+  };
 
   const activeUsers = filteredUsers.filter(u => u.is_active);
   const inactiveUsers = filteredUsers.filter(u => !u.is_active);
+
+  const currentList = activeTab === 0 ? activeUsers : inactiveUsers;
+  const pagedUsers = rowsPerPage === -1
+    ? currentList
+    : currentList.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
 
   if (isLoading) {
     return <Box display="flex" justifyContent="center" py={6}><CircularProgress /></Box>;
@@ -284,11 +399,27 @@ const UserManagementPage: React.FC = () => {
               </Typography>
             </Box>
           </Box>
-          <Button variant="contained" startIcon={<AddIcon />}
-            onClick={openCreateDialog}
-            sx={{ bgcolor: 'rgba(255,255,255,0.2)', '&:hover': { bgcolor: 'rgba(255,255,255,0.3)' } }}>
-            Add User
-          </Button>
+          <Box display="flex" gap={1} alignItems="center">
+            <Tooltip title="Export to Excel">
+              <Button variant="outlined" size="small" startIcon={<ExcelIcon />}
+                onClick={handleExportExcel}
+                sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' } }}>
+                Excel
+              </Button>
+            </Tooltip>
+            <Tooltip title="Export to PDF">
+              <Button variant="outlined" size="small" startIcon={<PdfIcon />}
+                onClick={handleExportPDF}
+                sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' } }}>
+                PDF
+              </Button>
+            </Tooltip>
+            <Button variant="contained" startIcon={<AddIcon />}
+              onClick={openCreateDialog}
+              sx={{ bgcolor: 'rgba(255,255,255,0.2)', '&:hover': { bgcolor: 'rgba(255,255,255,0.3)' } }}>
+              Add User
+            </Button>
+          </Box>
         </Box>
       </Paper>
 
@@ -330,13 +461,43 @@ const UserManagementPage: React.FC = () => {
 
       {/* Search & Filters */}
       <Paper elevation={0} sx={{ mb: 2, p: 2, border: `1px solid ${theme.palette.divider}` }}>
-        <Box display="flex" gap={2} alignItems="center">
+        <Box display="flex" gap={2} alignItems="center" flexWrap="wrap">
           <TextField
-            size="small" placeholder="Search users by name, email, or department..."
-            value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+            size="small" placeholder="Search by name, email, or department..."
+            value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setPage(0); }}
             InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon /></InputAdornment> }}
-            sx={{ flex: 1 }}
+            sx={{ flex: 1, minWidth: 220 }}
           />
+          <FormControl size="small" sx={{ minWidth: 150 }}>
+            <InputLabel>Role</InputLabel>
+            <Select label="Role" value={filterRole} onChange={(e) => setFilterRole(e.target.value)}>
+              <MenuItem value="">All Roles</MenuItem>
+              <MenuItem value="ADMIN">Super Administrator</MenuItem>
+              <MenuItem value="GENERAL_USER">General User</MenuItem>
+              <MenuItem value="PROGRAM_LEAD">Program Lead</MenuItem>
+              <MenuItem value="HEAD_OF_PROGRAMS">Head of Programs</MenuItem>
+              <MenuItem value="FINANCE_CLERK">Finance Clerk</MenuItem>
+              <MenuItem value="PROCUREMENT_OFFICER">Procurement Officer</MenuItem>
+              <MenuItem value="PROCUREMENT_COMMITTEE">Procurement Committee</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 160 }}>
+            <InputLabel>Department</InputLabel>
+            <Select label="Department" value={filterDept} onChange={(e) => setFilterDept(e.target.value as number | '')}>
+              <MenuItem value="">All Departments</MenuItem>
+              {departments.map((d) => (
+                <MenuItem key={d.id} value={d.id}>{d.department_name}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>Status</InputLabel>
+            <Select label="Status" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as '' | 'active' | 'inactive')}>
+              <MenuItem value="">All</MenuItem>
+              <MenuItem value="active">Active</MenuItem>
+              <MenuItem value="inactive">Inactive</MenuItem>
+            </Select>
+          </FormControl>
           <Tooltip title="Refresh">
             <IconButton onClick={fetchUsers}><RefreshIcon /></IconButton>
           </Tooltip>
@@ -345,7 +506,7 @@ const UserManagementPage: React.FC = () => {
 
       {/* Tabs */}
       <Paper elevation={0} sx={{ mb: 2, border: `1px solid ${theme.palette.divider}` }}>
-        <Tabs value={activeTab} onChange={(_, v) => setActiveTab(v)}>
+        <Tabs value={activeTab} onChange={(_, v) => { setActiveTab(v); setPage(0); }}>
           <Tab label={`Active Users (${activeUsers.length})`} icon={<PersonIcon />} iconPosition="start" />
           <Tab label={`Inactive Users (${inactiveUsers.length})`} icon={<LockIcon />} iconPosition="start" />
         </Tabs>
@@ -354,77 +515,87 @@ const UserManagementPage: React.FC = () => {
       {/* Users Table */}
       <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
         <TableContainer>
-          <Table>
+          <Table size="small">
             <TableHead>
-              <TableRow sx={{ backgroundColor: 'grey.50' }}>
-                <TableCell sx={{ fontWeight: 600 }}>User</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Email</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Role</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Department</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Last Login</TableCell>
-                <TableCell sx={{ fontWeight: 600 }} align="center">Actions</TableCell>
+              <TableRow sx={{ bgcolor: '#006064' }}>
+                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1.5, fontSize: '0.74rem' }}>#</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1.5, fontSize: '0.74rem' }}>User / Email</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1.5, fontSize: '0.74rem' }}>Role</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1.5, fontSize: '0.74rem' }}>Department</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1.5, fontSize: '0.74rem' }}>Status</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1.5, fontSize: '0.74rem' }}>Last Login</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1.5, fontSize: '0.74rem' }} align="center">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {(activeTab === 0 ? activeUsers : inactiveUsers).length === 0 ? (
+              {pagedUsers.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7}>
                     <Box py={4} textAlign="center">
                       <PersonIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
-                      <Typography color="text.secondary">No users found</Typography>
+                      <Typography color="text.secondary" fontSize="0.85rem">No users found</Typography>
                     </Box>
                   </TableCell>
                 </TableRow>
               ) : (
-                (activeTab === 0 ? activeUsers : inactiveUsers).map((u) => (
-                  <TableRow key={u.id} hover>
-                    <TableCell>
-                      <Box display="flex" alignItems="center" gap={1.5}>
-                        <Avatar sx={{ width: 36, height: 36, bgcolor: 'primary.main', fontSize: '0.8rem' }}>
+                pagedUsers.map((u, idx) => (
+                  <TableRow key={u.id} hover sx={{ '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.04) } }}>
+                    <TableCell sx={{ py: 0.8, px: 1.5, fontSize: '0.78rem', color: 'text.secondary' }}>{idx + 1}</TableCell>
+                    <TableCell sx={{ py: 0.8, px: 1.5 }}>
+                      <Box display="flex" alignItems="center" gap={1}>
+                        <Avatar sx={{ width: 28, height: 28, bgcolor: 'primary.main', fontSize: '0.68rem', flexShrink: 0 }}>
                           {u.first_name[0]}{u.last_name[0]}
                         </Avatar>
-                        <Typography fontWeight={500}>{u.first_name} {u.last_name}</Typography>
+                        <Box>
+                          <Typography fontWeight={600} fontSize="0.82rem" lineHeight={1.2}>{u.first_name} {u.last_name}</Typography>
+                          <Typography fontSize="0.72rem" color="text.secondary" lineHeight={1.2}>{u.email}</Typography>
+                        </Box>
                       </Box>
                     </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">{u.email}</Typography>
+                    <TableCell sx={{ py: 0.8, px: 1.5 }}>
+                      <Chip label={getRoleLabel(u.role || u.role_name || '')} color={getRoleColor(u.role || u.role_name || '')} size="small"
+                        sx={{ fontSize: '0.68rem', height: 20, '& .MuiChip-label': { px: 0.8 } }} />
                     </TableCell>
-                    <TableCell>
-                      <Chip label={getRoleLabel(u.role || u.role_name || '')} color={getRoleColor(u.role || u.role_name || '')} size="small" />
+                    <TableCell sx={{ py: 0.8, px: 1.5 }}>
+                      <Chip label={u.department_code || u.department_name || '-'} size="small" variant="outlined"
+                        sx={{ fontSize: '0.68rem', height: 20, '& .MuiChip-label': { px: 0.8 } }} />
                     </TableCell>
-                    <TableCell>
-                      <Chip label={u.department_code || u.department_name || '-'} size="small" variant="outlined" />
-                    </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ py: 0.8, px: 1.5 }}>
                       <Chip label={u.is_active ? 'Active' : 'Inactive'} size="small"
                         color={u.is_active ? 'success' : 'default'}
-                        sx={{ fontWeight: 500 }} />
+                        sx={{ fontWeight: 600, fontSize: '0.68rem', height: 20, '& .MuiChip-label': { px: 0.8 } }} />
                     </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {u.last_login ? format(new Date(u.last_login), 'MMM d, yyyy HH:mm') : 'Never'}
-                      </Typography>
+                    <TableCell sx={{ py: 0.8, px: 1.5, fontSize: '0.75rem', color: 'text.secondary' }}>
+                      {u.last_login ? format(new Date(u.last_login), 'MMM d, yyyy HH:mm') : 'Never'}
                     </TableCell>
-                    <TableCell align="center">
-                      <Box display="flex" justifyContent="center" gap={0.5}>
+                    <TableCell align="center" sx={{ py: 0.8, px: 1 }}>
+                      <Box display="flex" justifyContent="center" gap={0.3}>
                         <Tooltip title="View Profile">
-                          <IconButton size="small" onClick={() => openProfileDialog(u)}><ViewIcon fontSize="small" /></IconButton>
+                          <IconButton size="small" sx={{ p: 0.4 }} onClick={() => openProfileDialog(u)}><ViewIcon sx={{ fontSize: 16 }} /></IconButton>
                         </Tooltip>
                         <Tooltip title="Edit User">
-                          <IconButton size="small" onClick={() => openEditDialog(u)}><EditIcon fontSize="small" /></IconButton>
+                          <IconButton size="small" sx={{ p: 0.4 }} onClick={() => openEditDialog(u)}><EditIcon sx={{ fontSize: 16 }} /></IconButton>
                         </Tooltip>
                         <Tooltip title="Reset Password">
-                          <IconButton size="small" onClick={() => { setResetUser(u); setNewPassword(''); setResetDialogOpen(true); }}>
-                            <LockIcon fontSize="small" />
+                          <IconButton size="small" sx={{ p: 0.4 }} onClick={() => { setResetUser(u); setNewPassword(''); setResetDialogOpen(true); }}>
+                            <LockIcon sx={{ fontSize: 16 }} />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title={u.is_active ? 'Deactivate' : 'Activate'}>
-                          <IconButton size="small" color={u.is_active ? 'error' : 'success'}
+                          <IconButton size="small" sx={{ p: 0.4 }} color={u.is_active ? 'warning' : 'success'}
                             onClick={() => handleToggleActive(u)}
                             disabled={u.id === currentUser?.id}>
-                            {u.is_active ? <DeleteIcon fontSize="small" /> : <UnlockIcon fontSize="small" />}
+                            {u.is_active ? <LockIcon sx={{ fontSize: 16 }} /> : <UnlockIcon sx={{ fontSize: 16 }} />}
                           </IconButton>
+                        </Tooltip>
+                        <Tooltip title={u.id === currentUser?.id ? 'Cannot delete own account' : 'Delete User'}>
+                          <span>
+                            <IconButton size="small" sx={{ p: 0.4 }} color="error"
+                              onClick={() => setDeleteTarget(u)}
+                              disabled={u.id === currentUser?.id}>
+                              <DeleteIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                       </Box>
                     </TableCell>
@@ -434,6 +605,17 @@ const UserManagementPage: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
+        <TablePagination
+          component="div"
+          count={currentList.length}
+          page={page}
+          onPageChange={(_, newPage) => setPage(newPage)}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+          rowsPerPageOptions={[5, 10, 25, 50, { value: -1, label: 'All' }]}
+          labelRowsPerPage="Rows per page:"
+          sx={{ borderTop: `1px solid ${theme.palette.divider}` }}
+        />
       </Paper>
 
       {/* ==================== CREATE/EDIT USER DIALOG ==================== */}
@@ -480,11 +662,13 @@ const UserManagementPage: React.FC = () => {
               <FormControl fullWidth size="small">
                 <InputLabel>Role</InputLabel>
                 <Select label="Role" value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value })}>
-                  <MenuItem value="ADMIN">System Admin</MenuItem>
+                  <MenuItem value="ADMIN">Super Administrator</MenuItem>
                   <MenuItem value="GENERAL_USER">General User</MenuItem>
                   <MenuItem value="PROGRAM_LEAD">Program Lead</MenuItem>
                   <MenuItem value="HEAD_OF_PROGRAMS">Head of Programs</MenuItem>
                   <MenuItem value="FINANCE_CLERK">Finance Clerk</MenuItem>
+                  <MenuItem value="PROCUREMENT_OFFICER">Procurement Officer</MenuItem>
+                  <MenuItem value="PROCUREMENT_COMMITTEE">Procurement Committee</MenuItem>
                 </Select>
               </FormControl>
             </Grid>
@@ -649,6 +833,35 @@ const UserManagementPage: React.FC = () => {
           <Button variant="outlined" startIcon={<EditIcon />}
             onClick={() => { setProfileOpen(false); if (profileUser) openEditDialog(profileUser); }}>
             Edit User
+          </Button>
+        </DialogActions>
+      </Dialog>
+      {/* ==================== DELETE USER DIALOG ==================== */}
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          <Box display="flex" alignItems="center" gap={1}>
+            <DeleteIcon color="error" />
+            <Typography variant="h6">Delete User</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          {deleteTarget && (
+            <Box>
+              <Alert severity="error" sx={{ mb: 2 }}>
+                You are about to delete <strong>{deleteTarget.first_name} {deleteTarget.last_name}</strong> ({deleteTarget.email}).
+              </Alert>
+              <Typography variant="body2" color="text.secondary">
+                If this user has existing requests, the account will be deactivated instead of permanently deleted.
+                This action cannot be undone.
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleDeleteUser} disabled={isDeleting}
+            startIcon={isDeleting ? <CircularProgress size={18} /> : <DeleteIcon />}>
+            Delete User
           </Button>
         </DialogActions>
       </Dialog>

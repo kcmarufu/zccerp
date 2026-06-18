@@ -509,6 +509,8 @@ class AssetService {
     let whereClause = 'WHERE 1=1';
     if (filters.assetId) { whereClause += ` AND t.asset_id = ?`; params.push(filters.assetId); }
     if (filters.status) { whereClause += ` AND t.status = ?`; params.push(filters.status); }
+    if (filters.departmentId) { whereClause += ` AND a.department_id = ?`; params.push(filters.departmentId); }
+    if (filters.custodianId) { whereClause += ` AND a.custodian_id = ?`; params.push(filters.custodianId); }
 
     return await query(
       `SELECT t.*, a.asset_tag, a.asset_name,
@@ -583,6 +585,8 @@ class AssetService {
     if (filters.assetId) { whereClause += ` AND m.asset_id = ?`; params.push(filters.assetId); }
     if (filters.status) { whereClause += ` AND m.status = ?`; params.push(filters.status); }
     if (filters.maintenanceType) { whereClause += ` AND m.maintenance_type = ?`; params.push(filters.maintenanceType); }
+    if (filters.departmentId) { whereClause += ` AND a.department_id = ?`; params.push(filters.departmentId); }
+    if (filters.custodianId) { whereClause += ` AND a.custodian_id = ?`; params.push(filters.custodianId); }
 
     return await query(
       `SELECT m.*, a.asset_tag, a.asset_name,
@@ -670,6 +674,8 @@ class AssetService {
     let whereClause = 'WHERE 1=1';
     if (filters.assetId) { whereClause += ` AND d.asset_id = ?`; params.push(filters.assetId); }
     if (filters.status) { whereClause += ` AND d.status = ?`; params.push(filters.status); }
+    if (filters.departmentId) { whereClause += ` AND a.department_id = ?`; params.push(filters.departmentId); }
+    if (filters.custodianId) { whereClause += ` AND a.custodian_id = ?`; params.push(filters.custodianId); }
 
     return await query(
       `SELECT d.*, a.asset_tag, a.asset_name,
@@ -752,6 +758,8 @@ class AssetService {
     if (filters.assetId) { whereClause += ` AND i.asset_id = ?`; params.push(filters.assetId); }
     if (filters.status) { whereClause += ` AND i.status = ?`; params.push(filters.status); }
     if (filters.incidentType) { whereClause += ` AND i.incident_type = ?`; params.push(filters.incidentType); }
+    if (filters.departmentId) { whereClause += ` AND a.department_id = ?`; params.push(filters.departmentId); }
+    if (filters.custodianId) { whereClause += ` AND a.custodian_id = ?`; params.push(filters.custodianId); }
 
     return await query(
       `SELECT i.*, a.asset_tag, a.asset_name,
@@ -797,29 +805,61 @@ class AssetService {
   // DASHBOARD / SUMMARY STATS
   // ========================================================================
 
-  async getDashboardStats() {
+  async getDashboardStats(filters = {}) {
     try {
-      const totalAssetsResult = await query(`SELECT COUNT(*) as count FROM assets WHERE is_active = 1`);
-      const totalValueResult = await query(`SELECT COALESCE(SUM(current_value), 0) as value FROM assets WHERE is_active = 1`);
+      let whereClause = 'WHERE is_active = 1';
+      let assetAliasWhereClause = 'WHERE a.is_active = 1';
+      const params = [];
+      if (filters.departmentId) {
+        whereClause += ' AND department_id = ?';
+        assetAliasWhereClause += ' AND a.department_id = ?';
+        params.push(filters.departmentId);
+      }
+      if (filters.custodianId) {
+        whereClause += ' AND custodian_id = ?';
+        assetAliasWhereClause += ' AND a.custodian_id = ?';
+        params.push(filters.custodianId);
+      }
+
+      const totalAssetsResult = await query(`SELECT COUNT(*) as count FROM assets ${whereClause}`, params);
+      const totalValueResult = await query(`SELECT COALESCE(SUM(current_value), 0) as value FROM assets ${whereClause}`, params);
       const statusCounts = await query(
-        `SELECT status, COUNT(*) as count FROM assets WHERE is_active = 1 GROUP BY status`
+        `SELECT status, COUNT(*) as count FROM assets ${whereClause} GROUP BY status`, params
       );
       const categoryCounts = await query(
         `SELECT ac.category_name, COUNT(a.id) as count, COALESCE(SUM(a.current_value), 0) as total_value
          FROM assets a JOIN asset_categories ac ON a.category_id = ac.id
-         WHERE a.is_active = 1 GROUP BY ac.id, ac.category_name ORDER BY count DESC`
+        ${assetAliasWhereClause} GROUP BY ac.id, ac.category_name ORDER BY count DESC`, params
       );
       const conditionCounts = await query(
-        `SELECT condition_rating, COUNT(*) as count FROM assets WHERE is_active = 1 GROUP BY condition_rating`
+        `SELECT condition_rating, COUNT(*) as count FROM assets ${whereClause} GROUP BY condition_rating`, params
       );
       const upcomingMaintenanceResult = await query(
-        `SELECT COUNT(*) as count FROM asset_maintenance WHERE status = 'SCHEDULED' AND scheduled_date <= DATE_ADD(NOW(), INTERVAL 30 DAY)`
+        `SELECT COUNT(*) as count
+         FROM asset_maintenance m
+         JOIN assets a ON a.id = m.asset_id
+         WHERE m.status = 'SCHEDULED' AND m.scheduled_date <= DATE_ADD(NOW(), INTERVAL 30 DAY)
+         ${filters.departmentId ? 'AND a.department_id = ?' : ''}
+         ${filters.custodianId ? 'AND a.custodian_id = ?' : ''}`,
+        [...(filters.departmentId ? [filters.departmentId] : []), ...(filters.custodianId ? [filters.custodianId] : [])]
       );
       const openIncidentsResult = await query(
-        `SELECT COUNT(*) as count FROM asset_incidents WHERE status IN ('OPEN', 'INVESTIGATING')`
+        `SELECT COUNT(*) as count
+         FROM asset_incidents i
+         JOIN assets a ON a.id = i.asset_id
+         WHERE i.status IN ('OPEN', 'INVESTIGATING')
+         ${filters.departmentId ? 'AND a.department_id = ?' : ''}
+         ${filters.custodianId ? 'AND a.custodian_id = ?' : ''}`,
+        [...(filters.departmentId ? [filters.departmentId] : []), ...(filters.custodianId ? [filters.custodianId] : [])]
       );
       const pendingDisposalsResult = await query(
-        `SELECT COUNT(*) as count FROM asset_disposals WHERE status = 'PENDING'`
+        `SELECT COUNT(*) as count
+         FROM asset_disposals d
+         JOIN assets a ON a.id = d.asset_id
+         WHERE d.status = 'PENDING'
+         ${filters.departmentId ? 'AND a.department_id = ?' : ''}
+         ${filters.custodianId ? 'AND a.custodian_id = ?' : ''}`,
+        [...(filters.departmentId ? [filters.departmentId] : []), ...(filters.custodianId ? [filters.custodianId] : [])]
       );
 
       return {

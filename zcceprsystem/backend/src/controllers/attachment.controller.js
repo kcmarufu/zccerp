@@ -5,6 +5,16 @@
 const { query } = require('../config/database');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+
+// In-memory one-time download tokens: token -> { attachmentId, expiresAt }
+const _downloadTokens = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, e] of _downloadTokens.entries()) {
+    if (now > e.expiresAt) _downloadTokens.delete(t);
+  }
+}, 60000);
 
 /**
  * Upload single attachment
@@ -149,6 +159,53 @@ exports.getAttachmentById = async (req, res) => {
 };
 
 /**
+ * Generate a short-lived one-time download token for an attachment
+ */
+exports.generateDownloadToken = async (req, res) => {
+  try {
+    const attachmentId = parseInt(req.params.id);
+    const token = crypto.randomBytes(32).toString('hex');
+    _downloadTokens.set(token, { attachmentId, expiresAt: Date.now() + 60000 });
+    res.json({ token });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate download token' });
+  }
+};
+
+/**
+ * Serve attachment file using a one-time token (no auth middleware — token IS the auth)
+ */
+exports.downloadByToken = async (req, res) => {
+  try {
+    const entry = _downloadTokens.get(req.params.token);
+    if (!entry || Date.now() > entry.expiresAt) {
+      _downloadTokens.delete(req.params.token);
+      return res.status(401).send('Invalid or expired download token');
+    }
+    _downloadTokens.delete(req.params.token); // one-time use
+
+    const attachments = await query('SELECT * FROM attachments WHERE id = ?', [entry.attachmentId]);
+    if (!attachments.length) return res.status(404).send('Attachment not found');
+    const attachment = attachments[0];
+    if (!attachment.is_active) return res.status(410).send('Attachment deleted');
+
+    const filePath = path.resolve(attachment.file_path);
+    if (!fs.existsSync(filePath)) return res.status(404).send('File not found on server');
+
+    const safeFileName = attachment.original_name.replace(/[\r\n"\\]/g, '_');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
+    res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
+
+    const data = await fs.promises.readFile(filePath);
+    res.setHeader('Content-Length', data.length);
+    res.end(data);
+  } catch (err) {
+    console.error('Error serving file by token:', err);
+    if (!res.headersSent) res.status(500).send('Failed to download file');
+  }
+};
+
+/**
  * Download attachment
  */
 exports.downloadAttachment = async (req, res) => {
@@ -175,13 +232,24 @@ exports.downloadAttachment = async (req, res) => {
       return res.status(404).json({ error: 'File not found on server' });
     }
     
-    // Set headers for file download
-    res.setHeader('Content-Disposition', `attachment; filename="${attachment.original_name}"`);
-    res.setHeader('Content-Type', attachment.file_type);
-    
-    // Stream file to response
-    const fileStream = fs.createReadStream(attachment.file_path);
-    fileStream.pipe(res);
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Type');
+
+    const safeFileName = attachment.original_name.replace(/[\r\n"\\]/g, '_');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
+    res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
+
+    // Use promises so errors are caught by the outer try/catch.
+    // Callback-based fs.readFile inside an async function is NOT covered by try/catch
+    // and causes unhandled errors that abort the response with ERR_NETWORK.
+    const data = await fs.promises.readFile(path.resolve(attachment.file_path));
+    res.setHeader('Content-Length', data.length);
+    res.end(data);
   } catch (error) {
     console.error('Error downloading attachment:', error);
     res.status(500).json({ error: 'Failed to download file' });

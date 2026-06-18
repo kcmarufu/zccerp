@@ -7,6 +7,7 @@ const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const { query } = require('../config/database');
 const approvalService = require('../services/approval.service');
+const notificationService = require('../services/notification.service');
 
 class ExportController {
 
@@ -18,27 +19,30 @@ class ExportController {
     try {
       const { requestId } = req.params;
 
-      // Fetch complete request data
+      // Fetch complete request data including partner (donor) and project
       const requests = await query(
-        `SELECT r.*, 
+        `SELECT r.*,
                 u.first_name as requester_first_name,
                 u.last_name as requester_last_name,
                 u.email as requester_email,
                 u.employee_id as requester_employee_id,
                 d.department_name,
-                d.department_code
+                d.department_code,
+                dn.donor_name as partner_name,
+                dn.donor_code as partner_code,
+                p.project_name,
+                p.project_code
          FROM requests r
          JOIN users u ON r.requester_id = u.id
          JOIN departments d ON r.department_id = d.id
+         LEFT JOIN donors dn ON r.donor_id = dn.id
+         LEFT JOIN projects p ON r.project_id = p.id
          WHERE r.id = ?`,
         [requestId]
       );
 
       if (requests.length === 0) {
-        return res.status(404).json({
-          success: false,
-          error: 'Request not found'
-        });
+        return res.status(404).json({ success: false, error: 'Request not found' });
       }
 
       const request = requests[0];
@@ -55,159 +59,388 @@ class ExportController {
       // Get approval trail
       const approvalTrail = await approvalService.getApprovalTrail(requestId);
 
-      // Create PDF document
-      const doc = new PDFDocument({ margin: 50 });
+      // Create text-based PDF document
+      const doc = new PDFDocument({ margin: 50, size: 'A4' });
 
-      // Set response headers
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=dispatch-${request.request_code}.pdf`);
-
-      // Pipe to response
+      res.setHeader('Content-Disposition', `attachment; filename=float-requisition-${request.request_code}.pdf`);
       doc.pipe(res);
 
-      // Header
-      doc.fontSize(20).text('PROCUREMENT REQUEST - DISPATCH DOCUMENT', { align: 'center' });
-      doc.moveDown();
-      doc.fontSize(12).text(`Request Number: ${request.request_code}`, { align: 'center' });
-      doc.text(`Status: ${request.status}`, { align: 'center' });
-      doc.moveDown(2);
+      // ── Header band ──────────────────────────────────────────────────────────
+      const pageW = doc.page.width - 100; // usable width with 50px margins each side
+      doc.rect(50, 40, pageW, 60).fill('#006064');
+      doc.fillColor('white').fontSize(8).text('ERP Connect — Zimbabwe Council of Churches', 60, 50);
+      doc.fontSize(16).font('Helvetica-Bold').text('Float Requisition', 60, 62);
+      doc.fontSize(9).font('Helvetica').text(`Department: ${request.department_name} (${request.department_code})`, 60, 84);
 
-      // Request Details Section
-      doc.fontSize(14).text('REQUEST DETAILS', { underline: true });
-      doc.moveDown(0.5);
-      doc.fontSize(10);
-      doc.text(`Requester: ${request.requester_first_name} ${request.requester_last_name}`);
-      doc.text(`Employee ID: ${request.requester_employee_id}`);
-      doc.text(`Email: ${request.requester_email}`);
-      doc.text(`Department: ${request.department_name} (${request.department_code})`);
-      doc.text(`Priority: ${request.priority}`);
-      doc.text(`Submitted: ${request.submitted_at ? new Date(request.submitted_at).toLocaleString() : 'N/A'}`);
-      doc.text(`Total Amount: $${parseFloat(request.total_amount).toFixed(2)}`);
-      doc.moveDown();
-      doc.text(`Justification: ${request.justification || 'N/A'}`);
-      doc.moveDown(2);
+      // Reference block (top-right)
+      const refX = doc.page.width - 200;
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('white').text('Reference:', refX, 50);
+      doc.fontSize(12).font('Helvetica-Bold').text(request.request_code, refX, 62);
+      doc.fontSize(8).font('Helvetica').text(`Date: ${request.submitted_at ? new Date(request.submitted_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : new Date(request.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`, refX, 78);
+      doc.fontSize(8).text(`Status: ${(request.status || '').replace(/_/g, ' ')}`, refX, 90);
 
-      // Items Table
-      doc.fontSize(14).text('REQUEST ITEMS', { underline: true });
-      doc.moveDown(0.5);
+      doc.fillColor('#1a1a1a');
+
+      // ── Meta Details ─────────────────────────────────────────────────────────
+      let y = 120;
+      const col1 = 50, col2 = 310;
+
+      const drawField = (label, value, x, yPos) => {
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#555').text(label.toUpperCase(), x, yPos);
+        doc.fontSize(10).font('Helvetica').fillColor('#1a1a1a').text(value || '—', x, yPos + 12);
+      };
+
+      drawField('Requester', `${request.requester_first_name} ${request.requester_last_name}`, col1, y);
+      drawField('Employee ID', request.requester_employee_id || '—', col2, y);
+      y += 34;
+      drawField('Department', `${request.department_name} (${request.department_code})`, col1, y);
+      drawField('Priority', request.priority || 'MEDIUM', col2, y);
+      y += 34;
+      drawField('Partner', request.partner_name || '—', col1, y);
+      drawField('Project', request.project_name ? `${request.project_code} — ${request.project_name}` : '—', col2, y);
+      y += 34;
+      drawField('Total Amount', `$${parseFloat(request.total_amount || 0).toFixed(2)}`, col1, y);
+      drawField('Email', request.requester_email || '—', col2, y);
+      y += 34;
+
+      if (request.justification) {
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#555').text('PURPOSE OF FLOAT', col1, y);
+        doc.fontSize(10).font('Helvetica').fillColor('#1a1a1a').text(request.justification, col1, y + 12, { width: pageW });
+        y += 12 + doc.heightOfString(request.justification, { width: pageW }) + 10;
+      }
+
+      // ── Separator ────────────────────────────────────────────────────────────
+      y += 8;
+      doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(1).strokeColor('#006064').stroke();
+      y += 10;
+
+      // ── Items Table ──────────────────────────────────────────────────────────
+      doc.fontSize(11).font('Helvetica-Bold').fillColor('#006064').text('REQUEST ITEMS', col1, y);
+      y += 18;
 
       // Table header
-      const tableTop = doc.y;
-      const itemX = 50;
-      const qtyX = 250;
-      const priceX = 300;
-      const totalX = 370;
-      const budgetX = 440;
+      doc.rect(50, y, pageW, 18).fill('#006064');
+      doc.fontSize(8).font('Helvetica-Bold').fillColor('white');
+      doc.text('#', 55, y + 5);
+      doc.text('Budget Code', 75, y + 5);
+      doc.text('Description', 150, y + 5);
+      doc.text('Qty', 330, y + 5);
+      doc.text('Unit Price', 365, y + 5, { width: 65, align: 'right' });
+      doc.text('Subtotal', 435, y + 5, { width: 65, align: 'right' });
+      y += 18;
 
-      doc.fontSize(9);
-      doc.text('Description', itemX, tableTop);
-      doc.text('Qty', qtyX, tableTop);
-      doc.text('Unit Price', priceX, tableTop);
-      doc.text('Total', totalX, tableTop);
-      doc.text('Budget Line', budgetX, tableTop);
-
-      doc.moveTo(50, tableTop + 15).lineTo(550, tableTop + 15).stroke();
-
-      let currentY = tableTop + 25;
-      items.forEach((item, index) => {
-        if (currentY > 700) {
-          doc.addPage();
-          currentY = 50;
-        }
-
-        doc.text(item.item_description.substring(0, 35), itemX, currentY);
-        doc.text(item.quantity.toString(), qtyX, currentY);
-        doc.text(`$${parseFloat(item.unit_price).toFixed(2)}`, priceX, currentY);
-        doc.text(`$${parseFloat(item.total_price).toFixed(2)}`, totalX, currentY);
-        doc.text(item.budget_code, budgetX, currentY);
-        currentY += 20;
+      doc.fillColor('#1a1a1a');
+      let lineTotal = 0;
+      items.forEach((item, idx) => {
+        if (y > 680) { doc.addPage(); y = 50; }
+        const bg = idx % 2 === 0 ? '#f7f7f7' : 'white';
+        const rowH = Math.max(18, doc.heightOfString(item.item_description || '', { width: 170 }) + 8);
+        doc.rect(50, y, pageW, rowH).fill(bg);
+        doc.fontSize(9).font('Helvetica').fillColor('#1a1a1a');
+        doc.text(String(idx + 1), 55, y + 4);
+        doc.text(item.budget_code || '—', 75, y + 4, { width: 70 });
+        doc.text(item.item_description || '—', 150, y + 4, { width: 170 });
+        doc.text(String(item.quantity), 330, y + 4, { width: 30, align: 'center' });
+        doc.text(`$${parseFloat(item.unit_price || 0).toFixed(2)}`, 365, y + 4, { width: 65, align: 'right' });
+        const sub = parseFloat(item.unit_price || 0) * parseFloat(item.quantity || 0);
+        doc.text(`$${sub.toFixed(2)}`, 435, y + 4, { width: 65, align: 'right' });
+        lineTotal += sub;
+        y += rowH;
       });
 
-      doc.moveTo(50, currentY).lineTo(550, currentY).stroke();
-      currentY += 10;
-      doc.fontSize(10).text(`Total: $${parseFloat(request.total_amount).toFixed(2)}`, totalX, currentY);
-      doc.moveDown(3);
+      // Totals row
+      doc.rect(50, y, pageW, 20).fill('#e0f2f1');
+      doc.fontSize(10).font('Helvetica-Bold').fillColor('#006064');
+      doc.text('TOTAL:', 335, y + 4, { width: 95, align: 'right' });
+      doc.text(`$${lineTotal.toFixed(2)}`, 435, y + 4, { width: 65, align: 'right' });
+      y += 28;
 
-      // Approval Trail Section
-      if (doc.y > 600) doc.addPage();
-      doc.fontSize(14).text('APPROVAL TRAIL / SIGNATURES', { underline: true });
-      doc.moveDown(0.5);
+      // ── Approval Trail ───────────────────────────────────────────────────────
+      if (approvalTrail.length > 0) {
+        if (y > 620) { doc.addPage(); y = 50; }
+        doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(1).strokeColor('#006064').stroke();
+        y += 10;
+        doc.fontSize(11).font('Helvetica-Bold').fillColor('#006064').text('APPROVAL TRAIL', 50, y);
+        y += 18;
 
-      if (approvalTrail.length === 0) {
-        doc.fontSize(10).text('No approvals recorded yet.');
-      } else {
-        approvalTrail.forEach((approval) => {
-          doc.fontSize(10);
-          doc.text(`${approval.approver_role.replace(/_/g, ' ')}: ${approval.action}`);
-          doc.fontSize(9);
-          doc.text(`  Name: ${approval.approver_first_name} ${approval.approver_last_name}`);
-          doc.text(`  Date/Time: ${new Date(approval.created_at).toLocaleString()}`);
-          if (approval.comments) {
-            doc.text(`  Comments: ${approval.comments}`);
-          }
-          doc.moveDown(0.5);
+        doc.rect(50, y, pageW, 16).fill('#006064');
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('white');
+        doc.text('Action', 55, y + 4);
+        doc.text('Approved By', 120, y + 4);
+        doc.text('Role', 260, y + 4);
+        doc.text('Comments', 370, y + 4);
+        doc.text('Date', 470, y + 4);
+        y += 16;
+
+        approvalTrail.forEach((a, idx) => {
+          if (y > 700) { doc.addPage(); y = 50; }
+          const bg = idx % 2 === 0 ? '#f7f7f7' : 'white';
+          doc.rect(50, y, pageW, 18).fill(bg);
+          doc.fontSize(8).font('Helvetica').fillColor('#1a1a1a');
+          const actionColor = a.action === 'APPROVED' ? '#2e7d32' : a.action === 'REJECTED' ? '#c62828' : '#1a1a1a';
+          doc.font('Helvetica-Bold').fillColor(actionColor).text(a.action, 55, y + 4, { width: 60 });
+          doc.font('Helvetica').fillColor('#1a1a1a');
+          doc.text(`${a.approver_first_name} ${a.approver_last_name}`, 120, y + 4, { width: 135 });
+          doc.text((a.approver_role || '').replace(/_/g, ' '), 260, y + 4, { width: 105 });
+          doc.text(a.comments || '—', 370, y + 4, { width: 95 });
+          doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
+          y += 18;
         });
+        y += 10;
       }
 
-      // Signature Lines
-      doc.moveDown(2);
-      if (doc.y > 650) doc.addPage();
+      // ── Signature Lines ───────────────────────────────────────────────────────
+      if (y > 650) { doc.addPage(); y = 50; }
+      y += 10;
+      doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(1).strokeColor('#006064').stroke();
+      y += 14;
+      doc.fontSize(11).font('Helvetica-Bold').fillColor('#006064').text('AUTHORISATION SIGNATURES', 50, y);
+      y += 22;
 
-      doc.fontSize(12).text('SIGNATURES', { underline: true });
-      doc.moveDown(2);
+      const sigPositions = [50, 195, 340];
+      const sigLabels = [
+        `Requester\n${request.requester_first_name} ${request.requester_last_name}`,
+        'Programme Lead / HOP',
+        'Finance Clerk'
+      ];
+      sigPositions.forEach((x, i) => {
+        doc.moveTo(x, y + 36).lineTo(x + 130, y + 36).lineWidth(0.5).strokeColor('#333').stroke();
+        doc.fontSize(8).font('Helvetica').fillColor('#555').text(sigLabels[i], x, y + 40, { width: 130 });
+      });
+      y += 60;
 
-      const sigY = doc.y;
-      doc.fontSize(10);
-      
-      // Requester Signature
-      doc.text('_______________________', 50, sigY);
-      doc.text('Requester', 50, sigY + 15);
-      doc.text(`${request.requester_first_name} ${request.requester_last_name}`, 50, sigY + 30);
-
-      // Program Lead Signature
-      const leadApproval = approvalTrail.find(a => a.approver_role === 'PROGRAM_LEAD' && a.action === 'APPROVED');
-      doc.text('_______________________', 200, sigY);
-      doc.text('Program Lead', 200, sigY + 15);
-      if (leadApproval) {
-        doc.text(`${leadApproval.approver_first_name} ${leadApproval.approver_last_name}`, 200, sigY + 30);
-        doc.fontSize(8).text(new Date(leadApproval.created_at).toLocaleDateString(), 200, sigY + 42);
-      }
-
-      // HOP Signature
-      const hopApproval = approvalTrail.find(a => a.approver_role === 'HEAD_OF_PROGRAMS' && a.action === 'APPROVED');
-      doc.fontSize(10).text('_______________________', 350, sigY);
-      doc.text('Head of Programs', 350, sigY + 15);
-      if (hopApproval) {
-        doc.text(`${hopApproval.approver_first_name} ${hopApproval.approver_last_name}`, 350, sigY + 30);
-        doc.fontSize(8).text(new Date(hopApproval.created_at).toLocaleDateString(), 350, sigY + 42);
-      }
-
-      // Finance Signature
-      const financeApproval = approvalTrail.find(a => a.approver_role === 'FINANCE_CLERK' && a.action === 'APPROVED');
-      doc.fontSize(10).text('_______________________', 500, sigY);
-      doc.text('Finance', 500, sigY + 15);
-      if (financeApproval) {
-        doc.text(`${financeApproval.approver_first_name} ${financeApproval.approver_last_name}`, 500, sigY + 30);
-        doc.fontSize(8).text(new Date(financeApproval.created_at).toLocaleDateString(), 500, sigY + 42);
-      }
-
-      // Footer
-      doc.fontSize(8);
-      doc.text(
-        `Generated on ${new Date().toLocaleString()} | Document ID: ${request.request_code}`,
-        50,
-        750,
-        { align: 'center' }
-      );
+      // ── Footer ────────────────────────────────────────────────────────────────
+      if (y > 720) { doc.addPage(); y = 50; }
+      doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(0.5).strokeColor('#ccc').stroke();
+      y += 6;
+      doc.fontSize(7).font('Helvetica').fillColor('#999');
+      doc.text(`Generated: ${new Date().toLocaleString('en-GB')}  |  ERP Connect — Zimbabwe Council of Churches  |  CONFIDENTIAL`, 50, y);
+      doc.text('Powered By Kudakwashe C Marufu', doc.page.width - 230, y, { width: 180, align: 'right' });
 
       doc.end();
 
     } catch (error) {
       console.error('Error generating PDF:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to generate PDF'
+      res.status(500).json({ success: false, error: 'Failed to generate PDF' });
+    }
+  }
+
+  /**
+   * Generate text-based PDF reconciliation document
+   * GET /api/export/reconciliation/:requestId/pdf
+   */
+  async generateReconciliationPDF(req, res) {
+    try {
+      const { requestId } = req.params;
+
+      // Fetch request details with partner and project
+      const requests = await query(
+        `SELECT r.*,
+                u.first_name as requester_first_name,
+                u.last_name as requester_last_name,
+                u.email as requester_email,
+                d.department_name,
+                d.department_code,
+                dn.donor_name as partner_name,
+                dn.donor_code as partner_code,
+                p.project_name,
+                p.project_code
+         FROM requests r
+         JOIN users u ON r.requester_id = u.id
+         JOIN departments d ON r.department_id = d.id
+         LEFT JOIN donors dn ON r.donor_id = dn.id
+         LEFT JOIN projects p ON r.project_id = p.id
+         WHERE r.id = ?`,
+        [requestId]
+      );
+
+      if (requests.length === 0) {
+        return res.status(404).json({ success: false, error: 'Request not found' });
+      }
+
+      const request = requests[0];
+
+      // Fetch reconciliation
+      const recons = await query(
+        `SELECT * FROM reconciliations WHERE request_id = ? ORDER BY created_at DESC LIMIT 1`,
+        [requestId]
+      );
+      const reconciliation = recons[0] || null;
+
+      // Fetch reconciliation items
+      const reconItems = reconciliation ? await query(
+        `SELECT * FROM reconciliation_items WHERE reconciliation_id = ?`,
+        [reconciliation.id]
+      ) : [];
+
+      // Fetch approval trail
+      const approvalTrail = await approvalService.getApprovalTrail(requestId);
+
+      const doc = new PDFDocument({ margin: 50, size: 'A4' });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=reconciliation-${request.request_code}.pdf`);
+      doc.pipe(res);
+
+      const pageW = doc.page.width - 100;
+
+      // ── Header ────────────────────────────────────────────────────────────────
+      doc.rect(50, 40, pageW, 60).fill('#006064');
+      doc.fillColor('white').fontSize(8).text('ERP Connect — Zimbabwe Council of Churches', 60, 50);
+      doc.fontSize(16).font('Helvetica-Bold').text('Reconciliation', 60, 62);
+      doc.fontSize(9).font('Helvetica').text(`Department: ${request.department_name} (${request.department_code})`, 60, 84);
+
+      const refX = doc.page.width - 200;
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('white').text('Reference:', refX, 50);
+      doc.fontSize(12).font('Helvetica-Bold').text(request.request_code, refX, 62);
+      doc.fontSize(8).font('Helvetica').text(`Status: ${(request.status || '').replace(/_/g, ' ')}`, refX, 78);
+      if (reconciliation) {
+        doc.text(`Submitted: ${new Date(reconciliation.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`, refX, 90);
+      }
+
+      doc.fillColor('#1a1a1a');
+      let y = 120;
+      const col1 = 50, col2 = 310;
+
+      const drawField = (label, value, x, yPos) => {
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#555').text(label.toUpperCase(), x, yPos);
+        doc.fontSize(10).font('Helvetica').fillColor('#1a1a1a').text(value || '—', x, yPos + 12);
+      };
+
+      drawField('Requester', `${request.requester_first_name} ${request.requester_last_name}`, col1, y);
+      drawField('Department', `${request.department_name} (${request.department_code})`, col2, y);
+      y += 34;
+      drawField('Partner', request.partner_name || '—', col1, y);
+      drawField('Project', request.project_name ? `${request.project_code} — ${request.project_name}` : '—', col2, y);
+      y += 34;
+
+      if (reconciliation) {
+        drawField('Total Spent', `$${parseFloat(reconciliation.total_spent || 0).toFixed(2)}`, col1, y);
+        drawField('Total Returned', `$${parseFloat(reconciliation.total_returned || 0).toFixed(2)}`, col2, y);
+        y += 34;
+        if (reconciliation.notes) {
+          doc.fontSize(8).font('Helvetica-Bold').fillColor('#555').text('NOTES', col1, y);
+          doc.fontSize(10).font('Helvetica').fillColor('#1a1a1a').text(reconciliation.notes, col1, y + 12, { width: pageW });
+          y += 12 + doc.heightOfString(reconciliation.notes, { width: pageW }) + 10;
+        }
+      }
+
+      // ── Separator ────────────────────────────────────────────────────────────
+      y += 6;
+      doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(1).strokeColor('#006064').stroke();
+      y += 10;
+
+      // ── Reconciliation Items Table ────────────────────────────────────────────
+      if (reconItems.length > 0) {
+        doc.fontSize(11).font('Helvetica-Bold').fillColor('#006064').text('RECONCILIATION ITEMS', col1, y);
+        y += 18;
+
+        doc.rect(50, y, pageW, 18).fill('#006064');
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('white');
+        doc.text('#', 55, y + 5);
+        doc.text('Description', 75, y + 5);
+        doc.text('Budgeted', 295, y + 5, { width: 80, align: 'right' });
+        doc.text('Actual Spent', 380, y + 5, { width: 80, align: 'right' });
+        doc.text('Variance', 465, y + 5, { width: 80, align: 'right' });
+        y += 18;
+
+        let totalBudgeted = 0, totalActual = 0;
+        reconItems.forEach((item, idx) => {
+          if (y > 680) { doc.addPage(); y = 50; }
+          const bg = idx % 2 === 0 ? '#f7f7f7' : 'white';
+          const rowH = Math.max(18, doc.heightOfString(item.description || '', { width: 215 }) + 8);
+          doc.rect(50, y, pageW, rowH).fill(bg);
+          doc.fontSize(9).font('Helvetica').fillColor('#1a1a1a');
+          doc.text(String(idx + 1), 55, y + 4);
+          doc.text(item.description || '—', 75, y + 4, { width: 215 });
+          const budgeted = parseFloat(item.budgeted_amount || 0);
+          const actual = parseFloat(item.actual_amount || 0);
+          const variance = budgeted - actual;
+          doc.text(`$${budgeted.toFixed(2)}`, 295, y + 4, { width: 80, align: 'right' });
+          doc.text(`$${actual.toFixed(2)}`, 380, y + 4, { width: 80, align: 'right' });
+          const varColor = variance >= 0 ? '#2e7d32' : '#c62828';
+          doc.font('Helvetica-Bold').fillColor(varColor).text(`$${Math.abs(variance).toFixed(2)} ${variance >= 0 ? '↓' : '↑'}`, 465, y + 4, { width: 80, align: 'right' });
+          totalBudgeted += budgeted;
+          totalActual += actual;
+          y += rowH;
+        });
+
+        // Totals
+        doc.rect(50, y, pageW, 20).fill('#e0f2f1');
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#006064');
+        doc.text('TOTALS:', 75, y + 4, { width: 215 });
+        doc.text(`$${totalBudgeted.toFixed(2)}`, 295, y + 4, { width: 80, align: 'right' });
+        doc.text(`$${totalActual.toFixed(2)}`, 380, y + 4, { width: 80, align: 'right' });
+        const totalVariance = totalBudgeted - totalActual;
+        doc.fillColor(totalVariance >= 0 ? '#2e7d32' : '#c62828').text(`$${Math.abs(totalVariance).toFixed(2)} ${totalVariance >= 0 ? 'returned' : 'overspent'}`, 465, y + 4, { width: 80, align: 'right' });
+        y += 28;
+      }
+
+      // ── Approval Trail ────────────────────────────────────────────────────────
+      if (approvalTrail.length > 0) {
+        if (y > 620) { doc.addPage(); y = 50; }
+        doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(1).strokeColor('#006064').stroke();
+        y += 10;
+        doc.fontSize(11).font('Helvetica-Bold').fillColor('#006064').text('APPROVAL TRAIL / AUDIT TRAIL', 50, y);
+        y += 18;
+
+        doc.rect(50, y, pageW, 16).fill('#006064');
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('white');
+        doc.text('Action', 55, y + 4);
+        doc.text('By', 120, y + 4);
+        doc.text('Role', 260, y + 4);
+        doc.text('Comments', 370, y + 4);
+        doc.text('Date', 470, y + 4);
+        y += 16;
+
+        approvalTrail.forEach((a, idx) => {
+          if (y > 700) { doc.addPage(); y = 50; }
+          const bg = idx % 2 === 0 ? '#f7f7f7' : 'white';
+          doc.rect(50, y, pageW, 18).fill(bg);
+          doc.fontSize(8).font('Helvetica').fillColor('#1a1a1a');
+          const actionColor = a.action === 'APPROVED' ? '#2e7d32' : a.action === 'REJECTED' ? '#c62828' : '#1a1a1a';
+          doc.font('Helvetica-Bold').fillColor(actionColor).text(a.action, 55, y + 4, { width: 60 });
+          doc.font('Helvetica').fillColor('#1a1a1a');
+          doc.text(`${a.approver_first_name} ${a.approver_last_name}`, 120, y + 4, { width: 135 });
+          doc.text((a.approver_role || '').replace(/_/g, ' '), 260, y + 4, { width: 105 });
+          doc.text(a.comments || '—', 370, y + 4, { width: 95 });
+          doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
+          y += 18;
+        });
+        y += 10;
+      }
+
+      // ── Signature Lines ────────────────────────────────────────────────────────
+      if (y > 650) { doc.addPage(); y = 50; }
+      y += 10;
+      doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(1).strokeColor('#006064').stroke();
+      y += 14;
+      doc.fontSize(11).font('Helvetica-Bold').fillColor('#006064').text('AUTHORISATION SIGNATURES', 50, y);
+      y += 22;
+      const sigPositions = [50, 195, 340];
+      const sigLabels = [
+        `Requester\n${request.requester_first_name} ${request.requester_last_name}`,
+        'Programme Lead / HOP',
+        'Finance Clerk'
+      ];
+      sigPositions.forEach((x, i) => {
+        doc.moveTo(x, y + 36).lineTo(x + 130, y + 36).lineWidth(0.5).strokeColor('#333').stroke();
+        doc.fontSize(8).font('Helvetica').fillColor('#555').text(sigLabels[i], x, y + 40, { width: 130 });
       });
+
+      // ── Footer ─────────────────────────────────────────────────────────────────
+      y += 60;
+      doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(0.5).strokeColor('#ccc').stroke();
+      y += 6;
+      doc.fontSize(7).font('Helvetica').fillColor('#999');
+      doc.text(`Generated: ${new Date().toLocaleString('en-GB')}  |  ERP Connect — Zimbabwe Council of Churches  |  CONFIDENTIAL`, 50, y);
+      doc.text('Powered By Kudakwashe C Marufu', doc.page.width - 230, y, { width: 180, align: 'right' });
+
+      doc.end();
+
+    } catch (error) {
+      console.error('Error generating reconciliation PDF:', error);
+      res.status(500).json({ success: false, error: 'Failed to generate reconciliation PDF' });
     }
   }
 
@@ -500,17 +733,72 @@ class ExportController {
           throw new Error(`Cannot mark as dispatched. Current status: ${request.status}`);
         }
 
+        // Update request status and record dispatch time
         await connection.execute(
           `UPDATE requests 
-           SET status = 'DISPATCHED', updated_at = NOW(), version = version + 1
+           SET status = 'DISPATCHED', dispatched_at = NOW(3), updated_at = NOW(), version = version + 1
            WHERE id = ?`,
           [requestId]
         );
 
+        // Deduct each item's amount from its linked budget line's spent_amount
+        const [items] = await connection.execute(
+          `SELECT ri.budget_line_id, (ri.quantity * ri.unit_price) AS item_total
+           FROM request_items ri
+           WHERE ri.request_id = ? AND ri.budget_line_id IS NOT NULL`,
+          [requestId]
+        );
+
+        // Aggregate by budget_line_id
+        const lineMap = {};
+        for (const item of items) {
+          const blId = item.budget_line_id;
+          lineMap[blId] = (lineMap[blId] || 0) + parseFloat(item.item_total);
+        }
+
+        for (const [blId, amount] of Object.entries(lineMap)) {
+          const [blRows] = await connection.execute(
+            'SELECT allocated_amount, spent_amount, (allocated_amount - spent_amount) AS balance, donor_id FROM budget_lines WHERE id = ? FOR UPDATE',
+            [blId]
+          );
+          if (!blRows.length) continue;
+
+          const balanceBefore = parseFloat(blRows[0].balance);
+          const donorId = blRows[0].donor_id;
+
+          await connection.execute(
+            'UPDATE budget_lines SET spent_amount = spent_amount + ?, updated_at = NOW() WHERE id = ?',
+            [amount, blId]
+          );
+
+          const [updatedBl] = await connection.execute(
+            'SELECT (allocated_amount - spent_amount) AS balance FROM budget_lines WHERE id = ?',
+            [blId]
+          );
+          const balanceAfter = parseFloat(updatedBl[0].balance);
+
+          // Log budget transaction
+          await connection.execute(
+            `INSERT INTO budget_transactions
+             (budget_line_id, request_id, transaction_type, amount, balance_before, balance_after, description, performed_by)
+             VALUES (?, ?, 'DEDUCTION', ?, ?, ?, ?, ?)`,
+            [blId, requestId, amount, balanceBefore, balanceAfter,
+             `Dispatch deduction for request #${request.request_code}`, userId]
+          );
+
+          // Update donor total_spent
+          if (donorId) {
+            await connection.execute(
+              'UPDATE donors SET total_spent = total_spent + ?, updated_at = NOW() WHERE id = ?',
+              [amount, donorId]
+            );
+          }
+        }
+
         await connection.execute(
           `INSERT INTO approval_logs 
            (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
-           VALUES (?, ?, 'FINANCE_CLERK', 'APPROVED', 'APPROVED', 'DISPATCHED', 'Request dispatched', ?)`,
+           VALUES (?, ?, 'FINANCE_CLERK', 'DISPATCHED', 'APPROVED', 'DISPATCHED', 'Request dispatched', ?)`,
           [requestId, userId, ipAddress]
         );
       });
@@ -519,11 +807,133 @@ class ExportController {
         success: true,
         message: 'Request marked as dispatched'
       });
+
+      // Fire notification to requester (non-blocking)
+      query('SELECT requester_id, request_code FROM requests WHERE id = ?', [requestId])
+        .then(rows => {
+          if (rows[0]) notificationService.onRequestDispatched(requestId, rows[0].request_code, rows[0].requester_id).catch(() => {});
+        }).catch(() => {});
+
     } catch (error) {
       console.error('Error marking as dispatched:', error);
       res.status(400).json({
         success: false,
         error: error.message || 'Failed to mark as dispatched'
+      });
+    }
+  }
+
+  /**
+   * Reverse a dispatch — moves request from DISPATCHED back to APPROVED.
+   * Finance Clerk / Admin only.
+   * POST /api/export/dispatch/:requestId/reverse-dispatch
+   */
+  async reverseDispatch(req, res) {
+    try {
+      const { requestId } = req.params;
+      const userId = req.user.id;
+      const ipAddress = req.ip;
+      const { reason } = req.body;
+      const { transaction: transactionFn } = require('../config/database');
+
+      await transactionFn(async (connection) => {
+        const [requests] = await connection.execute(
+          'SELECT * FROM requests WHERE id = ? FOR UPDATE',
+          [requestId]
+        );
+
+        if (requests.length === 0) {
+          throw new Error('Request not found');
+        }
+
+        const request = requests[0];
+
+        if (request.status !== 'DISPATCHED') {
+          throw new Error(
+            `Cannot reverse dispatch. Current status: ${request.status}. Only DISPATCHED requests can be reversed.`
+          );
+        }
+
+        // Revert budget line spent_amounts that were deducted at dispatch time
+        const [items] = await connection.execute(
+          `SELECT ri.budget_line_id, (ri.quantity * ri.unit_price) AS item_total
+           FROM request_items ri
+           WHERE ri.request_id = ? AND ri.budget_line_id IS NOT NULL`,
+          [requestId]
+        );
+
+        // Aggregate by budget_line_id
+        const lineMap = {};
+        for (const item of items) {
+          const blId = item.budget_line_id;
+          lineMap[blId] = (lineMap[blId] || 0) + parseFloat(item.item_total);
+        }
+
+        for (const [blId, amount] of Object.entries(lineMap)) {
+          const [blRows] = await connection.execute(
+            'SELECT allocated_amount, spent_amount, (allocated_amount - spent_amount) AS balance, donor_id FROM budget_lines WHERE id = ? FOR UPDATE',
+            [blId]
+          );
+          if (!blRows.length) continue;
+
+          const balanceBefore = parseFloat(blRows[0].balance);
+          const donorId = blRows[0].donor_id;
+
+          await connection.execute(
+            'UPDATE budget_lines SET spent_amount = GREATEST(spent_amount - ?, 0), updated_at = NOW() WHERE id = ?',
+            [amount, blId]
+          );
+
+          const [updatedBl] = await connection.execute(
+            'SELECT (allocated_amount - spent_amount) AS balance FROM budget_lines WHERE id = ?',
+            [blId]
+          );
+          const balanceAfter = parseFloat(updatedBl[0].balance);
+
+          // Log budget transaction for the reversal
+          await connection.execute(
+            `INSERT INTO budget_transactions
+             (budget_line_id, request_id, transaction_type, amount, balance_before, balance_after, description, performed_by)
+             VALUES (?, ?, 'REVERSAL', ?, ?, ?, ?, ?)`,
+            [blId, requestId, amount, balanceBefore, balanceAfter,
+             `Dispatch reversal for request #${request.request_code}${reason ? ': ' + reason : ''}`, userId]
+          );
+
+          // Reverse donor total_spent
+          if (donorId) {
+            await connection.execute(
+              'UPDATE donors SET total_spent = GREATEST(total_spent - ?, 0), updated_at = NOW() WHERE id = ?',
+              [amount, donorId]
+            );
+          }
+        }
+
+        // Revert request status
+        await connection.execute(
+          `UPDATE requests
+           SET status = 'APPROVED', updated_at = NOW(), version = version + 1
+           WHERE id = ?`,
+          [requestId]
+        );
+
+        // Audit log
+        await connection.execute(
+          `INSERT INTO approval_logs
+           (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
+           VALUES (?, ?, 'FINANCE_CLERK', 'REVERSED', 'DISPATCHED', 'APPROVED', ?, ?)`,
+          [requestId, userId, reason || 'Dispatch reversed by Finance', ipAddress]
+        );
+      });
+
+      res.json({
+        success: true,
+        message: 'Dispatch reversed. Request is back to APPROVED status and budget balances have been restored.'
+      });
+    } catch (error) {
+      console.error('Error reversing dispatch:', error);
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Failed to reverse dispatch'
       });
     }
   }

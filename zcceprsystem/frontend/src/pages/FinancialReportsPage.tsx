@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Grid, Card, CardContent, Tabs, Tab,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TablePagination,
   Chip, LinearProgress, Alert, CircularProgress, TextField, MenuItem,
   Divider, Tooltip, Avatar, Stack
 } from '@mui/material';
@@ -62,22 +62,80 @@ const formatCompact = (amount: number) => {
   return `$${amount.toFixed(0)}`;
 };
 
+const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
+  if (percent < 0.04) return null;
+  const RADIAN = Math.PI / 180;
+  const r = innerRadius + (outerRadius - innerRadius) * 0.55;
+  return (
+    <text
+      x={cx + r * Math.cos(-midAngle * RADIAN)}
+      y={cy + r * Math.sin(-midAngle * RADIAN)}
+      fill="white"
+      textAnchor="middle"
+      dominantBaseline="central"
+      fontSize={11}
+      fontWeight={600}
+    >
+      {`${(percent * 100).toFixed(0)}%`}
+    </text>
+  );
+};
+
 const FinancialReportsPage: React.FC = () => {
   const [tabIndex, setTabIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [fiscalYear, setFiscalYear] = useState(new Date().getFullYear());
+  const [filterDonorId, setFilterDonorId] = useState<number | ''>('');
+  const [filterProjectId, setFilterProjectId] = useState<number | ''>('');
+  const [filterProjects, setFilterProjects] = useState<any[]>([]);
+  const [filterDonors, setFilterDonors] = useState<any[]>([]);
   const [data, setData] = useState<any>(null);
+  const [spendingPeriod, setSpendingPeriod] = useState<'weekly'|'monthly'|'quarterly'|'yearly'>('monthly');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [variancePage, setVariancePage] = useState(0);
+  const [varianceRowsPerPage, setVarianceRowsPerPage] = useState(10);
+  const [donorPage, setDonorPage] = useState(0);
+  const [donorRowsPerPage, setDonorRowsPerPage] = useState(10);
+  const [projectPage, setProjectPage] = useState(0);
+  const [projectRowsPerPage, setProjectRowsPerPage] = useState(10);
 
   useEffect(() => {
     fetchReports();
-  }, [fiscalYear]);
+  }, [fiscalYear, filterDonorId, filterProjectId, dateFrom, dateTo]);
+
+  // Load donors for filter once
+  useEffect(() => {
+    import('../services/donorService').then(m => {
+      m.default.getActiveDonors().then(setFilterDonors).catch(() => {});
+    });
+  }, []);
+
+  // When donor filter changes, load projects for that donor
+  useEffect(() => {
+    setFilterProjectId('');
+    setFilterProjects([]);
+    if (!filterDonorId) return;
+    import('../services/projectService').then(m => {
+      m.default.getProjectsByDonor(Number(filterDonorId)).then(setFilterProjects).catch(() => {});
+    });
+  }, [filterDonorId]);
 
   const fetchReports = async () => {
     try {
       setIsLoading(true);
-      const response = await budgetService.getReports(fiscalYear);
+      const response = await budgetService.getReports(
+        fiscalYear,
+        filterDonorId ? Number(filterDonorId) : undefined,
+        filterProjectId ? Number(filterProjectId) : undefined,
+        dateFrom || undefined,
+        dateTo || undefined
+      );
       if (response.success) {
         setData(response.data);
+        setVariancePage(0);
+        setDonorPage(0);
+        setProjectPage(0);
       }
     } catch (error: any) {
       toast.error('Failed to load financial reports');
@@ -100,7 +158,7 @@ const FinancialReportsPage: React.FC = () => {
     return <Alert severity="error" sx={{ m: 3 }}>Failed to load reports data. Please try again.</Alert>;
   }
 
-  const { totals, variance, donorSummary, departmentSummary, categorySummary, requestSummary, spendingTrend, reconciliationSummary } = data;
+  const { totals, variance, donorSummary, projectSummary, departmentSummary, categorySummary, requestSummary, spendingWeekly, spendingMonthly, spendingQuarterly, spendingYearly, reconciliationSummary } = data;
 
   // Prepare chart data
   const categoryChartData = categorySummary?.map((c: any) => ({
@@ -129,14 +187,31 @@ const FinancialReportsPage: React.FC = () => {
     amount: parseFloat(r.total_amount) || 0
   })) || [];
 
-  const trendData = spendingTrend?.map((m: any) => ({
+  const mapTrendData = (arr: any[]) => (arr || []).map((m: any) => ({
     ...m,
     total_spent: parseFloat(m.total_spent) || 0,
     total_allocated: parseFloat(m.total_allocated) || 0,
     total_topup: parseFloat(m.total_topup) || 0,
     total_reversals: parseFloat(m.total_reversals) || 0,
     net_flow: (parseFloat(m.total_allocated) || 0) + (parseFloat(m.total_topup) || 0) - (parseFloat(m.total_spent) || 0)
-  })) || [];
+  }));
+  const weeklyData = mapTrendData(spendingWeekly);
+  const monthlyData = mapTrendData(spendingMonthly);
+  const quarterlyData = mapTrendData(spendingQuarterly);
+  const yearlyData = mapTrendData(spendingYearly);
+  const activeTrendData =
+    spendingPeriod === 'weekly' ? weeklyData :
+    spendingPeriod === 'quarterly' ? quarterlyData :
+    spendingPeriod === 'yearly' ? yearlyData : monthlyData;
+  const periodLabels: Record<string, string> = {
+    weekly: 'Last 8 Weeks',
+    monthly: 'Last 12 Months',
+    quarterly: 'Last 8 Quarters',
+    yearly: 'Last 5 Years'
+  };
+  const periodColLabel: Record<string, string> = {
+    weekly: 'Week', monthly: 'Month', quarterly: 'Quarter', yearly: 'Year'
+  };
 
   const utilization = Number(totals?.overall_utilization || 0);
   const totalReqs = requestSummary?.reduce((sum: number, r: any) => sum + parseInt(r.count || 0), 0) || 0;
@@ -152,25 +227,54 @@ const FinancialReportsPage: React.FC = () => {
             FY {fiscalYear} — Budget variance, donor summaries, department analysis, and spending trends
           </Typography>
         </Box>
-        <TextField
-          select
-          label="Fiscal Year"
-          value={fiscalYear}
-          onChange={(e) => setFiscalYear(parseInt(e.target.value))}
-          size="small"
-          sx={{ width: 140 }}
-        >
-          {[2023, 2024, 2025, 2026, 2027].map(y => (
-            <MenuItem key={y} value={y}>{y}</MenuItem>
-          ))}
-        </TextField>
+        <Box display="flex" gap={1} alignItems="center" flexWrap="wrap">
+          <TextField
+            select
+            label="Fiscal Year"
+            value={fiscalYear}
+            onChange={(e) => setFiscalYear(parseInt(e.target.value))}
+            size="small"
+            sx={{ width: 140 }}
+          >
+            {[2023, 2024, 2025, 2026, 2027].map(y => (
+              <MenuItem key={y} value={y}>{y}</MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            select
+            label="Partner"
+            value={filterDonorId}
+            onChange={(e) => setFilterDonorId(e.target.value as any)}
+            size="small"
+            sx={{ width: 200 }}
+          >
+            <MenuItem value="">All Partners</MenuItem>
+            {filterDonors.map((d: any) => (
+              <MenuItem key={d.id} value={d.id}>{d.donor_code} – {d.donor_name}</MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            select
+            label="Project"
+            value={filterProjectId}
+            onChange={(e) => setFilterProjectId(e.target.value as any)}
+            size="small"
+            sx={{ width: 220 }}
+            disabled={!filterDonorId}
+          >
+            <MenuItem value="">All Projects</MenuItem>
+            {filterProjects.map((p: any) => (
+              <MenuItem key={p.id} value={p.id}>{p.project_code} – {p.project_name}</MenuItem>
+            ))}
+          </TextField>
+        </Box>
       </Box>
 
       {/* Summary Cards */}
-      <Grid container spacing={2} mb={3}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ background: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)', color: 'white', borderRadius: 2 }}>
-            <CardContent>
+      <Grid container spacing={2} mb={3} alignItems="stretch">
+        <Grid item xs={12} sm={6} md={3} sx={{ display: 'flex' }}>
+          <Card sx={{ background: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)', color: 'white', borderRadius: 2, width: '100%' }}>
+            <CardContent sx={{ height: '100%' }}>
               <Box display="flex" justifyContent="space-between" alignItems="flex-start">
                 <Box>
                   <Typography variant="caption" sx={{ opacity: 0.85 }}>Total Allocated</Typography>
@@ -184,9 +288,9 @@ const FinancialReportsPage: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ background: 'linear-gradient(135deg, #d32f2f 0%, #c62828 100%)', color: 'white', borderRadius: 2 }}>
-            <CardContent>
+        <Grid item xs={12} sm={6} md={3} sx={{ display: 'flex' }}>
+          <Card sx={{ background: 'linear-gradient(135deg, #d32f2f 0%, #c62828 100%)', color: 'white', borderRadius: 2, width: '100%' }}>
+            <CardContent sx={{ height: '100%' }}>
               <Box display="flex" justifyContent="space-between" alignItems="flex-start">
                 <Box>
                   <Typography variant="caption" sx={{ opacity: 0.85 }}>Total Spent</Typography>
@@ -200,9 +304,9 @@ const FinancialReportsPage: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ background: 'linear-gradient(135deg, #388e3c 0%, #2e7d32 100%)', color: 'white', borderRadius: 2 }}>
-            <CardContent>
+        <Grid item xs={12} sm={6} md={3} sx={{ display: 'flex' }}>
+          <Card sx={{ background: 'linear-gradient(135deg, #388e3c 0%, #2e7d32 100%)', color: 'white', borderRadius: 2, width: '100%' }}>
+            <CardContent sx={{ height: '100%' }}>
               <Box display="flex" justifyContent="space-between" alignItems="flex-start">
                 <Box>
                   <Typography variant="caption" sx={{ opacity: 0.85 }}>Remaining Balance</Typography>
@@ -216,9 +320,9 @@ const FinancialReportsPage: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ background: `linear-gradient(135deg, ${utilization > 85 ? '#e65100' : '#f57c00'} 0%, ${utilization > 85 ? '#bf360c' : '#e65100'} 100%)`, color: 'white', borderRadius: 2 }}>
-            <CardContent>
+        <Grid item xs={12} sm={6} md={3} sx={{ display: 'flex' }}>
+          <Card sx={{ background: `linear-gradient(135deg, ${utilization > 85 ? '#e65100' : '#f57c00'} 0%, ${utilization > 85 ? '#bf360c' : '#e65100'} 100%)`, color: 'white', borderRadius: 2, width: '100%' }}>
+            <CardContent sx={{ height: '100%' }}>
               <Box display="flex" justifyContent="space-between" alignItems="flex-start">
                 <Box>
                   <Typography variant="caption" sx={{ opacity: 0.85 }}>Overall Utilization</Typography>
@@ -243,9 +347,9 @@ const FinancialReportsPage: React.FC = () => {
       </Grid>
 
       {/* Request & Reconciliation Quick Stats */}
-      <Grid container spacing={2} mb={3}>
-        <Grid item xs={12} sm={6}>
-          <Paper sx={{ p: 2, borderRadius: 2 }}>
+      <Grid container spacing={2} mb={3} alignItems="stretch">
+        <Grid item xs={12} sm={6} sx={{ display: 'flex' }}>
+          <Paper sx={{ p: 2, borderRadius: 2, width: '100%' }}>
             <Box display="flex" alignItems="center" gap={1} mb={1}>
               <ReceiptIcon color="primary" fontSize="small" />
               <Typography variant="subtitle2" fontWeight={600}>Request Summary</Typography>
@@ -265,8 +369,8 @@ const FinancialReportsPage: React.FC = () => {
             </Typography>
           </Paper>
         </Grid>
-        <Grid item xs={12} sm={6}>
-          <Paper sx={{ p: 2, borderRadius: 2 }}>
+        <Grid item xs={12} sm={6} sx={{ display: 'flex' }}>
+          <Paper sx={{ p: 2, borderRadius: 2, width: '100%' }}>
             <Box display="flex" alignItems="center" gap={1} mb={1}>
               <SwapIcon color="secondary" fontSize="small" />
               <Typography variant="subtitle2" fontWeight={600}>Reconciliation Summary</Typography>
@@ -305,6 +409,7 @@ const FinancialReportsPage: React.FC = () => {
         >
           <Tab icon={<AssessmentIcon />} iconPosition="start" label="Budget Variance" />
           <Tab icon={<AccountBalanceIcon />} iconPosition="start" label="Donor Summary" />
+          <Tab icon={<PieChartIcon />} iconPosition="start" label="Project Summary" />
           <Tab icon={<PieChartIcon />} iconPosition="start" label="Department Analysis" />
           <Tab icon={<TrendingUpIcon />} iconPosition="start" label="Spending Trends" />
         </Tabs>
@@ -374,8 +479,8 @@ const FinancialReportsPage: React.FC = () => {
                 {/* Variance Bar Chart */}
                 <Paper variant="outlined" sx={{ p: 2, mb: 3, borderRadius: 2 }}>
                   <Typography variant="subtitle2" fontWeight={600} gutterBottom>Budget Utilization Overview</Typography>
-                  <ResponsiveContainer width="100%" height={Math.max(250, variance.length * 32)}>
-                    <BarChart data={variance.slice(0, 15)} layout="vertical" margin={{ left: 20 }}>
+                  <ResponsiveContainer width="100%" height={Math.max(280, Math.min(variance.length, 15) * 42)}>
+                    <BarChart data={variance.slice(0, 15)} layout="vertical" margin={{ left: 20, right: 32, top: 8, bottom: 8 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis type="number" tickFormatter={(v) => formatCompact(v)} />
                       <YAxis type="category" dataKey="budget_code" width={100} tick={{ fontSize: 11 }} />
@@ -403,7 +508,7 @@ const FinancialReportsPage: React.FC = () => {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {variance.map((row: any) => (
+                      {variance.slice(variancePage * varianceRowsPerPage, variancePage * varianceRowsPerPage + varianceRowsPerPage).map((row: any) => (
                         <TableRow key={row.id} hover sx={{
                           backgroundColor: row.variance_status === 'OVER_BUDGET' ? '#ffebee' :
                             row.variance_status === 'CRITICAL' ? '#fff3e0' : 'inherit'
@@ -462,6 +567,15 @@ const FinancialReportsPage: React.FC = () => {
                     </TableBody>
                   </Table>
                 </TableContainer>
+                <TablePagination
+                  component="div"
+                  count={variance.length}
+                  page={variancePage}
+                  onPageChange={(_, p) => setVariancePage(p)}
+                  rowsPerPage={varianceRowsPerPage}
+                  onRowsPerPageChange={(e) => { setVarianceRowsPerPage(parseInt(e.target.value, 10)); setVariancePage(0); }}
+                  rowsPerPageOptions={[5, 10, 25, 50]}
+                />
               </>
             ) : (
               <Alert severity="info" sx={{ borderRadius: 2 }}>No budget variance data available for FY{fiscalYear}. Create budget lines to see variance analysis.</Alert>
@@ -483,10 +597,10 @@ const FinancialReportsPage: React.FC = () => {
               <Grid item xs={12}>
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
                   <Typography variant="subtitle2" fontWeight={600} gutterBottom>Donor Fund Comparison</Typography>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={donorBarData}>
+                  <ResponsiveContainer width="100%" height={360}>
+                    <BarChart data={donorBarData} margin={{ bottom: 48 }}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} angle={-30} textAnchor="end" interval={0} height={64} />
                       <YAxis tickFormatter={(v) => formatCompact(v)} />
                       <RechartsTooltip formatter={(value: number) => formatCurrency(value)} />
                       <Legend />
@@ -513,7 +627,7 @@ const FinancialReportsPage: React.FC = () => {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {donorSummary?.map((donor: any) => (
+                      {donorSummary?.slice(donorPage * donorRowsPerPage, donorPage * donorRowsPerPage + donorRowsPerPage).map((donor: any) => (
                         <TableRow key={donor.donor_id} hover>
                           <TableCell>
                             <Typography variant="body2" fontWeight={600}>{donor.donor_name}</Typography>
@@ -557,7 +671,7 @@ const FinancialReportsPage: React.FC = () => {
               <Grid item xs={12} md={5}>
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
                   <Typography variant="subtitle2" fontWeight={600} align="center" gutterBottom>Allocation by Donor</Typography>
-                <ResponsiveContainer width="100%" height={300}>
+                <ResponsiveContainer width="100%" height={320}>
                   <PieChart>
                     <Pie
                       data={donorChartData}
@@ -565,8 +679,9 @@ const FinancialReportsPage: React.FC = () => {
                       nameKey="name"
                       cx="50%"
                       cy="50%"
-                      outerRadius={100}
-                      label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                      outerRadius={110}
+                      labelLine={false}
+                      label={renderPieLabel}
                     >
                       {donorChartData.map((_: any, i: number) => (
                         <Cell key={i} fill={COLORS[i % COLORS.length]} />
@@ -584,8 +699,86 @@ const FinancialReportsPage: React.FC = () => {
             )}
           </TabPanel>
 
-          {/* TAB 2: Department Analysis */}
+          {/* TAB 2: Project Summary */}
           <TabPanel value={tabIndex} index={2}>
+            <Box mb={2}>
+              <Typography variant="h6" fontWeight={700}>Project Financial Summary</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Budget allocation and spending per project, grouped by funding partner
+              </Typography>
+            </Box>
+            {projectSummary?.length > 0 ? (
+              <>
+              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: 'grey.50' }}>
+                      <TableCell><strong>Partner</strong></TableCell>
+                      <TableCell><strong>Project</strong></TableCell>
+                      <TableCell align="right"><strong>Project Budget</strong></TableCell>
+                      <TableCell align="right"><strong>Allocated</strong></TableCell>
+                      <TableCell align="right"><strong>Spent</strong></TableCell>
+                      <TableCell align="right"><strong>Remaining</strong></TableCell>
+                      <TableCell align="right"><strong>Utilization</strong></TableCell>
+                      <TableCell align="center"><strong>Lines</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {projectSummary.slice(projectPage * projectRowsPerPage, projectPage * projectRowsPerPage + projectRowsPerPage).map((proj: any) => (
+                      <TableRow key={proj.project_id} hover>
+                        <TableCell>
+                          <Typography variant="body2" fontWeight={600}>{proj.donor_code}</Typography>
+                          <Typography variant="caption" color="text.secondary">{proj.donor_name}</Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2" fontWeight={600}>{proj.project_code}</Typography>
+                          <Typography variant="caption" color="text.secondary">{proj.project_name}</Typography>
+                        </TableCell>
+                        <TableCell align="right">{formatCurrency(parseFloat(proj.total_budget) || 0)}</TableCell>
+                        <TableCell align="right">{formatCurrency(parseFloat(proj.total_allocated) || 0)}</TableCell>
+                        <TableCell align="right">{formatCurrency(parseFloat(proj.total_spent) || 0)}</TableCell>
+                        <TableCell align="right" sx={{ color: parseFloat(proj.total_remaining) < 0 ? 'error.main' : 'success.main', fontWeight: 600 }}>
+                          {formatCurrency(parseFloat(proj.total_remaining) || 0)}
+                        </TableCell>
+                        <TableCell align="right">
+                          <Box display="flex" alignItems="center" gap={1} justifyContent="flex-end">
+                            <LinearProgress
+                              variant="determinate"
+                              value={Math.min(parseFloat(proj.avg_utilization) || 0, 100)}
+                              sx={{ width: 60, height: 6, borderRadius: 3,
+                                '& .MuiLinearProgress-bar': {
+                                  bgcolor: parseFloat(proj.avg_utilization) > 90 ? '#c62828' : parseFloat(proj.avg_utilization) > 75 ? '#f57c00' : '#388e3c'
+                                }
+                              }}
+                            />
+                            <Typography variant="caption">{parseFloat(proj.avg_utilization).toFixed(1)}%</Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell align="center">
+                          <Chip label={proj.budget_line_count} size="small" />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <TablePagination
+                component="div"
+                count={projectSummary.length}
+                page={projectPage}
+                onPageChange={(_, p) => setProjectPage(p)}
+                rowsPerPage={projectRowsPerPage}
+                onRowsPerPageChange={(e) => { setProjectRowsPerPage(parseInt(e.target.value, 10)); setProjectPage(0); }}
+                rowsPerPageOptions={[5, 10, 25]}
+              />
+              </>
+            ) : (
+              <Alert severity="info" sx={{ borderRadius: 2 }}>No projects found with the current filters. Create projects and assign budget lines to see data here.</Alert>
+            )}
+          </TabPanel>
+
+          {/* TAB 3: Department Analysis */}
+          <TabPanel value={tabIndex} index={3}>
             <Box mb={2}>
               <Typography variant="h6" fontWeight={700}>Department Budget Analysis</Typography>
               <Typography variant="body2" color="text.secondary">
@@ -691,7 +884,7 @@ const FinancialReportsPage: React.FC = () => {
 
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
                   <Typography variant="subtitle2" fontWeight={600} align="center" gutterBottom>Request Status Distribution</Typography>
-                <ResponsiveContainer width="100%" height={250}>
+                <ResponsiveContainer width="100%" height={280}>
                   <PieChart>
                     <Pie
                       data={requestStatusData}
@@ -699,8 +892,9 @@ const FinancialReportsPage: React.FC = () => {
                       nameKey="name"
                       cx="50%"
                       cy="50%"
-                      outerRadius={80}
-                      label={({ name, value }) => `${name}: ${value}`}
+                      outerRadius={90}
+                      labelLine={false}
+                      label={renderPieLabel}
                     >
                       {requestStatusData.map((_: any, i: number) => (
                         <Cell key={i} fill={COLORS[i % COLORS.length]} />
@@ -718,41 +912,172 @@ const FinancialReportsPage: React.FC = () => {
             )}
           </TabPanel>
 
-          {/* TAB 3: Spending Trends */}
-          <TabPanel value={tabIndex} index={3}>
-            <Box mb={2}>
-              <Typography variant="h6" fontWeight={700}>Spending Trends (Last 12 Months)</Typography>
-              <Typography variant="body2" color="text.secondary">
-                Monthly breakdown of allocations, spending, top-ups, and reversals
-              </Typography>
+          {/* TAB 4: Spending Analysis */}
+          <TabPanel value={tabIndex} index={4}>
+            {/* Header row */}
+            <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2} flexWrap="wrap" gap={2}>
+              <Box>
+                <Typography variant="h6" fontWeight={700}>Spending Analysis</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {dateFrom && dateTo
+                    ? `Custom range: ${dateFrom} → ${dateTo}`
+                    : `${periodLabels[spendingPeriod]} — actual spending grouped by period`}
+                </Typography>
+              </Box>
+              <Tabs
+                value={spendingPeriod}
+                onChange={(_, v) => setSpendingPeriod(v)}
+                sx={{
+                  bgcolor: '#f5f5f5',
+                  borderRadius: 2,
+                  '& .MuiTab-root': { textTransform: 'none', fontWeight: 600, minHeight: 40, px: 2 },
+                  '& .MuiTabs-indicator': { height: 3, borderRadius: 2 }
+                }}
+              >
+                <Tab label="Weekly" value="weekly" />
+                <Tab label="Monthly" value="monthly" />
+                <Tab label="Quarterly" value="quarterly" />
+                <Tab label="Yearly" value="yearly" />
+              </Tabs>
             </Box>
+            {/* Date range picker */}
+            <Paper variant="outlined" sx={{ p: 2, mb: 3, borderRadius: 2, bgcolor: '#fafafa' }}>
+              <Box display="flex" alignItems="center" gap={2} flexWrap="wrap">
+                <Typography variant="body2" fontWeight={600} color="text.secondary" sx={{ minWidth: 90 }}>Date Range</Typography>
+                <TextField
+                  label="From"
+                  type="date"
+                  size="small"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ width: 175 }}
+                />
+                <TextField
+                  label="To"
+                  type="date"
+                  size="small"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ width: 175 }}
+                />
+                {(dateFrom || dateTo) && (
+                  <Typography
+                    variant="body2"
+                    color="primary"
+                    sx={{ cursor: 'pointer', textDecoration: 'underline' }}
+                    onClick={() => { setDateFrom(''); setDateTo(''); }}
+                  >
+                    Clear range
+                  </Typography>
+                )}
+                {!(dateFrom && dateTo) && (
+                  <Typography variant="caption" color="text.secondary">
+                    Leave blank to use the default {periodLabels[spendingPeriod].toLowerCase()} window
+                  </Typography>
+                )}
+              </Box>
+            </Paper>
 
-            {trendData?.length > 0 ? (
-              <>
+            {activeTrendData?.length === 0 && (
+              <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
+                No {spendingPeriod} spending data found for the selected filters — the chart is shown below with empty axes.
+              </Alert>
+            )}
+            {/* Always render charts — recharts handles empty arrays gracefully */}
+            <>
+                {/* Period summary cards */}
+                <Grid container spacing={2} mb={3}>
+                  <Grid item xs={6} sm={3}>
+                    <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                      <CardContent sx={{ py: 1.5, textAlign: 'center' }}>
+                        <Typography variant="caption" color="text.secondary">Total Spent</Typography>
+                        <Typography variant="h6" fontWeight={700} color="error.main">
+                          {formatCurrency(activeTrendData.reduce((s: number, r: any) => s + r.total_spent, 0))}
+                        </Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                      <CardContent sx={{ py: 1.5, textAlign: 'center' }}>
+                        <Typography variant="caption" color="text.secondary">Total Allocated</Typography>
+                        <Typography variant="h6" fontWeight={700} color="primary.main">
+                          {formatCurrency(activeTrendData.reduce((s: number, r: any) => s + r.total_allocated, 0))}
+                        </Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                      <CardContent sx={{ py: 1.5, textAlign: 'center' }}>
+                        <Typography variant="caption" color="text.secondary">Total Top-ups</Typography>
+                        <Typography variant="h6" fontWeight={700} color="success.main">
+                          {formatCurrency(activeTrendData.reduce((s: number, r: any) => s + r.total_topup, 0))}
+                        </Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                      <CardContent sx={{ py: 1.5, textAlign: 'center' }}>
+                        <Typography variant="caption" color="text.secondary">Budget Events</Typography>
+                        <Tooltip title="Count of all budget transaction records (allocations, deductions, top-ups, reversals) in the period">
+                          <Typography variant="h6" fontWeight={700}>
+                            {activeTrendData.reduce((s: number, r: any) => s + parseInt(r.transaction_count || 0), 0)}
+                          </Typography>
+                        </Tooltip>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                </Grid>
+
+                {/* Chart — LineChart for weekly, ComposedChart for other periods */}
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mb: 3 }}>
-                  <Typography variant="subtitle2" fontWeight={600} gutterBottom>Monthly Cash Flow</Typography>
+                  <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                    {spendingPeriod === 'weekly' ? 'Weekly Spending Trend' : `${periodColLabel[spendingPeriod]}ly Cash Flow`}
+                  </Typography>
                   <ResponsiveContainer width="100%" height={400}>
-                    <ComposedChart data={trendData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                      <YAxis tickFormatter={(v) => formatCompact(v)} />
-                      <RechartsTooltip formatter={(value: number) => formatCurrency(value)} />
-                      <Legend />
-                      <Area type="monotone" dataKey="total_allocated" fill="#1976d220" stroke="#1976d2" strokeWidth={2} name="Allocated" />
-                      <Bar dataKey="total_spent" fill="#d32f2f" name="Spent" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="total_topup" fill="#388e3c" name="Top-ups" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="total_reversals" fill="#f57c00" name="Reversals" radius={[4, 4, 0, 0]} />
-                      <Line type="monotone" dataKey="net_flow" stroke="#7b1fa2" strokeWidth={2} name="Net Flow" dot={{ r: 4 }} />
-                    </ComposedChart>
+                    {spendingPeriod === 'weekly' ? (
+                      <LineChart data={activeTrendData} margin={{ top: 8, right: 24, left: 8, bottom: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                        <YAxis tickFormatter={(v) => formatCompact(v)} />
+                        <RechartsTooltip formatter={(value: number) => formatCurrency(value)} />
+                        <Legend />
+                        <Line type="monotone" dataKey="total_spent"     stroke="#d32f2f" strokeWidth={2.5} name="Spent"      dot={{ r: 5 }} activeDot={{ r: 7 }} />
+                        <Line type="monotone" dataKey="total_allocated" stroke="#1976d2" strokeWidth={2}   name="Allocated"  dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                        <Line type="monotone" dataKey="total_topup"     stroke="#388e3c" strokeWidth={2}   name="Top-ups"    dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                        <Line type="monotone" dataKey="total_reversals" stroke="#f57c00" strokeWidth={2}   name="Reversals"  dot={{ r: 4 }} activeDot={{ r: 6 }} strokeDasharray="5 5" />
+                        <Line type="monotone" dataKey="net_flow"        stroke="#7b1fa2" strokeWidth={2}   name="Net Flow"   dot={{ r: 4 }} activeDot={{ r: 6 }} strokeDasharray="3 3" />
+                      </LineChart>
+                    ) : (
+                      <ComposedChart data={activeTrendData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                        <YAxis tickFormatter={(v) => formatCompact(v)} />
+                        <RechartsTooltip formatter={(value: number) => formatCurrency(value)} />
+                        <Legend />
+                        <Area type="monotone" dataKey="total_allocated" fill="#1976d220" stroke="#1976d2" strokeWidth={2} name="Allocated" />
+                        <Bar dataKey="total_spent"     fill="#d32f2f" name="Spent"     radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="total_topup"     fill="#388e3c" name="Top-ups"   radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="total_reversals" fill="#f57c00" name="Reversals" radius={[4, 4, 0, 0]} />
+                        <Line type="monotone" dataKey="net_flow" stroke="#7b1fa2" strokeWidth={2} name="Net Flow" dot={{ r: 4 }} />
+                      </ComposedChart>
+                    )}
                   </ResponsiveContainer>
                 </Paper>
 
-                <Typography variant="subtitle1" fontWeight={700} gutterBottom>Monthly Detail</Typography>
+                {/* Detail table */}
+                <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+                  {periodColLabel[spendingPeriod]}ly Detail
+                </Typography>
                 <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
                   <Table size="small">
                     <TableHead>
                       <TableRow sx={{ bgcolor: '#f5f5f5' }}>
-                        <TableCell sx={{ fontWeight: 700 }}>Month</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>{periodColLabel[spendingPeriod]}</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>Allocations</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>Spending</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>Top-ups</TableCell>
@@ -762,34 +1087,31 @@ const FinancialReportsPage: React.FC = () => {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {trendData.map((month: any) => (
-                        <TableRow key={month.month} hover>
-                          <TableCell sx={{ fontWeight: 600 }}>{month.month}</TableCell>
-                          <TableCell align="right" sx={{ color: 'primary.main' }}>{formatCurrency(month.total_allocated)}</TableCell>
-                          <TableCell align="right" sx={{ color: 'error.main' }}>{formatCurrency(month.total_spent)}</TableCell>
-                          <TableCell align="right" sx={{ color: 'success.main' }}>{formatCurrency(month.total_topup)}</TableCell>
-                          <TableCell align="right" sx={{ color: 'warning.main' }}>{formatCurrency(month.total_reversals)}</TableCell>
+                      {activeTrendData.map((row: any) => (
+                        <TableRow key={row.period} hover>
+                          <TableCell sx={{ fontWeight: 600 }}>{row.period}</TableCell>
+                          <TableCell align="right" sx={{ color: 'primary.main' }}>{formatCurrency(row.total_allocated)}</TableCell>
+                          <TableCell align="right" sx={{ color: 'error.main' }}>{formatCurrency(row.total_spent)}</TableCell>
+                          <TableCell align="right" sx={{ color: 'success.main' }}>{formatCurrency(row.total_topup)}</TableCell>
+                          <TableCell align="right" sx={{ color: 'warning.main' }}>{formatCurrency(row.total_reversals)}</TableCell>
                           <TableCell align="right">
                             <Typography
                               variant="body2"
                               fontWeight={600}
-                              color={month.net_flow >= 0 ? 'success.main' : 'error.main'}
+                              color={row.net_flow >= 0 ? 'success.main' : 'error.main'}
                             >
-                              {month.net_flow >= 0 ? '+' : ''}{formatCurrency(month.net_flow)}
+                              {row.net_flow >= 0 ? '+' : ''}{formatCurrency(row.net_flow)}
                             </Typography>
                           </TableCell>
                           <TableCell align="center">
-                            <Chip label={month.transaction_count} size="small" variant="outlined" />
+                            <Chip label={row.transaction_count} size="small" variant="outlined" />
                           </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </TableContainer>
-              </>
-            ) : (
-              <Alert severity="info" sx={{ borderRadius: 2 }}>No spending trend data available yet. Transactions will appear here once budget activity occurs.</Alert>
-            )}
+            </>
           </TabPanel>
         </Box>
       </Paper>

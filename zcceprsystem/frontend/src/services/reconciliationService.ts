@@ -96,10 +96,74 @@ export const reconciliationService = {
   },
 
   /**
+   * Get reconciliations already approved by this lead (audit trail)
+   */
+  async getLeadApprovedReconciliations(): Promise<ApiResponse<any[]>> {
+    const response = await api.get('/reconciliations/lead-approved');
+    return response.data;
+  },
+
+  /**
+   * Update an existing reconciliation (requester edits before final approval)
+   */
+  async updateReconciliation(requestId: number, data: ReconciliationSubmitPayload): Promise<ApiResponse<any>> {
+    const response = await api.put(`/reconciliations/${requestId}`, data);
+    return response.data;
+  },
+
+  /**
    * Mark a request as dispatched (Finance only)
    */
   async markAsDispatched(requestId: number): Promise<ApiResponse<any>> {
     const response = await api.post(`/export/dispatch/${requestId}/mark-dispatched`);
     return response.data;
+  },
+
+  /**
+   * Reverse a dispatch — moves request from DISPATCHED back to APPROVED.
+   * Finance Clerk / Admin only.
+   */
+  async reverseDispatch(requestId: number, reason?: string): Promise<ApiResponse<any>> {
+    const response = await api.post(`/export/dispatch/${requestId}/reverse-dispatch`, { reason });
+    return response.data;
+  },
+
+  /**
+   * Check if the current user has 2+ overdue unsubmitted reconciliations.
+   * Returns { overdueCount, isBlocked }
+   */
+  async getOverdueCheck(): Promise<{ overdueCount: number; isBlocked: boolean }> {
+    const response = await api.get('/reconciliations/overdue-check');
+    return response.data.data;
+  },
+
+  /**
+   * Download a text-based PDF for a Float Requisition via the backend.
+   */
+  async downloadFloatPDF(requestId: number, requestCode: string): Promise<void> {
+    const response = await api.get(`/export/dispatch/${requestId}/pdf`, { responseType: 'blob' });
+    const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `float-requisition-${requestCode}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
+  /**
+   * Download a text-based PDF for a Reconciliation via the backend.
+   */
+  async downloadReconciliationPDF(requestId: number, requestCode: string): Promise<void> {
+    const response = await api.get(`/export/reconciliation/${requestId}/pdf`, { responseType: 'blob' });
+    const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `reconciliation-${requestCode}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 };

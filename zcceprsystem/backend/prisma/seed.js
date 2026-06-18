@@ -284,7 +284,33 @@ async function main() {
     }
     console.log('✅ Donors created\n');
 
-    // 6. Create Budget Lines (linked to donors)
+    // 5.5 Create one default project per donor (required because budget_lines.project_id is NOT NULL)
+    console.log('Creating default projects for each donor...');
+    const [prgDeptForProj] = await connection.execute('SELECT id FROM departments WHERE department_code = ?', ['PRG']);
+    const createdProjects = {};
+    const defaultProjects = [
+      { donor_code: 'USAID-2026', project_code: 'USAID-2026-MAIN', project_name: 'USAID Zimbabwe Programme 2026', department_code: 'PRG' },
+      { donor_code: 'UKAID-2026', project_code: 'UKAID-2026-MAIN', project_name: 'UK Aid Zimbabwe Programme 2026', department_code: 'PRG' },
+      { donor_code: 'GFUND-2026', project_code: 'GFUND-2026-MAIN', project_name: 'Global Health Fund Programme 2026', department_code: 'PRG' },
+      { donor_code: 'BMGF-2026',  project_code: 'BMGF-2026-MAIN',  project_name: 'Gates Foundation Programme 2026',  department_code: 'PRG' },
+      { donor_code: 'EURED-2026', project_code: 'EURED-2026-MAIN', project_name: 'EU EuropeAid Programme 2026',       department_code: 'PRG' },
+    ];
+    for (const proj of defaultProjects) {
+      const [deptRow] = await connection.execute('SELECT id FROM departments WHERE department_code = ?', [proj.department_code]);
+      const deptId = deptRow[0]?.id || prgDeptForProj[0].id;
+      const donor = createdDonors[proj.donor_code];
+      await connection.execute(
+        `INSERT INTO projects (project_code, project_name, donor_id, department_id, start_date, end_date, total_budget, is_active, created_by, updated_at)
+         VALUES (?, ?, ?, ?, '2026-01-01', '2026-12-31', ?, 1, ?, NOW())
+         ON DUPLICATE KEY UPDATE project_name = VALUES(project_name), updated_at = NOW()`,
+        [proj.project_code, proj.project_name, donor.id, deptId, donor.total_committed || 100000.00, financeClerkId]
+      );
+      const [projRow] = await connection.execute('SELECT id FROM projects WHERE project_code = ?', [proj.project_code]);
+      createdProjects[proj.donor_code] = projRow[0];
+    }
+    console.log('✅ Default projects created\n');
+
+    // 6. Create Budget Lines (linked to donors + projects)
     console.log('Creating budget lines linked to donors...');
 
     // Get department IDs
@@ -324,17 +350,18 @@ async function main() {
 
     for (const budget of budgetLines) {
       const donor = createdDonors[budget.donor_code];
+      const project = createdProjects[budget.donor_code];
       
       await connection.execute(
         `INSERT INTO budget_lines (
-          budget_code, budget_name, donor_id, department_id, category, 
+          budget_code, budget_name, donor_id, project_id, department_id, category, 
           fiscal_year, allocated_amount, created_by, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE 
           allocated_amount = VALUES(allocated_amount),
           updated_at = NOW()`,
         [
-          budget.budget_code, budget.budget_name, donor.id, budget.department_id,
+          budget.budget_code, budget.budget_name, donor.id, project.id, budget.department_id,
           budget.category, 2026, budget.allocated_amount, financeClerkId
         ]
       );
@@ -353,6 +380,86 @@ async function main() {
     }
     
     console.log('✅ Budget lines created\n');
+
+    // 7. Seed ADMIN donor, project and budget lines
+    // This is required for the "Requesting from Admin" feature on Float requests.
+    console.log('Creating Admin (Internal) donor...');
+    await connection.execute(
+      `INSERT INTO donors (
+        donor_code, donor_name, donor_type, contact_person, email,
+        total_committed, currency_code, fiscal_year, agreement_reference,
+        country, created_by, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      ON DUPLICATE KEY UPDATE
+        donor_name = VALUES(donor_name),
+        updated_at = NOW()`,
+      [
+        'ADMIN-INT', 'Administration (Internal)', 'ADMIN',
+        'System Administrator', 'admin@zccinzim.org',
+        100000.00, 'USD', 2026, 'ADMIN-INTERNAL-2026',
+        'Zimbabwe', financeClerkId
+      ]
+    );
+    const [adminDonorRows] = await connection.execute(
+      'SELECT id FROM donors WHERE donor_code = ?', ['ADMIN-INT']
+    );
+    const adminDonorId = adminDonorRows[0].id;
+
+    // Create Admin department if it doesn't exist
+    await connection.execute(
+      `INSERT INTO departments (department_name, department_code, description, updated_at)
+       VALUES (?, ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE description = VALUES(description), updated_at = NOW()`,
+      ['Administration', 'ADM', 'Internal administration and overhead']
+    );
+    const [admDept] = await connection.execute(
+      'SELECT id FROM departments WHERE department_code = ?', ['ADM']
+    );
+    const admDeptId = admDept[0].id;
+
+    // Create project for admin donor
+    await connection.execute(
+      `INSERT INTO projects (
+        project_code, project_name, donor_id, department_id,
+        start_date, end_date, total_budget, is_active, created_by, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      ON DUPLICATE KEY UPDATE
+        project_name = VALUES(project_name), updated_at = NOW()`,
+      [
+        'ADM-INT-2026', 'Internal Administration', adminDonorId, admDeptId,
+        '2026-01-01', '2026-12-31', 100000.00, 1, financeClerkId
+      ]
+    );
+    const [adminProjRows] = await connection.execute(
+      'SELECT id FROM projects WHERE project_code = ?', ['ADM-INT-2026']
+    );
+    const adminProjectId = adminProjRows[0].id;
+
+    // Create budget lines for admin project
+    const adminBudgetLines = [
+      { budget_code: 'ADM-INT-MNT', budget_name: 'Admin - Maintenance & Repairs',     category: 'Maintenance',    allocated_amount: 30000.00 },
+      { budget_code: 'ADM-INT-SFT', budget_name: 'Admin - Software & Subscriptions',  category: 'Technology',     allocated_amount: 20000.00 },
+      { budget_code: 'ADM-INT-RNT', budget_name: 'Admin - Rentals & Premises',        category: 'Rentals',        allocated_amount: 25000.00 },
+      { budget_code: 'ADM-INT-SUP', budget_name: 'Admin - Office Supplies',           category: 'Supplies',       allocated_amount: 10000.00 },
+      { budget_code: 'ADM-INT-UTL', budget_name: 'Admin - Utilities & Internet',      category: 'Utilities',      allocated_amount: 8000.00  },
+      { budget_code: 'ADM-INT-TRV', budget_name: 'Admin - Staff Travel & Subsistence',category: 'Travel',         allocated_amount: 7000.00  },
+    ];
+    for (const bl of adminBudgetLines) {
+      await connection.execute(
+        `INSERT INTO budget_lines (
+           budget_code, budget_name, donor_id, project_id, department_id, category,
+           fiscal_year, allocated_amount, created_by, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE allocated_amount = VALUES(allocated_amount), updated_at = NOW()`,
+        [bl.budget_code, bl.budget_name, adminDonorId, adminProjectId, admDeptId,
+         bl.category, 2026, bl.allocated_amount, financeClerkId]
+      );
+    }
+    await connection.execute(
+      'UPDATE donors SET total_allocated = 100000.00, updated_at = NOW() WHERE id = ?',
+      [adminDonorId]
+    );
+    console.log('✅ Admin (Internal) donor, project and budget lines created\n');
 
     console.log('🎉 Database seeding completed successfully!\n');
     

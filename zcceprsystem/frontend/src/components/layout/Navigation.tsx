@@ -3,7 +3,7 @@
  * Professional ERP sidebar with module-based navigation
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Box,
@@ -29,7 +29,12 @@ import {
   Link,
   Tooltip,
   Badge,
-  alpha
+  alpha,
+  Paper,
+  ClickAwayListener,
+  Grow,
+  Popper,
+  CircularProgress
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -71,6 +76,7 @@ import {
 } from '@mui/icons-material';
 import { useAuthStore } from '../../store/authStore';
 import { UserRole } from '../../types';
+import api from '../../services/api';
 
 const DRAWER_WIDTH = 280;
 
@@ -90,6 +96,8 @@ interface NavSection {
   roles?: UserRole[];
   permission?: string;
   items: NavSubItem[];
+  /** Marks a module as not yet available for production use */
+  comingSoon?: boolean;
 }
 
 const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -102,6 +110,76 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [expandedSections, setExpandedSections] = useState<string[]>(['finance']);
+
+  // Notification state
+  const [notifCount, setNotifCount] = useState(0);
+  const [notifItems, setNotifItems] = useState<any[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const notifAnchorRef = useRef<HTMLButtonElement>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchNotifCount = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await api.get('/notifications/count');
+      setNotifCount(res.data?.data?.count || 0);
+    } catch { /* silent */ }
+  }, [user]);
+
+  const fetchNotifItems = async () => {
+    setNotifLoading(true);
+    try {
+      const res = await api.get('/notifications');
+      setNotifItems(res.data?.data || []);
+    } catch { /* silent */ } finally {
+      setNotifLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchNotifCount();
+    pollIntervalRef.current = setInterval(fetchNotifCount, 30000);
+    return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
+  }, [fetchNotifCount]);
+
+  const handleNotifToggle = () => {
+    if (!notifOpen) {
+      fetchNotifItems();
+    }
+    setNotifOpen(prev => !prev);
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      await api.put('/notifications/read-all');
+      setNotifItems(prev => prev.map(n => ({ ...n, is_read: true })));
+      setNotifCount(0);
+    } catch { /* silent */ }
+  };
+
+  const handleMarkOneRead = async (notifId: number) => {
+    try {
+      await api.put(`/notifications/${notifId}/read`);
+      setNotifItems(prev => prev.map(n => n.id === notifId ? { ...n, is_read: true } : n));
+      setNotifCount(prev => Math.max(0, prev - 1));
+    } catch { /* silent */ }
+  };
+
+  const handleNotifClose = (event: Event | React.SyntheticEvent) => {
+    if (notifAnchorRef.current && notifAnchorRef.current.contains(event.target as HTMLElement)) return;
+    setNotifOpen(false);
+  };
+
+  const getNotifColor = (type: string) => {
+    switch (type) {
+      case 'success': return 'success.main';
+      case 'error': return 'error.main';
+      case 'approval_pending': return 'warning.main';
+      case 'reconciliation_pending': return 'info.main';
+      default: return 'primary.main';
+    }
+  };
 
   // Module-based navigation sections
   const navSections: NavSection[] = [
@@ -126,7 +204,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           path: '/finance/approvals',
           label: 'Approvals',
           icon: <ApprovalsIcon />,
-          roles: ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK']
+          roles: ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK', 'ADMIN'] as UserRole[]
         },
         {
           path: '/finance/reconciliation',
@@ -137,7 +215,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           path: '/finance/dispatch',
           label: 'Dispatch Desk',
           icon: <DispatchIcon />,
-          roles: ['FINANCE_CLERK']
+          roles: ['FINANCE_CLERK', 'ADMIN'] as UserRole[]
         },
         {
           path: '/finance/budgets',
@@ -147,26 +225,55 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         },
         {
           path: '/finance/donors',
-          label: 'Donor Management',
+          label: 'Partner Management',
           icon: <DonorIcon />,
-          roles: ['FINANCE_CLERK']
+          roles: ['FINANCE_CLERK', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'] as UserRole[]
+        },
+        {
+          path: '/finance/projects',
+          label: 'Project Management',
+          icon: <ProjectsIcon />,
+          roles: ['FINANCE_CLERK', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'] as UserRole[]
         }
       ]
     },
     {
-      id: 'assets',
-      label: 'Asset Management',
-      icon: <AssetIcon />,
+      id: 'procurement',
+      label: 'Procurement',
+      icon: <ProcurementIcon />,
       items: [
         {
-          path: '/assets',
-          label: 'Asset Register',
-          icon: <FolderIcon />
+          path: '/procurement',
+          label: 'Procurement Dashboard',
+          icon: <ProcurementIcon />
         },
         {
-          path: '/assets/tracking',
-          label: 'Asset Tracking',
-          icon: <SearchIcon />
+          // General users see only their own requests; approvers/procurement team see all
+          path: '/procurement/requests',
+          label: 'Purchase Requests',
+          icon: <RequestIcon />
+        },
+        {
+          // Only GENERAL_USER creates purchase requests (raises a PR)
+          path: '/procurement/requests/create',
+          label: 'New Purchase Request',
+          icon: <CreateIcon />,
+          roles: ['GENERAL_USER', 'ADMIN'] as UserRole[]
+        },
+        {
+          // Approvers: dept approvers, finance, procurement officer, committee
+          path: '/procurement/approvals',
+          label: 'Approval Queue',
+          icon: <ApprovalsIcon />,
+          roles: ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK',
+                  'PROCUREMENT_OFFICER', 'PROCUREMENT_COMMITTEE', 'ADMIN'] as UserRole[]
+        },
+        {
+          // Vendor management: PROCUREMENT_OFFICER only (not general users, not finance, not leads)
+          path: '/procurement/vendors',
+          label: 'Vendor Database',
+          icon: <StakeholdersIcon />,
+          roles: ['PROCUREMENT_OFFICER', 'ADMIN'] as UserRole[]
         }
       ]
     },
@@ -174,6 +281,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       id: 'hr',
       label: 'Human Resources',
       icon: <HRIcon />,
+      comingSoon: true,
       items: [
         {
           path: '/hr',
@@ -241,9 +349,28 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       ]
     },
     {
+      id: 'assets',
+      label: 'Asset Management',
+      icon: <AssetIcon />,
+      comingSoon: true,
+      items: [
+        {
+          path: '/assets',
+          label: 'Asset Register',
+          icon: <FolderIcon />
+        },
+        {
+          path: '/assets/tracking',
+          label: 'Asset Tracking',
+          icon: <SearchIcon />
+        }
+      ]
+    },
+    {
       id: 'projects',
       label: 'Projects & Programs',
       icon: <ProjectsIcon />,
+      comingSoon: true,
       items: [
         {
           path: '/projects',
@@ -258,31 +385,10 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       ]
     },
     {
-      id: 'procurement',
-      label: 'Procurement',
-      icon: <ProcurementIcon />,
-      items: [
-        {
-          path: '/procurement',
-          label: 'Procurement Dashboard',
-          icon: <ProcurementIcon />
-        },
-        {
-          path: '/procurement/vendors',
-          label: 'Vendor Management',
-          icon: <StakeholdersIcon />
-        },
-        {
-          path: '/procurement/tenders',
-          label: 'Tendering & Bidding',
-          icon: <TenderIcon />
-        }
-      ]
-    },
-    {
       id: 'grants',
-      label: 'Grants & Donors',
+      label: 'Grants & Partners',
       icon: <GrantsIcon />,
+      comingSoon: true,
       items: [
         {
           path: '/grants',
@@ -291,7 +397,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         },
         {
           path: '/grants/donors',
-          label: 'Donor Database',
+          label: 'Partner Database',
           icon: <DonorIcon />
         },
         {
@@ -305,6 +411,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       id: 'compliance',
       label: 'Compliance & Audit',
       icon: <ComplianceIcon />,
+      comingSoon: true,
       items: [
         {
           path: '/compliance',
@@ -327,6 +434,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       id: 'me',
       label: 'Monitoring & Evaluation',
       icon: <MEIcon />,
+      comingSoon: true,
       items: [
         {
           path: '/me',
@@ -347,9 +455,21 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       roles: ['ADMIN'] as UserRole[],
       items: [
         {
+          path: '/admin/overview',
+          label: 'Overall Admin',
+          icon: <DashboardIcon />,
+          roles: ['ADMIN'] as UserRole[]
+        },
+        {
           path: '/admin/users',
           label: 'User Management',
           icon: <UserMgmtIcon />,
+          roles: ['ADMIN'] as UserRole[]
+        },
+        {
+          path: '/admin/departments',
+          label: 'Department Management',
+          icon: <OrgIcon />,
           roles: ['ADMIN'] as UserRole[]
         },
         {
@@ -371,6 +491,8 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Filter sections and items based on role/permissions
   const filteredSections = navSections
     .filter(section => {
+      // Procurement Committee members only have access to the Procurement module
+      if (hasRole('PROCUREMENT_COMMITTEE') && section.id !== 'procurement') return false;
       if (section.roles && !hasRole(...section.roles)) return false;
       if (section.permission && !hasPermission(section.permission)) return false;
       return true;
@@ -413,6 +535,8 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       case 'FINANCE_CLERK': return 'success';
       case 'HEAD_OF_PROGRAMS': return 'secondary';
       case 'PROGRAM_LEAD': return 'primary';
+      case 'PROCUREMENT_OFFICER': return 'warning';
+      case 'PROCUREMENT_COMMITTEE': return 'secondary';
       default: return 'default';
     }
   };
@@ -423,6 +547,8 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       case 'FINANCE_CLERK': return 'Finance Clerk';
       case 'HEAD_OF_PROGRAMS': return 'Head of Programs';
       case 'PROGRAM_LEAD': return 'Program Lead';
+      case 'PROCUREMENT_OFFICER': return 'Procurement Officer';
+      case 'PROCUREMENT_COMMITTEE': return 'Procurement Committee';
       default: return 'General User';
     }
   };
@@ -451,7 +577,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       'approvals': 'Approvals',
       'budgets': 'Budget Lines',
       'manage': 'Manage',
-      'donors': 'Donors',
+      'donors': 'Partners',
       'dispatch': 'Dispatch',
       'reconciliation': 'Reconciliation',
       'assets': 'Asset Management',
@@ -463,7 +589,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       'procurement': 'Procurement',
       'vendors': 'Vendors',
       'tenders': 'Tendering',
-      'grants': 'Grants & Donors',
+      'grants': 'Grants & Partners',
       'fund-tracking': 'Fund Tracking',
       'compliance': 'Compliance & Audit',
       'audit': 'Audit Trail',
@@ -471,6 +597,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       'me': 'Monitoring & Evaluation',
       'indicators': 'Indicators',
       'admin': 'Administration',
+      'overview': 'Overall Admin',
       'users': 'User Management',
       'access-control': 'Access Control',
       'settings': 'Settings'
@@ -509,10 +636,10 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </Box>
         <Box>
           <Typography variant="subtitle1" fontWeight="bold" color="primary.dark" lineHeight={1.2}>
-            ZCC ERP
+            ERP Connect
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            Enterprise Resource Planning
+            Together, Let&apos;s Make the World a Better Place
           </Typography>
         </Box>
       </Box>
@@ -592,71 +719,108 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           {filteredSections.map((section) => (
             <React.Fragment key={section.id}>
               <ListItem disablePadding>
-                <ListItemButton
-                  onClick={() => toggleSection(section.id)}
-                  sx={{
-                    borderRadius: 1.5,
-                    mb: 0.25,
-                    py: 0.75,
-                    ...(isSectionActive(section) && {
-                      bgcolor: alpha(theme.palette.primary.main, 0.05),
-                    })
-                  }}
+                <Tooltip
+                  title={section.comingSoon ? 'This module is coming soon and is not available yet.' : ''}
+                  placement="right"
+                  arrow
+                  disableHoverListener={!section.comingSoon}
                 >
-                  <ListItemIcon sx={{ 
-                    minWidth: 36,
-                    color: isSectionActive(section) ? theme.palette.primary.main : 'text.secondary'
-                  }}>
-                    {React.cloneElement(section.icon as React.ReactElement, { fontSize: 'small' })}
-                  </ListItemIcon>
-                  <ListItemText 
-                    primary={section.label} 
-                    primaryTypographyProps={{ 
-                      fontSize: '0.8rem', 
-                      fontWeight: isSectionActive(section) ? 600 : 500,
-                      color: isSectionActive(section) ? 'primary.main' : 'text.primary'
-                    }}
-                  />
-                  {expandedSections.includes(section.id) ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                </ListItemButton>
-              </ListItem>
-              <Collapse in={expandedSections.includes(section.id)} timeout="auto" unmountOnExit>
-                <List disablePadding>
-                  {section.items.map((item) => (
-                    <ListItem key={item.path} disablePadding>
-                      <ListItemButton
-                        selected={isPathActive(item.path)}
-                        onClick={() => handleNavClick(item.path)}
-                        sx={{
-                          pl: 5,
-                          py: 0.5,
-                          borderRadius: 1.5,
-                          mx: 0.5,
-                          '&.Mui-selected': {
-                            backgroundColor: alpha(theme.palette.primary.main, 0.1),
-                            color: theme.palette.primary.main,
-                            '& .MuiListItemIcon-root': { color: theme.palette.primary.main },
-                            '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.15) }
-                          }
+                  <span style={{ display: 'block', width: '100%' }}>
+                    <ListItemButton
+                      onClick={() => !section.comingSoon && toggleSection(section.id)}
+                      disabled={section.comingSoon}
+                      sx={{
+                        borderRadius: 1.5,
+                        mb: 0.25,
+                        py: 0.75,
+                        ...(section.comingSoon && {
+                          opacity: 0.6,
+                          cursor: 'not-allowed',
+                          pointerEvents: 'none',
+                          '&.Mui-disabled': { opacity: 0.6 }
+                        }),
+                        ...(!section.comingSoon && isSectionActive(section) && {
+                          bgcolor: alpha(theme.palette.primary.main, 0.05),
+                        })
+                      }}
+                    >
+                      <ListItemIcon sx={{ 
+                        minWidth: 36,
+                        color: section.comingSoon
+                          ? 'text.disabled'
+                          : (isSectionActive(section) ? theme.palette.primary.main : 'text.secondary')
+                      }}>
+                        {React.cloneElement(section.icon as React.ReactElement, { fontSize: 'small' })}
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary={section.label} 
+                        primaryTypographyProps={{ 
+                          fontSize: '0.8rem', 
+                          fontWeight: (!section.comingSoon && isSectionActive(section)) ? 600 : 500,
+                          color: section.comingSoon
+                            ? 'text.disabled'
+                            : (isSectionActive(section) ? 'primary.main' : 'text.primary')
                         }}
-                      >
-                        {item.icon && (
-                          <ListItemIcon sx={{ minWidth: 30 }}>
-                            {React.cloneElement(item.icon as React.ReactElement, { 
-                              fontSize: 'small',
-                              sx: { fontSize: '1rem' }
-                            })}
-                          </ListItemIcon>
-                        )}
-                        <ListItemText 
-                          primary={item.label} 
-                          primaryTypographyProps={{ fontSize: '0.8rem' }}
+                      />
+                      {section.comingSoon ? (
+                        <Chip
+                          label="Soon"
+                          size="small"
+                          sx={{
+                            height: 18,
+                            fontSize: '0.6rem',
+                            bgcolor: 'warning.light',
+                            color: 'warning.dark',
+                            fontWeight: 600,
+                            '& .MuiChip-label': { px: 0.75 }
+                          }}
                         />
-                      </ListItemButton>
-                    </ListItem>
-                  ))}
-                </List>
-              </Collapse>
+                      ) : (
+                        expandedSections.includes(section.id) ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />
+                      )}
+                    </ListItemButton>
+                  </span>
+                </Tooltip>
+              </ListItem>
+              {!section.comingSoon && (
+                <Collapse in={expandedSections.includes(section.id)} timeout="auto" unmountOnExit>
+                  <List disablePadding>
+                    {section.items.map((item) => (
+                      <ListItem key={item.path} disablePadding>
+                        <ListItemButton
+                          selected={isPathActive(item.path)}
+                          onClick={() => handleNavClick(item.path)}
+                          sx={{
+                            pl: 5,
+                            py: 0.5,
+                            borderRadius: 1.5,
+                            mx: 0.5,
+                            '&.Mui-selected': {
+                              backgroundColor: alpha(theme.palette.primary.main, 0.1),
+                              color: theme.palette.primary.main,
+                              '& .MuiListItemIcon-root': { color: theme.palette.primary.main },
+                              '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.15) }
+                            }
+                          }}
+                        >
+                          {item.icon && (
+                            <ListItemIcon sx={{ minWidth: 30 }}>
+                              {React.cloneElement(item.icon as React.ReactElement, { 
+                                fontSize: 'small',
+                                sx: { fontSize: '1rem' }
+                              })}
+                            </ListItemIcon>
+                          )}
+                          <ListItemText 
+                            primary={item.label} 
+                            primaryTypographyProps={{ fontSize: '0.8rem' }}
+                          />
+                        </ListItemButton>
+                      </ListItem>
+                    ))}
+                  </List>
+                </Collapse>
+              )}
             </React.Fragment>
           ))}
         </List>
@@ -666,7 +830,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       <Divider />
       <Box sx={{ p: 1.5 }}>
         <Typography variant="caption" color="text.disabled" textAlign="center" display="block">
-          ZCC ERP v1.0.0
+          ERP Connect v1.0.0
         </Typography>
       </Box>
     </Box>
@@ -733,14 +897,87 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             ))}
           </Breadcrumbs>
 
-          {/* Notification & User */}
+          {/* Notification Bell */}
           <Tooltip title="Notifications">
-            <IconButton sx={{ mr: 1 }}>
-              <Badge badgeContent={0} color="error">
+            <IconButton ref={notifAnchorRef} onClick={handleNotifToggle} sx={{ mr: 1 }}>
+              <Badge badgeContent={notifCount > 0 ? notifCount : undefined} color="error" max={99}>
                 <NotificationsIcon />
               </Badge>
             </IconButton>
           </Tooltip>
+
+          {/* Notification Dropdown */}
+          <Popper open={notifOpen} anchorEl={notifAnchorRef.current} placement="bottom-end" transition disablePortal style={{ zIndex: 1300 }}>
+            {({ TransitionProps }) => (
+              <Grow {...TransitionProps} style={{ transformOrigin: 'right top' }}>
+                <Paper elevation={8} sx={{ width: 360, maxHeight: 480, overflow: 'hidden', border: `1px solid ${theme.palette.divider}`, borderRadius: 2, mt: 0.5 }}>
+                  <ClickAwayListener onClickAway={handleNotifClose}>
+                    <Box>
+                      <Box sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Typography variant="subtitle2" fontWeight={600}>Notifications</Typography>
+                        <Box display="flex" alignItems="center" gap={1}>
+                          {notifCount > 0 && (
+                            <Chip label={`${notifCount} unread`} size="small" color="primary" />
+                          )}
+                          {notifItems.some((n: any) => !n.is_read) && (
+                            <Typography
+                              variant="caption" color="primary.main"
+                              sx={{ cursor: 'pointer', fontWeight: 600, '&:hover': { textDecoration: 'underline' } }}
+                              onClick={handleMarkAllRead}
+                            >
+                              Mark all read
+                            </Typography>
+                          )}
+                        </Box>
+                      </Box>
+                      <Box sx={{ overflowY: 'auto', maxHeight: 400 }}>
+                        {notifLoading ? (
+                          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                            <CircularProgress size={24} />
+                          </Box>
+                        ) : notifItems.length === 0 ? (
+                          <Box sx={{ py: 4, textAlign: 'center' }}>
+                            <NotificationsIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
+                            <Typography variant="body2" color="text.secondary">No notifications</Typography>
+                          </Box>
+                        ) : (
+                          <List disablePadding>
+                            {notifItems.map((item: any, index: number) => (
+                              <React.Fragment key={item.id}>
+                                {index > 0 && <Divider />}
+                                <ListItem
+                                  button
+                                  onClick={() => {
+                                    if (!item.is_read) handleMarkOneRead(item.id);
+                                    setNotifOpen(false);
+                                    if (item.link) navigate(item.link);
+                                  }}
+                                  sx={{
+                                    px: 2, py: 1.2,
+                                    bgcolor: item.is_read ? 'transparent' : alpha(theme.palette.primary.main, 0.06),
+                                    '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.1) }
+                                  }}
+                                >
+                                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: item.is_read ? 'text.disabled' : getNotifColor(item.type), mr: 1.5, flexShrink: 0, mt: 0.5 }} />
+                                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                                    <Typography variant="body2" fontWeight={item.is_read ? 400 : 600} noWrap>{item.title}</Typography>
+                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.message}</Typography>
+                                    <Typography variant="caption" color="text.disabled">
+                                      {item.created_at ? new Date(item.created_at).toLocaleString() : ''}
+                                    </Typography>
+                                  </Box>
+                                </ListItem>
+                              </React.Fragment>
+                            ))}
+                          </List>
+                        )}
+                      </Box>
+                    </Box>
+                  </ClickAwayListener>
+                </Paper>
+              </Grow>
+            )}
+          </Popper>
 
           <IconButton onClick={handleMenuOpen}>
             <Avatar sx={{ bgcolor: 'primary.main', width: 32, height: 32, fontSize: '0.8rem' }}>

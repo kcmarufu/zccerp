@@ -5,6 +5,12 @@
 
 const { validationResult } = require('express-validator');
 const { query, transaction } = require('../config/database');
+const { ROLES, isFinanceManager } = require('../config/roles');
+
+// Finance managers (AF HOP/Lead or Admin) and Finance Clerks see every budget
+// line across all departments. All other roles are scoped to their own department.
+const canViewAllBudgetLines = (user) =>
+  isFinanceManager(user) || user.role === ROLES.FINANCE_CLERK;
 
 class BudgetController {
 
@@ -15,18 +21,37 @@ class BudgetController {
   async getBudgetLines(req, res) {
     try {
       const { departmentId, donorId, fiscalYear, isActive } = req.query;
+      const userRole = req.user.role;
+      const userDepartmentId = req.user.department_id;
       
       let whereClause = '1=1';
       const params = [];
 
+      // Department scope: Finance Managers and Finance Clerks see all lines.
+      // All other roles (including non-Finance HOPs/Leads) see only their own department.
+      if (!canViewAllBudgetLines(req.user)) {
+        whereClause += ' AND (bl.department_id = ? OR bl.department_id IS NULL)';
+        params.push(userDepartmentId);
+      }
+
       if (departmentId) {
-        whereClause += ' AND bl.department_id = ?';
+        if (!canViewAllBudgetLines(req.user) && Number(departmentId) !== Number(userDepartmentId)) {
+          return res.json({ success: true, data: [] });
+        }
+        // Include lines matching the department OR lines with no department assigned
+        whereClause += ' AND (bl.department_id = ? OR bl.department_id IS NULL)';
         params.push(departmentId);
       }
 
       if (donorId) {
         whereClause += ' AND bl.donor_id = ?';
         params.push(donorId);
+      }
+
+      const { projectId } = req.query;
+      if (projectId) {
+        whereClause += ' AND bl.project_id = ?';
+        params.push(projectId);
       }
 
       if (fiscalYear) {
@@ -45,14 +70,17 @@ class BudgetController {
                 COALESCE(d.department_code, 'N/A') as department_code,
                 COALESCE(don.donor_name, 'Unassigned') as donor_name,
                 COALESCE(don.donor_code, 'N/A') as donor_code,
+                COALESCE(p.project_code, NULLIF(bl.category, ''), 'UNASSIGNED') as project_code,
+                COALESCE(p.project_name, '') as project_name,
                 COALESCE(don.currency_code, 'USD') as currency_code,
                 (bl.allocated_amount - bl.spent_amount) as balance,
                 ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) as utilization_percentage
          FROM budget_lines bl
          LEFT JOIN departments d ON bl.department_id = d.id
          LEFT JOIN donors don ON bl.donor_id = don.id
+         LEFT JOIN projects p ON bl.project_id = p.id
          WHERE ${whereClause}
-         ORDER BY don.donor_name, bl.category, bl.budget_name`,
+         ORDER BY don.donor_name, p.project_code, bl.budget_name`,
         params
       );
 
@@ -76,13 +104,15 @@ class BudgetController {
   async getBudgetLineById(req, res) {
     try {
       const { budgetLineId } = req.params;
+      const userRole = req.user.role;
+      const userDepartmentId = req.user.department_id;
 
       const budgetLines = await query(
         `SELECT bl.*, 
-                d.department_name,
-                d.department_code
+                COALESCE(d.department_name, 'N/A') as department_name,
+                COALESCE(d.department_code, 'N/A') as department_code
          FROM budget_lines bl
-         JOIN departments d ON bl.department_id = d.id
+         LEFT JOIN departments d ON bl.department_id = d.id
          WHERE bl.id = ?`,
         [budgetLineId]
       );
@@ -91,6 +121,13 @@ class BudgetController {
         return res.status(404).json({
           success: false,
           error: 'Budget line not found'
+        });
+      }
+
+      if (!canViewAllBudgetLines(req.user) && Number(budgetLines[0].department_id) !== Number(userDepartmentId)) {
+        return res.status(403).json({
+          success: false,
+          error: 'You can only access budget lines from your department'
         });
       }
 
@@ -139,36 +176,113 @@ class BudgetController {
         });
       }
 
-      const { budgetCode, budgetName, departmentId, donorId, category, fiscalYear, allocatedAmount, description } = req.body;
+      const { budgetCode, budgetName, departmentId, donorId, projectId, category, projectCode, fiscalYear, allocatedAmount, description } = req.body;
       const createdBy = req.user.id;
+      // project_code stored in category for backward compat; project_id is the proper FK
+      const normalizedProjectCode = (projectCode || category || null);
 
       const result = await transaction(async (connection) => {
+        const normalizeSegment = (value, fallback) => {
+          const cleaned = String(value || '')
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '');
+          return cleaned || fallback;
+        };
+
+        // Validate donor exists if provided
+        let donorCode = 'DONOR';
+        if (donorId) {
+          const [donorCheck] = await connection.execute(
+            'SELECT id, donor_code FROM donors WHERE id = ? AND is_active = TRUE',
+            [donorId]
+          );
+          if (donorCheck.length === 0) {
+            throw new Error('Selected donor not found or inactive');
+          }
+          donorCode = donorCheck[0].donor_code || donorCode;
+        }
+
+        // Validate project belongs to donor
+        let resolvedProjectId = projectId || null;
+        let resolvedProjectCode = normalizedProjectCode;
+        if (projectId && donorId) {
+          const [projCheck] = await connection.execute(
+            'SELECT id, project_code FROM projects WHERE id = ? AND donor_id = ?',
+            [projectId, donorId]
+          );
+          if (projCheck.length === 0) {
+            throw new Error('Selected project does not belong to the chosen donor');
+          }
+          resolvedProjectCode = projCheck[0].project_code;
+        } else if (projectId) {
+          const [projCheck] = await connection.execute(
+            'SELECT id, project_code, donor_id FROM projects WHERE id = ?',
+            [projectId]
+          );
+          if (projCheck.length > 0) {
+            resolvedProjectCode = projCheck[0].project_code;
+            // If no donorId supplied, derive from project
+            if (!donorId) {
+              const [dCheck] = await connection.execute('SELECT donor_code FROM donors WHERE id = ?', [projCheck[0].donor_id]);
+              if (dCheck.length > 0) donorCode = dCheck[0].donor_code;
+            }
+          }
+        }
+
+        let finalBudgetCode = (budgetCode || '').trim();
+
+        if (!finalBudgetCode) {
+          const projectSegment = normalizeSegment(resolvedProjectCode, 'PROJECT');
+          const donorSegment = normalizeSegment(donorCode, 'DONOR');
+          const prefix = `${donorSegment}-${projectSegment}-`;
+
+          const [seqRows] = await connection.execute(
+            'SELECT COUNT(*) + 1 AS seq FROM budget_lines WHERE budget_code LIKE ?',
+            [`${prefix}%`]
+          );
+
+          finalBudgetCode = `${prefix}${String(seqRows[0].seq).padStart(4, '0')}`;
+        }
+
         // Check for duplicate budget code
         const [existing] = await connection.execute(
           'SELECT id FROM budget_lines WHERE budget_code = ?',
-          [budgetCode]
+          [finalBudgetCode]
         );
 
         if (existing.length > 0) {
           throw new Error('Budget code already exists');
         }
 
-        // Validate donor exists if provided
-        if (donorId) {
-          const [donorCheck] = await connection.execute(
-            'SELECT id FROM donors WHERE id = ? AND is_active = TRUE',
-            [donorId]
+        // --- Hierarchy validation: budget line cannot exceed project available budget ---
+        if (resolvedProjectId) {
+          const [projRows] = await connection.execute(
+            'SELECT total_budget FROM projects WHERE id = ?',
+            [resolvedProjectId]
           );
-          if (donorCheck.length === 0) {
-            throw new Error('Selected donor not found or inactive');
+          if (projRows.length > 0) {
+            const projectBudget = parseFloat(projRows[0].total_budget || 0);
+            const [otherLines] = await connection.execute(
+              'SELECT COALESCE(SUM(allocated_amount), 0) AS other_total FROM budget_lines WHERE project_id = ?',
+              [resolvedProjectId]
+            );
+            const otherTotal = parseFloat(otherLines[0].other_total || 0);
+            const available = projectBudget - otherTotal;
+            if (parseFloat(allocatedAmount) > available) {
+              throw new Error(
+                `Budget line allocation (${allocatedAmount}) exceeds the project's available budget. ` +
+                `Project total: ${projectBudget}, already allocated to other lines: ${otherTotal}, ` +
+                `available: ${available}.`
+              );
+            }
           }
         }
 
-        // Insert budget line with donor_id and category
+        // Insert budget line with donor_id, project_id, and category (for backward compat)
         const [insertResult] = await connection.execute(
-          `INSERT INTO budget_lines (budget_code, budget_name, donor_id, department_id, category, fiscal_year, allocated_amount, description, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [budgetCode, budgetName, donorId || null, departmentId || null, category || null, fiscalYear, allocatedAmount, description, createdBy]
+          `INSERT INTO budget_lines (budget_code, budget_name, donor_id, project_id, department_id, category, fiscal_year, allocated_amount, description, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+          [finalBudgetCode, budgetName, donorId || null, resolvedProjectId, departmentId || null, resolvedProjectCode, fiscalYear, allocatedAmount, description, createdBy]
         );
 
         // Log the initial allocation
@@ -244,6 +358,30 @@ class BudgetController {
           throw new Error('Deduction would result in negative balance');
         }
 
+        // --- Hierarchy validation: top-up cannot push budget line above project available budget ---
+        if (parsedAmount > 0 && budgetLines[0].project_id) {
+          const [projRows] = await connection.execute(
+            'SELECT total_budget FROM projects WHERE id = ?',
+            [budgetLines[0].project_id]
+          );
+          if (projRows.length > 0) {
+            const projectBudget = parseFloat(projRows[0].total_budget || 0);
+            const [otherLines] = await connection.execute(
+              'SELECT COALESCE(SUM(allocated_amount), 0) AS other_total FROM budget_lines WHERE project_id = ? AND id != ?',
+              [budgetLines[0].project_id, budgetLineId]
+            );
+            const otherTotal = parseFloat(otherLines[0].other_total || 0);
+            const maxAllowed = projectBudget - otherTotal;
+            if (newAllocated > maxAllowed) {
+              throw new Error(
+                `Top-up would push budget line to ${newAllocated}, exceeding the project's available budget. ` +
+                `Project total: ${projectBudget}, other lines allocated: ${otherTotal}, ` +
+                `max this line can hold: ${maxAllowed}.`
+              );
+            }
+          }
+        }
+
         // Update allocated amount
         await connection.execute(
           'UPDATE budget_lines SET allocated_amount = ?, updated_at = NOW() WHERE id = ?',
@@ -302,16 +440,17 @@ class BudgetController {
       }
 
       const { budgetLineId } = req.params;
-      const { budgetName, description, isActive } = req.body;
+      const { budgetCode, budgetName, description, isActive } = req.body;
 
       const result = await query(
         `UPDATE budget_lines 
-         SET budget_name = COALESCE(?, budget_name),
+         SET budget_code = COALESCE(?, budget_code),
+             budget_name = COALESCE(?, budget_name),
              description = COALESCE(?, description),
              is_active = COALESCE(?, is_active),
              updated_at = NOW()
          WHERE id = ?`,
-        [budgetName, description, isActive, budgetLineId]
+        [budgetCode ?? null, budgetName ?? null, description ?? null, isActive ?? null, budgetLineId]
       );
 
       if (result.affectedRows === 0) {
@@ -335,7 +474,9 @@ class BudgetController {
   }
 
   /**
-   * Delete budget line (Finance Clerk only)
+   * Archive (soft-delete) a budget line.
+   * Sets is_active = 0. All transaction history, request items, requests, approval logs,
+   * and attachments are preserved exactly as-is. FK references remain intact.
    * DELETE /api/budgets/:budgetLineId
    */
   async deleteBudgetLine(req, res) {
@@ -355,65 +496,22 @@ class BudgetController {
         });
       }
 
-      const budgetLine = budgetLines[0];
-
-      // Check if budget line has been used (spent_amount > 0)
-      if (parseFloat(budgetLine.spent_amount) > 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Cannot delete budget line that has been used. Consider deactivating it instead.'
-        });
-      }
-
-      // Delete any request items linked to this budget line
-      // First find requests that ONLY have items from this budget line so we can clean them up
-      const linkedItems = await query(
-        'SELECT ri.id, ri.request_id FROM request_items WHERE budget_line_id = ?',
+      // Soft delete: archive the budget line. All history (request_items, budget_transactions,
+      // approval_logs, attachments, requests) remains in the database untouched.
+      await query(
+        'UPDATE budget_lines SET is_active = 0, updated_at = NOW() WHERE id = ?',
         [budgetLineId]
       );
 
-      if (linkedItems.length > 0) {
-        const requestIds = [...new Set(linkedItems.map(i => i.request_id))];
-
-        // Delete request items linked to this budget line
-        await query('DELETE FROM request_items WHERE budget_line_id = ?', [budgetLineId]);
-
-        // For each affected request, check if it still has items - if not, delete the request too
-        for (const requestId of requestIds) {
-          const remaining = await query(
-            'SELECT COUNT(*) as count FROM request_items WHERE request_id = ?',
-            [requestId]
-          );
-          if (remaining[0].count === 0) {
-            // Delete orphaned request (no items left)
-            await query('DELETE FROM approvals WHERE request_id = ?', [requestId]);
-            await query('DELETE FROM attachments WHERE request_id = ?', [requestId]);
-            await query('DELETE FROM requests WHERE id = ?', [requestId]);
-          }
-        }
-      }
-
-      // Safe to delete - no transactions or linked items
-      // Decrement donor total_allocated if budget line has a donor
-      if (budgetLine.donor_id) {
-        await query(
-          'UPDATE donors SET total_allocated = GREATEST(total_allocated - ?, 0), updated_at = NOW() WHERE id = ?',
-          [parseFloat(budgetLine.allocated_amount), budgetLine.donor_id]
-        );
-      }
-
-      await query('DELETE FROM budget_transactions WHERE budget_line_id = ?', [budgetLineId]);
-      await query('DELETE FROM budget_lines WHERE id = ?', [budgetLineId]);
-
       res.json({
         success: true,
-        message: 'Budget line deleted successfully'
+        message: 'Budget line archived successfully. All transaction history has been preserved.'
       });
     } catch (error) {
       console.error('Error deleting budget line:', error);
       res.status(500).json({
         success: false,
-        error: 'Failed to delete budget line'
+        error: 'Failed to archive budget line'
       });
     }
   }
@@ -425,8 +523,18 @@ class BudgetController {
   async getBudgetSummary(req, res) {
     try {
       const { fiscalYear } = req.query;
+      const userRole = req.user.role;
+      const userDepartmentId = req.user.department_id;
       const yearFilter = fiscalYear ? 'AND bl.fiscal_year = ?' : '';
-      const params = fiscalYear ? [fiscalYear] : [];
+      const departmentScope = !canViewAllBudgetLines(req.user) ? 'WHERE d.id = ?' : '';
+      const params = [];
+
+      if (!canViewAllBudgetLines(req.user)) {
+        params.push(userDepartmentId);
+      }
+      if (fiscalYear) {
+        params.push(fiscalYear);
+      }
 
       const summary = await query(
         `SELECT
@@ -440,6 +548,7 @@ class BudgetController {
           ROUND(AVG((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100), 2) as avg_utilization
          FROM departments d
          LEFT JOIN budget_lines bl ON d.id = bl.department_id AND bl.is_active = TRUE ${yearFilter}
+         ${departmentScope}
          GROUP BY d.id, d.department_name, d.department_code
          ORDER BY d.department_name`,
         params
@@ -466,9 +575,16 @@ class BudgetController {
     try {
       const { donorId } = req.params;
       const { isActive } = req.query;
+      const userRole = req.user.role;
+      const userDepartmentId = req.user.department_id;
       
       let whereClause = 'bl.donor_id = ?';
       const params = [donorId];
+
+      if (!canViewAllBudgetLines(req.user)) {
+        whereClause += ' AND (bl.department_id = ? OR bl.department_id IS NULL)';
+        params.push(userDepartmentId);
+      }
 
       if (isActive !== undefined) {
         whereClause += ' AND bl.is_active = ?';
@@ -481,14 +597,17 @@ class BudgetController {
                 d.department_code,
                 don.donor_name,
                 don.donor_code,
+          COALESCE(p.project_code, NULLIF(bl.category, ''), 'UNASSIGNED') as project_code,
+                COALESCE(p.project_name, '') as project_name,
                 don.currency_code,
                 (bl.allocated_amount - bl.spent_amount) as balance,
                 ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) as utilization_percentage
          FROM budget_lines bl
          LEFT JOIN departments d ON bl.department_id = d.id
          JOIN donors don ON bl.donor_id = don.id
+         LEFT JOIN projects p ON bl.project_id = p.id
          WHERE ${whereClause}
-         ORDER BY bl.category, bl.budget_name`,
+         ORDER BY p.project_code, bl.budget_name`,
         params
       );
 
@@ -506,12 +625,65 @@ class BudgetController {
   }
 
   /**
+   * Get budget lines by project
+   * GET /api/budgets/project/:projectId
+   */
+  async getBudgetLinesByProject(req, res) {
+    try {
+      const { projectId } = req.params;
+      const { isActive } = req.query;
+      const userRole = req.user.role;
+      const userDepartmentId = req.user.department_id;
+
+      let whereClause = 'bl.project_id = ?';
+      const params = [projectId];
+
+      if (!canViewAllBudgetLines(req.user)) {
+        whereClause += ' AND (bl.department_id = ? OR bl.department_id IS NULL)';
+        params.push(userDepartmentId);
+      }
+
+      if (isActive !== undefined) {
+        whereClause += ' AND bl.is_active = ?';
+        params.push(isActive === 'true');
+      }
+
+      const budgetLines = await query(
+        `SELECT bl.*,
+                d.department_name,
+                d.department_code,
+                don.donor_name,
+                don.donor_code,
+                p.project_code,
+                p.project_name,
+                don.currency_code,
+                (bl.allocated_amount - bl.spent_amount) as balance,
+                ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) as utilization_percentage
+         FROM budget_lines bl
+         LEFT JOIN departments d ON bl.department_id = d.id
+         JOIN donors don ON bl.donor_id = don.id
+         JOIN projects p ON bl.project_id = p.id
+         WHERE ${whereClause}
+         ORDER BY bl.budget_code`,
+        params
+      );
+
+      res.json({ success: true, data: budgetLines });
+    } catch (error) {
+      console.error('Error fetching budget lines by project:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch budget lines' });
+    }
+  }
+
+  /**
    * Get requests linked to a budget line
    * GET /api/budgets/:budgetLineId/requests
    */
   async getBudgetLineRequests(req, res) {
     try {
       const budgetLineId = parseInt(req.params.budgetLineId);
+      const userRole = req.user.role;
+      const userDepartmentId = req.user.department_id;
       
       // Validate budgetLineId
       if (isNaN(budgetLineId) || budgetLineId < 1) {
@@ -521,7 +693,21 @@ class BudgetController {
         });
       }
 
-      const { status, limit } = req.query;
+      const { limit } = req.query;
+
+      if (!canViewAllBudgetLines(req.user)) {
+        const [budgetLine] = await query(
+          'SELECT department_id FROM budget_lines WHERE id = ?',
+          [budgetLineId]
+        );
+
+        if (!budgetLine || Number(budgetLine.department_id) !== Number(userDepartmentId)) {
+          return res.status(403).json({
+            success: false,
+            error: 'You can only access budget lines from your department'
+          });
+        }
+      }
 
       // Safely parse and validate limit
       let limitValue = parseInt(limit);
@@ -600,6 +786,8 @@ class BudgetController {
   async getBudgetLineDetails(req, res) {
     try {
       const { budgetLineId } = req.params;
+      const userRole = req.user.role;
+      const userDepartmentId = req.user.department_id;
 
       const budgetLines = await query(
         `SELECT bl.*, 
@@ -632,6 +820,13 @@ class BudgetController {
         return res.status(404).json({
           success: false,
           error: 'Budget line not found'
+        });
+      }
+
+      if (!canViewAllBudgetLines(req.user) && Number(budgetLines[0].department_id) !== Number(userDepartmentId)) {
+        return res.status(403).json({
+          success: false,
+          error: 'You can only access budget lines from your department'
         });
       }
 
@@ -687,9 +882,24 @@ class BudgetController {
    */
   async getFinancialReports(req, res) {
     try {
-      const { fiscalYear } = req.query;
+      const { fiscalYear, donorId, projectId, dateFrom, dateTo } = req.query;
+      const userRole = req.user.role;
+      const userDepartmentId = req.user.department_id;
+      const scoped = !canViewAllBudgetLines(req.user);
       const yearFilter = fiscalYear ? 'AND bl.fiscal_year = ?' : '';
       const yearParam = fiscalYear ? [parseInt(fiscalYear)] : [];
+      const donorFilter = donorId ? 'AND bl.donor_id = ?' : '';
+      const donorParam = donorId ? [parseInt(donorId)] : [];
+      const projectFilter = projectId ? 'AND bl.project_id = ?' : '';
+      const projectParam = projectId ? [parseInt(projectId)] : [];
+
+      const scopedYearFilter = scoped
+        ? `AND (bl.department_id = ? OR bl.department_id IS NULL) ${yearFilter} ${donorFilter} ${projectFilter}`
+        : `${yearFilter} ${donorFilter} ${projectFilter}`;
+
+      const scopedYearParam = scoped
+        ? [userDepartmentId, ...yearParam, ...donorParam, ...projectParam]
+        : [...yearParam, ...donorParam, ...projectParam];
 
       // 1. Budget Variance by budget line
       const variance = await query(
@@ -713,13 +923,16 @@ class BudgetController {
           d.department_code,
           don.donor_name,
           don.donor_code,
-          don.currency_code
+          don.currency_code,
+          p.project_code,
+          p.project_name
         FROM budget_lines bl
         LEFT JOIN departments d ON bl.department_id = d.id
         LEFT JOIN donors don ON bl.donor_id = don.id
-        WHERE bl.is_active = TRUE ${yearFilter}
+        LEFT JOIN projects p ON bl.project_id = p.id
+        WHERE bl.is_active = TRUE ${scopedYearFilter}
         ORDER BY utilization_pct DESC`,
-        yearParam
+        scopedYearParam
       );
 
       // 2. Donor financial summary
@@ -737,11 +950,36 @@ class BudgetController {
           COUNT(bl.id) as budget_line_count,
           ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
         FROM donors don
-        LEFT JOIN budget_lines bl ON don.id = bl.donor_id AND bl.is_active = TRUE ${yearFilter}
-        WHERE don.is_active = TRUE
+        LEFT JOIN budget_lines bl ON don.id = bl.donor_id AND bl.is_active = TRUE ${yearFilter} ${projectFilter}
+        WHERE don.is_active = TRUE ${donorId ? 'AND don.id = ?' : ''}
         GROUP BY don.id, don.donor_code, don.donor_name, don.currency_code, don.total_committed
         ORDER BY don.donor_name`,
-        yearParam
+        [...yearParam, ...projectParam, ...donorParam]
+      );
+
+      // 2b. Project financial summary
+      const projectSummary = await query(
+        `SELECT 
+          p.id as project_id,
+          p.project_code,
+          p.project_name,
+          p.donor_id,
+          don.donor_code,
+          don.donor_name,
+          don.currency_code,
+          p.total_budget,
+          COALESCE(SUM(bl.allocated_amount), 0) as total_allocated,
+          COALESCE(SUM(bl.spent_amount), 0) as total_spent,
+          COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
+          COUNT(bl.id) as budget_line_count,
+          ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
+        FROM projects p
+        LEFT JOIN donors don ON p.donor_id = don.id
+        LEFT JOIN budget_lines bl ON bl.project_id = p.id AND bl.is_active = TRUE ${yearFilter}
+        WHERE p.is_active = TRUE ${donorId ? 'AND p.donor_id = ?' : ''} ${projectId ? 'AND p.id = ?' : ''}
+        GROUP BY p.id, p.project_code, p.project_name, p.donor_id, don.donor_code, don.donor_name, don.currency_code, p.total_budget
+        ORDER BY don.donor_name, p.project_name`,
+        [...yearParam, ...donorParam, ...projectParam]
       );
 
       // 3. Department spending summary
@@ -756,11 +994,11 @@ class BudgetController {
           COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
           ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
         FROM departments d
-        LEFT JOIN budget_lines bl ON d.id = bl.department_id AND bl.is_active = TRUE ${yearFilter}
+        LEFT JOIN budget_lines bl ON d.id = bl.department_id AND bl.is_active = TRUE ${scopedYearFilter}
         GROUP BY d.id, d.department_name, d.department_code
         HAVING COUNT(bl.id) > 0
         ORDER BY total_spent DESC`,
-        yearParam
+        scopedYearParam
       );
 
       // 4. Spending by category
@@ -773,10 +1011,10 @@ class BudgetController {
           COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
           ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
         FROM budget_lines bl
-        WHERE bl.is_active = TRUE ${yearFilter}
+        WHERE bl.is_active = TRUE ${scopedYearFilter}
         GROUP BY bl.category
         ORDER BY total_spent DESC`,
-        yearParam
+        scopedYearParam
       );
 
       // 5. Request status summary
@@ -786,25 +1024,226 @@ class BudgetController {
           COUNT(*) as count,
           COALESCE(SUM(r.total_amount), 0) as total_amount
         FROM requests r
-        WHERE 1=1 ${fiscalYear ? 'AND YEAR(r.created_at) = ?' : ''}
+        WHERE 1=1 ${scoped ? 'AND r.department_id = ?' : ''} ${fiscalYear ? 'AND YEAR(r.created_at) = ?' : ''}
         GROUP BY r.status
         ORDER BY count DESC`,
-        yearParam
+        scoped ? [userDepartmentId, ...yearParam] : yearParam
       );
 
-      // 6. Monthly spending trend (last 12 months)
-      const spendingTrend = await query(
-        `SELECT 
-          DATE_FORMAT(bt.created_at, '%Y-%m') as month,
-          SUM(CASE WHEN bt.transaction_type = 'DEDUCTION' THEN bt.amount ELSE 0 END) as total_spent,
-          SUM(CASE WHEN bt.transaction_type = 'ALLOCATION' THEN bt.amount ELSE 0 END) as total_allocated,
-          SUM(CASE WHEN bt.transaction_type = 'TOP_UP' THEN bt.amount ELSE 0 END) as total_topup,
-          SUM(CASE WHEN bt.transaction_type = 'REVERSAL' THEN bt.amount ELSE 0 END) as total_reversals,
-          COUNT(*) as transaction_count
-        FROM budget_transactions bt
-        WHERE bt.created_at >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
-        GROUP BY DATE_FORMAT(bt.created_at, '%Y-%m')
-        ORDER BY month ASC`
+      // 6. Spending trend queries
+      //    Two sources are UNION-ed to guarantee accurate data regardless of how spending was recorded.
+      //    If dateFrom/dateTo are provided they override the default rolling-window intervals.
+
+      // Validate and sanitise custom date range
+      const customFrom = dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ? dateFrom : null;
+      const customTo   = dateTo   && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)   ? dateTo   : null;
+      const useCustomRange = customFrom && customTo;
+
+      // Time-window clause builders
+      const btWindow = (interval) =>
+        useCustomRange
+          ? `bt.created_at BETWEEN ? AND DATE_ADD(?, INTERVAL 1 DAY)`
+          : `bt.created_at >= DATE_SUB(CURDATE(), INTERVAL ${interval})`;
+      const btWindowParams = (fallback) =>
+        useCustomRange ? [customFrom, customTo] : fallback;
+
+      const alWindow = (interval) =>
+        useCustomRange
+          ? `al.created_at BETWEEN ? AND DATE_ADD(?, INTERVAL 1 DAY)`
+          : `al.created_at >= DATE_SUB(CURDATE(), INTERVAL ${interval})`;
+      const alWindowParams = (fallback) =>
+        useCustomRange ? [customFrom, customTo] : fallback;
+
+      // Scope/donor/project filter for Source A (budget_transactions JOIN budget_lines)
+      const trendBtFilter = scoped
+        ? `AND (bl.department_id = ? OR bl.department_id IS NULL) ${donorFilter} ${projectFilter}`
+        : `${donorFilter} ${projectFilter}`;
+      const trendBtParams = scoped
+        ? [userDepartmentId, ...donorParam, ...projectParam]
+        : [...donorParam, ...projectParam];
+
+      // Scope/donor/project filter for Source B (requests table)
+      const trendReqFilter = scoped
+        ? `AND r.department_id = ? ${donorId ? 'AND r.donor_id = ?' : ''} ${projectId ? 'AND r.project_id = ?' : ''}`
+        : `${donorId ? 'AND r.donor_id = ?' : ''} ${projectId ? 'AND r.project_id = ?' : ''}`;
+      const trendReqParams = scoped
+        ? [userDepartmentId, ...donorParam, ...projectParam]
+        : [...donorParam, ...projectParam];
+
+      // Helper to build the full params array for a single trend query
+      const trendParams = (btInterval, alInterval) => [
+        ...btWindowParams(btInterval),  // Source A time window
+        ...trendBtParams,               // Source A scope
+        ...alWindowParams(alInterval),  // Source B time window
+        ...trendReqParams               // Source B scope
+      ];
+
+      // 6a. Weekly spending
+      const spendingWeekly = await query(
+        `SELECT
+          period, sort_key,
+          SUM(spent_amount)     as total_spent,
+          SUM(allocated_amount) as total_allocated,
+          SUM(topup_amount)     as total_topup,
+          SUM(reversal_amount)  as total_reversals,
+          SUM(tx_count)         as transaction_count
+        FROM (
+          SELECT
+            CONCAT(YEAR(bt.created_at), '-W', LPAD(WEEK(bt.created_at, 1), 2, '0')) as period,
+            YEARWEEK(bt.created_at, 1) as sort_key,
+            CASE WHEN bt.transaction_type = 'DEDUCTION'  THEN bt.amount ELSE 0 END as spent_amount,
+            CASE WHEN bt.transaction_type = 'ALLOCATION' THEN bt.amount ELSE 0 END as allocated_amount,
+            CASE WHEN bt.transaction_type = 'TOP_UP'     THEN bt.amount ELSE 0 END as topup_amount,
+            CASE WHEN bt.transaction_type = 'REVERSAL'   THEN bt.amount ELSE 0 END as reversal_amount,
+            1 as tx_count
+          FROM budget_transactions bt
+          JOIN budget_lines bl ON bt.budget_line_id = bl.id
+          WHERE ${btWindow('8 WEEK')} ${trendBtFilter}
+          UNION ALL
+          SELECT
+            CONCAT(YEAR(al.created_at), '-W', LPAD(WEEK(al.created_at, 1), 2, '0')) as period,
+            YEARWEEK(al.created_at, 1) as sort_key,
+            (ri.quantity * ri.unit_price) as spent_amount,
+            0, 0, 0, 1
+          FROM requests r
+          JOIN request_items ri ON ri.request_id = r.id
+          JOIN budget_lines bl ON ri.budget_line_id = bl.id
+          JOIN (SELECT request_id, MIN(created_at) as created_at FROM approval_logs WHERE action = 'DISPATCHED' GROUP BY request_id) al ON al.request_id = r.id
+          LEFT JOIN budget_transactions bt_chk ON bt_chk.request_id = r.id AND bt_chk.transaction_type = 'DEDUCTION'
+          WHERE bt_chk.id IS NULL
+            AND ${alWindow('8 WEEK')}
+            AND r.status IN ('DISPATCHED','PENDING_RECONCILIATION','RECONCILED','RECON_PENDING_LEAD','RECON_PENDING_FINANCE')
+            ${trendReqFilter}
+        ) s
+        GROUP BY period, sort_key
+        ORDER BY sort_key ASC`,
+        trendParams(['8 WEEK'], ['8 WEEK'])
+      );
+
+      // 6b. Monthly spending
+      const spendingMonthly = await query(
+        `SELECT
+          period, sort_key,
+          SUM(spent_amount)     as total_spent,
+          SUM(allocated_amount) as total_allocated,
+          SUM(topup_amount)     as total_topup,
+          SUM(reversal_amount)  as total_reversals,
+          SUM(tx_count)         as transaction_count
+        FROM (
+          SELECT
+            DATE_FORMAT(bt.created_at, '%b %Y') as period,
+            DATE_FORMAT(bt.created_at, '%Y-%m')  as sort_key,
+            CASE WHEN bt.transaction_type = 'DEDUCTION'  THEN bt.amount ELSE 0 END as spent_amount,
+            CASE WHEN bt.transaction_type = 'ALLOCATION' THEN bt.amount ELSE 0 END as allocated_amount,
+            CASE WHEN bt.transaction_type = 'TOP_UP'     THEN bt.amount ELSE 0 END as topup_amount,
+            CASE WHEN bt.transaction_type = 'REVERSAL'   THEN bt.amount ELSE 0 END as reversal_amount,
+            1 as tx_count
+          FROM budget_transactions bt
+          JOIN budget_lines bl ON bt.budget_line_id = bl.id
+          WHERE ${btWindow('12 MONTH')} ${trendBtFilter}
+          UNION ALL
+          SELECT
+            DATE_FORMAT(al.created_at, '%b %Y') as period,
+            DATE_FORMAT(al.created_at, '%Y-%m')  as sort_key,
+            (ri.quantity * ri.unit_price) as spent_amount,
+            0, 0, 0, 1
+          FROM requests r
+          JOIN request_items ri ON ri.request_id = r.id
+          JOIN budget_lines bl ON ri.budget_line_id = bl.id
+          JOIN (SELECT request_id, MIN(created_at) as created_at FROM approval_logs WHERE action = 'DISPATCHED' GROUP BY request_id) al ON al.request_id = r.id
+          LEFT JOIN budget_transactions bt_chk ON bt_chk.request_id = r.id AND bt_chk.transaction_type = 'DEDUCTION'
+          WHERE bt_chk.id IS NULL
+            AND ${alWindow('12 MONTH')}
+            AND r.status IN ('DISPATCHED','PENDING_RECONCILIATION','RECONCILED','RECON_PENDING_LEAD','RECON_PENDING_FINANCE')
+            ${trendReqFilter}
+        ) s
+        GROUP BY period, sort_key
+        ORDER BY sort_key ASC`,
+        trendParams(['12 MONTH'], ['12 MONTH'])
+      );
+
+      // 6c. Quarterly spending
+      const spendingQuarterly = await query(
+        `SELECT
+          period, sort_key,
+          SUM(spent_amount)     as total_spent,
+          SUM(allocated_amount) as total_allocated,
+          SUM(topup_amount)     as total_topup,
+          SUM(reversal_amount)  as total_reversals,
+          SUM(tx_count)         as transaction_count
+        FROM (
+          SELECT
+            CONCAT(YEAR(bt.created_at), ' Q', QUARTER(bt.created_at)) as period,
+            YEAR(bt.created_at) * 10 + QUARTER(bt.created_at) as sort_key,
+            CASE WHEN bt.transaction_type = 'DEDUCTION'  THEN bt.amount ELSE 0 END as spent_amount,
+            CASE WHEN bt.transaction_type = 'ALLOCATION' THEN bt.amount ELSE 0 END as allocated_amount,
+            CASE WHEN bt.transaction_type = 'TOP_UP'     THEN bt.amount ELSE 0 END as topup_amount,
+            CASE WHEN bt.transaction_type = 'REVERSAL'   THEN bt.amount ELSE 0 END as reversal_amount,
+            1 as tx_count
+          FROM budget_transactions bt
+          JOIN budget_lines bl ON bt.budget_line_id = bl.id
+          WHERE ${btWindow('2 YEAR')} ${trendBtFilter}
+          UNION ALL
+          SELECT
+            CONCAT(YEAR(al.created_at), ' Q', QUARTER(al.created_at)) as period,
+            YEAR(al.created_at) * 10 + QUARTER(al.created_at) as sort_key,
+            (ri.quantity * ri.unit_price) as spent_amount,
+            0, 0, 0, 1
+          FROM requests r
+          JOIN request_items ri ON ri.request_id = r.id
+          JOIN budget_lines bl ON ri.budget_line_id = bl.id
+          JOIN (SELECT request_id, MIN(created_at) as created_at FROM approval_logs WHERE action = 'DISPATCHED' GROUP BY request_id) al ON al.request_id = r.id
+          LEFT JOIN budget_transactions bt_chk ON bt_chk.request_id = r.id AND bt_chk.transaction_type = 'DEDUCTION'
+          WHERE bt_chk.id IS NULL
+            AND ${alWindow('2 YEAR')}
+            AND r.status IN ('DISPATCHED','PENDING_RECONCILIATION','RECONCILED','RECON_PENDING_LEAD','RECON_PENDING_FINANCE')
+            ${trendReqFilter}
+        ) s
+        GROUP BY period, sort_key
+        ORDER BY sort_key ASC`,
+        trendParams(['2 YEAR'], ['2 YEAR'])
+      );
+
+      // 6d. Yearly spending
+      const spendingYearly = await query(
+        `SELECT
+          period, sort_key,
+          SUM(spent_amount)     as total_spent,
+          SUM(allocated_amount) as total_allocated,
+          SUM(topup_amount)     as total_topup,
+          SUM(reversal_amount)  as total_reversals,
+          SUM(tx_count)         as transaction_count
+        FROM (
+          SELECT
+            CAST(YEAR(bt.created_at) AS CHAR) as period,
+            YEAR(bt.created_at) as sort_key,
+            CASE WHEN bt.transaction_type = 'DEDUCTION'  THEN bt.amount ELSE 0 END as spent_amount,
+            CASE WHEN bt.transaction_type = 'ALLOCATION' THEN bt.amount ELSE 0 END as allocated_amount,
+            CASE WHEN bt.transaction_type = 'TOP_UP'     THEN bt.amount ELSE 0 END as topup_amount,
+            CASE WHEN bt.transaction_type = 'REVERSAL'   THEN bt.amount ELSE 0 END as reversal_amount,
+            1 as tx_count
+          FROM budget_transactions bt
+          JOIN budget_lines bl ON bt.budget_line_id = bl.id
+          WHERE ${btWindow('5 YEAR')} ${trendBtFilter}
+          UNION ALL
+          SELECT
+            CAST(YEAR(al.created_at) AS CHAR) as period,
+            YEAR(al.created_at) as sort_key,
+            (ri.quantity * ri.unit_price) as spent_amount,
+            0, 0, 0, 1
+          FROM requests r
+          JOIN request_items ri ON ri.request_id = r.id
+          JOIN budget_lines bl ON ri.budget_line_id = bl.id
+          JOIN (SELECT request_id, MIN(created_at) as created_at FROM approval_logs WHERE action = 'DISPATCHED' GROUP BY request_id) al ON al.request_id = r.id
+          LEFT JOIN budget_transactions bt_chk ON bt_chk.request_id = r.id AND bt_chk.transaction_type = 'DEDUCTION'
+          WHERE bt_chk.id IS NULL
+            AND ${alWindow('5 YEAR')}
+            AND r.status IN ('DISPATCHED','PENDING_RECONCILIATION','RECONCILED','RECON_PENDING_LEAD','RECON_PENDING_FINANCE')
+            ${trendReqFilter}
+        ) s
+        GROUP BY period, sort_key
+        ORDER BY sort_key ASC`,
+        trendParams(['5 YEAR'], ['5 YEAR'])
       );
 
       // 7. Reconciliation summary
@@ -815,9 +1254,10 @@ class BudgetController {
           COALESCE(SUM(rec.total_spent), 0) as total_spent,
           COALESCE(SUM(rec.total_returned), 0) as total_returned
         FROM reconciliations rec
-        WHERE 1=1 ${fiscalYear ? 'AND YEAR(rec.created_at) = ?' : ''}
+        JOIN requests r ON r.id = rec.request_id
+        WHERE 1=1 ${scoped ? 'AND r.department_id = ?' : ''} ${fiscalYear ? 'AND YEAR(rec.created_at) = ?' : ''}
         GROUP BY rec.status`,
-        yearParam
+        scoped ? [userDepartmentId, ...yearParam] : yearParam
       );
 
       // 8. Overall totals
@@ -829,8 +1269,8 @@ class BudgetController {
           COUNT(bl.id) as total_budget_lines,
           ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as overall_utilization
         FROM budget_lines bl
-        WHERE bl.is_active = TRUE ${yearFilter}`,
-        yearParam
+        WHERE bl.is_active = TRUE ${scopedYearFilter}`,
+        scopedYearParam
       );
 
       res.json({
@@ -842,8 +1282,12 @@ class BudgetController {
           departmentSummary,
           categorySummary,
           requestSummary,
-          spendingTrend,
-          reconciliationSummary
+          spendingWeekly,
+          spendingMonthly,
+          spendingQuarterly,
+          spendingYearly,
+          reconciliationSummary,
+          projectSummary
         }
       });
     } catch (error) {

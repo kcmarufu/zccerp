@@ -1,0 +1,205 @@
+================================================================================
+  ZCCEP ERP SYSTEM - UBUNTU LINUX SETUP GUIDE
+================================================================================
+
+SYSTEM STACK:
+  - Node.js  (backend API)
+  - MySQL    (database)
+  - React    (frontend)
+  - DBeaver  (database manager)
+
+================================================================================
+STEP 1 — COPY THE PROJECT TO UBUNTU
+================================================================================
+
+Option A — USB/Transfer:
+  Copy the entire zcceprsystem folder to your Ubuntu machine.
+  Example destination: ~/projects/zcceprsystem
+
+Option B — Git (if on a repository):
+  git clone <your-repo-url> ~/projects/zcceprsystem
+
+================================================================================
+STEP 2 — INSTALL NODE.JS
+================================================================================
+
+  sudo apt update
+  sudo apt install -y curl
+
+  # Install Node.js 20 (LTS)
+  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  sudo apt install -y nodejs
+
+  # Verify installation
+  node -v
+  npm -v
+
+================================================================================
+STEP 3 — INSTALL MYSQL
+================================================================================
+
+  sudo apt install -y mysql-server
+
+  # Start and enable MySQL to run on boot
+  sudo systemctl start mysql
+  sudo systemctl enable mysql
+
+  # Secure the installation (set root password when prompted)
+  sudo mysql_secure_installation
+
+================================================================================
+STEP 4 — CREATE THE DATABASE IN MYSQL
+================================================================================
+
+  # Log into MySQL as root
+  sudo mysql -u root -p
+
+  -- Inside the MySQL prompt, run these commands:
+  CREATE DATABASE finance_erp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  CREATE USER 'erp_user'@'localhost' IDENTIFIED BY 'YourStrongPassword123';
+  GRANT ALL PRIVILEGES ON finance_erp.* TO 'erp_user'@'localhost';
+  FLUSH PRIVILEGES;
+  EXIT;
+
+================================================================================
+STEP 5 — CONNECT DBEAVER TO MYSQL (OPTIONAL BUT RECOMMENDED)
+================================================================================
+
+  1. Open DBeaver
+  2. Click "New Database Connection" -> choose MySQL
+  3. Fill in:
+       Host:     localhost
+       Port:     3306
+       Database: finance_erp
+       Username: erp_user
+       Password: YourStrongPassword123
+  4. Click "Test Connection" -> then "Finish"
+
+  You can now view and inspect the database from DBeaver.
+
+================================================================================
+STEP 6 — CONFIGURE THE BACKEND
+================================================================================
+
+  cd ~/projects/zcceprsystem/backend
+
+  # Copy the example environment file
+  cp .env.example .env
+
+  # Edit the file
+  nano .env
+
+  Update the following values inside .env:
+  -------------------------------------------------------
+  NODE_ENV=development
+  PORT=5000
+
+  DB_HOST=localhost
+  DB_PORT=3306
+  DB_USER=erp_user
+  DB_PASSWORD=YourStrongPassword123
+  DB_NAME=finance_erp
+
+  DATABASE_URL="mysql://erp_user:YourStrongPassword123@localhost:3306/finance_erp"
+
+  JWT_SECRET=replace-with-a-long-random-string
+  JWT_EXPIRES_IN=8h
+  JWT_REFRESH_SECRET=replace-with-another-long-random-string
+  JWT_REFRESH_EXPIRES_IN=7d
+
+  CORS_ORIGIN=http://localhost:3000
+  LOG_LEVEL=debug
+  -------------------------------------------------------
+
+  Save with: Ctrl+O  ->  Enter  ->  Ctrl+X
+
+================================================================================
+STEP 7 — INSTALL BACKEND DEPENDENCIES & RUN MIGRATIONS
+================================================================================
+
+  cd ~/projects/zcceprsystem/backend
+
+  # Install dependencies
+  npm install
+
+  # Generate Prisma client
+  npx prisma generate
+
+  # Run database migrations (creates all tables)
+  npx prisma migrate deploy
+
+  # Seed the database with initial data (roles, admin user, etc.)
+  node prisma/seed.js
+
+  NOTE: After seeding, refresh finance_erp in DBeaver to see all tables.
+
+================================================================================
+STEP 8 — START THE BACKEND SERVER
+================================================================================
+
+  cd ~/projects/zcceprsystem/backend
+  npm start
+
+  Expected output:
+    Server running on port 5000
+    Database connected successfully
+
+  Leave this terminal open.
+
+================================================================================
+STEP 9 — CONFIGURE AND START THE FRONTEND
+================================================================================
+
+  Open a NEW terminal window, then run:
+
+  cd ~/projects/zcceprsystem/frontend
+
+  # Install dependencies
+  npm install
+
+  # Start the frontend
+  npm start
+
+  The app will open automatically at: http://localhost:3000
+
+================================================================================
+STEP 10 — LOG IN
+================================================================================
+
+  Use the default admin credentials created by the seed script.
+  Check backend/prisma/seed.js for the exact email/password.
+
+  Typical defaults:
+    Email:    admin@zccep.org
+    Password: Admin@123
+
+================================================================================
+QUICK REFERENCE — START THE SYSTEM DAILY
+================================================================================
+
+  Every time you want to run the system:
+
+  Terminal 1 (Backend):
+    cd ~/projects/zcceprsystem/backend
+    npm start
+
+  Terminal 2 (Frontend):
+    cd ~/projects/zcceprsystem/frontend
+    npm start
+
+  NOTE: MySQL starts automatically on boot since systemctl enable was used.
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+  PROBLEM                          FIX
+  -----------------------------------------------------------------------
+  mysql: command not found         sudo apt install mysql-server
+  Prisma migration fails           Check DATABASE_URL in .env matches credentials
+  Port 3000/5000 already in use    sudo lsof -i :5000  (then kill the process)
+  npm: command not found           Re-run the Node.js install step (Step 2)
+  DBeaver can't connect            sudo systemctl status mysql
+                                   sudo systemctl start mysql
+
+================================================================================

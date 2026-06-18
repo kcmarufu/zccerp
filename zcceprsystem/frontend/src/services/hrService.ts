@@ -95,8 +95,11 @@ export const getLeaveRequests = async (filters: {
   departmentId?: number;
   status?: string;
   year?: number;
+  /** When true, fetches requests pending departmental action (PENDING for dept approvers, DEPT_APPROVED for HR/Admin) */
+  pendingOnly?: boolean;
 } = {}): Promise<{ data: HRLeaveRequest[]; pagination: any }> => {
-  const response = await api.get('/hr/leave-requests', { params: filters });
+  const { pendingOnly, ...rest } = filters;
+  const response = await api.get('/hr/leave-requests', { params: rest });
   return { data: response.data.data, pagination: response.data.pagination };
 };
 

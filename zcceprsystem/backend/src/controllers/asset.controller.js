@@ -4,6 +4,19 @@
  */
 
 const assetService = require('../services/asset.service');
+const { ROLES } = require('../config/roles');
+
+const canReadAsset = (asset, user) => {
+  if (!asset) return false;
+  if ([ROLES.ADMIN, ROLES.FINANCE_CLERK].includes(user.role)) return true;
+  if (user.role === ROLES.GENERAL_USER) {
+    return Number(asset.custodian_id) === Number(user.id);
+  }
+  if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role)) {
+    return Number(asset.department_id) === Number(user.department_id);
+  }
+  return true;
+};
 
 class AssetController {
 
@@ -35,6 +48,14 @@ class AssetController {
         conditionRating: req.query.conditionRating,
         custodianId: req.query.custodianId
       };
+
+      // Scope by role.
+      if (req.user.role === ROLES.GENERAL_USER) {
+        filters.custodianId = req.user.id;
+      } else if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
+        filters.departmentId = req.user.department_id;
+      }
+
       const result = await assetService.getAssets(filters);
       res.json({ success: true, data: result.data, pagination: { total: result.total, page: result.page, limit: result.limit, totalPages: result.totalPages } });
     } catch (error) {
@@ -47,6 +68,11 @@ class AssetController {
     try {
       const asset = await assetService.getAssetById(req.params.id);
       if (!asset) return res.status(404).json({ success: false, error: 'Asset not found' });
+
+      if (!canReadAsset(asset, req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have access to this asset' });
+      }
+
       res.json({ success: true, data: asset });
     } catch (error) {
       console.error('Error fetching asset:', error);
@@ -166,6 +192,12 @@ class AssetController {
 
   async getAssignments(req, res) {
     try {
+      const asset = await assetService.getAssetById(req.params.assetId);
+      if (!asset) return res.status(404).json({ success: false, error: 'Asset not found' });
+      if (!canReadAsset(asset, req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have access to this asset' });
+      }
+
       const data = await assetService.getAssignments(req.params.assetId);
       res.json({ success: true, data });
     } catch (error) {
@@ -198,6 +230,11 @@ class AssetController {
   async getTransfers(req, res) {
     try {
       const filters = { assetId: req.query.assetId, status: req.query.status };
+      if (req.user.role === ROLES.GENERAL_USER) {
+        filters.custodianId = req.user.id;
+      } else if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
+        filters.departmentId = req.user.department_id;
+      }
       const data = await assetService.getTransfers(filters);
       res.json({ success: true, data });
     } catch (error) {
@@ -230,6 +267,11 @@ class AssetController {
   async getMaintenanceRecords(req, res) {
     try {
       const filters = { assetId: req.query.assetId, status: req.query.status, maintenanceType: req.query.maintenanceType };
+      if (req.user.role === ROLES.GENERAL_USER) {
+        filters.custodianId = req.user.id;
+      } else if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
+        filters.departmentId = req.user.department_id;
+      }
       const data = await assetService.getMaintenanceRecords(filters);
       res.json({ success: true, data });
     } catch (error) {
@@ -262,6 +304,11 @@ class AssetController {
   async getDisposals(req, res) {
     try {
       const filters = { assetId: req.query.assetId, status: req.query.status };
+      if (req.user.role === ROLES.GENERAL_USER) {
+        filters.custodianId = req.user.id;
+      } else if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
+        filters.departmentId = req.user.department_id;
+      }
       const data = await assetService.getDisposals(filters);
       res.json({ success: true, data });
     } catch (error) {
@@ -294,6 +341,11 @@ class AssetController {
   async getIncidents(req, res) {
     try {
       const filters = { assetId: req.query.assetId, status: req.query.status, incidentType: req.query.incidentType };
+      if (req.user.role === ROLES.GENERAL_USER) {
+        filters.custodianId = req.user.id;
+      } else if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
+        filters.departmentId = req.user.department_id;
+      }
       const data = await assetService.getIncidents(filters);
       res.json({ success: true, data });
     } catch (error) {
@@ -307,6 +359,12 @@ class AssetController {
 
   async getStatusHistory(req, res) {
     try {
+      const asset = await assetService.getAssetById(req.params.assetId);
+      if (!asset) return res.status(404).json({ success: false, error: 'Asset not found' });
+      if (!canReadAsset(asset, req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have access to this asset' });
+      }
+
       const data = await assetService.getStatusHistory(req.params.assetId);
       res.json({ success: true, data });
     } catch (error) {
@@ -316,6 +374,12 @@ class AssetController {
 
   async getAuditLog(req, res) {
     try {
+      const asset = await assetService.getAssetById(req.params.assetId);
+      if (!asset) return res.status(404).json({ success: false, error: 'Asset not found' });
+      if (!canReadAsset(asset, req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have access to this asset' });
+      }
+
       const data = await assetService.getAuditLog(req.params.assetId);
       res.json({ success: true, data });
     } catch (error) {
@@ -329,7 +393,14 @@ class AssetController {
 
   async getDashboardStats(req, res) {
     try {
-      const data = await assetService.getDashboardStats();
+      const filters = {};
+      if (req.user.role === ROLES.GENERAL_USER) {
+        filters.custodianId = req.user.id;
+      } else if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
+        filters.departmentId = req.user.department_id;
+      }
+
+      const data = await assetService.getDashboardStats(filters);
       res.json({ success: true, data });
     } catch (error) {
       console.error('Error fetching asset dashboard:', error);

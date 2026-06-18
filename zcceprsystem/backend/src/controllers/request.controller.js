@@ -24,18 +24,26 @@ class RequestController {
         });
       }
 
-      const { justification, priority, items, donor_id, category } = req.body;
+      const { justification, items, donor_id, category, projectCode } = req.body;
       const userId = req.user.id;
       const departmentId = req.user.department_id;
 
       const result = await transaction(async (connection) => {
-        // Generate structured reference number: DONOR_CODE-SUFFIX-NNNN
-        // Budget codes already contain donor prefix (e.g., EURED-2026-ECO)
-        // We extract just the suffix (e.g., ECO) to avoid duplication
+        // Generate structured reference number:
+        //   With donor+project: DONORCODE-PROJECTCODE-0000001
+        //   Fallback:           REQ-YYYY-000001
         let requestNumber;
         let validDonorId = null;
+        let validProjectId = null;
+
+        const normalizeSegment = (value, fallback) => {
+          const cleaned = String(value || '')
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '');
+          return cleaned || fallback;
+        };
         
-        // Validate donor exists before using it
+        // Validate donor exists
         if (donor_id) {
           const [donorCheck] = await connection.execute(
             'SELECT id FROM donors WHERE id = ?',
@@ -45,45 +53,47 @@ class RequestController {
             validDonorId = donor_id;
           }
         }
+
+        // Validate project exists and belongs to the donor
+        const requestedProjectId = req.body.project_id || null;
+        if (requestedProjectId && validDonorId) {
+          const [projCheck] = await connection.execute(
+            'SELECT id FROM projects WHERE id = ? AND donor_id = ?',
+            [requestedProjectId, validDonorId]
+          );
+          if (projCheck.length > 0) {
+            validProjectId = requestedProjectId;
+          }
+        }
         
-        if (validDonorId && items.length > 0) {
-          // Get donor code
+        if (validDonorId && validProjectId && items.length > 0) {
+          // Get donor code and project code
           const [donorResult] = await connection.execute(
             'SELECT donor_code FROM donors WHERE id = ?',
             [validDonorId]
           );
-          
-          // Get the first item's budget line code for reference
-          const firstBudgetLineId = items[0].budgetLineId || items[0].budget_line_id;
-          let budgetCode = '';
-          if (firstBudgetLineId) {
-            const [blResult] = await connection.execute(
-              'SELECT budget_code FROM budget_lines WHERE id = ?',
-              [firstBudgetLineId]
+          const [projectResult] = await connection.execute(
+            'SELECT project_code, last_request_seq FROM projects WHERE id = ?',
+            [validProjectId]
+          );
+
+          if (donorResult.length > 0 && projectResult.length > 0) {
+            const donorCode = normalizeSegment(donorResult[0].donor_code, 'DON');
+            const projCode = normalizeSegment(projectResult[0].project_code, 'PRJ');
+
+            // Atomically increment the per-project sequence counter
+            await connection.execute(
+              'UPDATE projects SET last_request_seq = last_request_seq + 1 WHERE id = ?',
+              [validProjectId]
             );
-            if (blResult.length > 0) {
-              budgetCode = blResult[0].budget_code;
-            }
-          }
-          
-          if (donorResult.length > 0 && budgetCode) {
-            const donorCode = donorResult[0].donor_code;
-            // Strip the donor code prefix from budget code to avoid duplication
-            // e.g., donor_code = "EURED-2026", budget_code = "EURED-2026-ECO" → suffix = "ECO"
-            let budgetSuffix = budgetCode;
-            if (budgetCode.startsWith(donorCode + '-')) {
-              budgetSuffix = budgetCode.substring(donorCode.length + 1);
-            } else if (budgetCode.startsWith(donorCode)) {
-              budgetSuffix = budgetCode.substring(donorCode.length);
-            }
-            
-            // Build reference: DONOR_CODE-SUFFIX-NNNN (e.g., EURED-2026-ECO-0001)
-            const prefix = `${donorCode}-${budgetSuffix}-`;
-            const [seqResult] = await connection.execute(
-              `SELECT COUNT(*) + 1 as seq FROM requests WHERE request_code LIKE ?`,
-              [`${prefix}%`]
+            const [seqRow] = await connection.execute(
+              'SELECT last_request_seq FROM projects WHERE id = ?',
+              [validProjectId]
             );
-            requestNumber = `${prefix}${String(seqResult[0].seq).padStart(4, '0')}`;
+            const seq = String(seqRow[0].last_request_seq).padStart(7, '0');
+
+            // Format: DONORCODE-PROJECTCODE-0000001
+            requestNumber = `${donorCode}-${projCode}-${seq}`;
           } else {
             // Fallback to standard format
             const year = new Date().getFullYear();
@@ -94,7 +104,7 @@ class RequestController {
             requestNumber = `REQ-${year}-${String(countResult[0].seq).padStart(6, '0')}`;
           }
         } else {
-          // Fallback to standard format
+          // Fallback to standard format when no donor/project is selected
           const year = new Date().getFullYear();
           const [countResult] = await connection.execute(
             `SELECT COUNT(*) + 1 as seq FROM requests WHERE YEAR(created_at) = ?`,
@@ -109,11 +119,57 @@ class RequestController {
           return sum + itemTotal;
         }, 0);
 
-        // Insert request with validated donor_id
+        // Check cross-department routing: if the selected project belongs to a different
+        // department, store that department's ID so approvals are routed there.
+        // Skip for Admin-donor requests — they use a shared approval queue without cross-dept routing.
+        let routingDepartmentId = null;
+        if (validProjectId && validDonorId) {
+          // Check if this is an admin donor
+          const [donorTypeRows] = await connection.execute(
+            'SELECT donor_type FROM donors WHERE id = ?', [validDonorId]
+          );
+          const isAdminDonor = donorTypeRows.length > 0 && donorTypeRows[0].donor_type === 'ADMIN';
+
+          if (!isAdminDonor && validProjectId) {
+            // Use project's own department_id; if NULL (older projects), fall back to
+            // the department on the first budget line in this request's items.
+            const firstBudgetLineId = items && items.length > 0 ? (items[0].budgetLineId || 0) : 0;
+            const [projRows] = await connection.execute(
+              `SELECT COALESCE(
+                 p.department_id,
+                 (SELECT bl.department_id FROM budget_lines bl
+                  WHERE bl.id = ? AND bl.department_id IS NOT NULL LIMIT 1)
+               ) AS effective_dept_id
+               FROM projects p WHERE p.id = ?`,
+              [firstBudgetLineId, validProjectId]
+            );
+            const effectiveDeptId = projRows[0]?.effective_dept_id;
+            if (effectiveDeptId && effectiveDeptId !== departmentId) {
+              routingDepartmentId = effectiveDeptId;
+            }
+          }
+        } else if (validProjectId) {
+          const firstBudgetLineId = items && items.length > 0 ? (items[0].budgetLineId || 0) : 0;
+          const [projRows] = await connection.execute(
+            `SELECT COALESCE(
+               p.department_id,
+               (SELECT bl.department_id FROM budget_lines bl
+                WHERE bl.id = ? AND bl.department_id IS NOT NULL LIMIT 1)
+             ) AS effective_dept_id
+             FROM projects p WHERE p.id = ?`,
+            [firstBudgetLineId, validProjectId]
+          );
+          const effectiveDeptId = projRows[0]?.effective_dept_id;
+          if (effectiveDeptId && effectiveDeptId !== departmentId) {
+            routingDepartmentId = effectiveDeptId;
+          }
+        }
+
+        // Insert request with validated donor_id and project_id
         const [requestResult] = await connection.execute(
-          `INSERT INTO requests (request_code, requester_id, department_id, donor_id, status, justification, priority, total_amount, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [requestNumber, userId, departmentId, validDonorId, REQUEST_STATUS.DRAFT, justification, priority || 'MEDIUM', totalAmount]
+          `INSERT INTO requests (request_code, requester_id, department_id, donor_id, project_id, routing_department_id, status, justification, priority, total_amount, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+          [requestNumber, userId, departmentId, validDonorId, validProjectId, routingDepartmentId, REQUEST_STATUS.DRAFT, justification, 'MEDIUM', totalAmount]
         );
 
         const requestId = requestResult.insertId;
@@ -160,10 +216,19 @@ class RequestController {
                 u.last_name as requester_last_name,
                 u.email as requester_email,
                 d.department_name,
-                d.department_code
+                d.department_code,
+                dn.donor_name,
+                dn.donor_code,
+                p.project_name,
+                p.project_code,
+                rd.department_name as routing_department_name,
+                rd.department_code as routing_department_code
          FROM requests r
          JOIN users u ON r.requester_id = u.id
          JOIN departments d ON r.department_id = d.id
+         LEFT JOIN donors dn ON r.donor_id = dn.id
+         LEFT JOIN projects p ON r.project_id = p.id
+         LEFT JOIN departments rd ON r.routing_department_id = rd.id
          WHERE r.id = ?`,
         [requestId]
       );
@@ -172,6 +237,17 @@ class RequestController {
         return res.status(404).json({
           success: false,
           error: 'Request not found'
+        });
+      }
+
+      const request = requests[0];
+      const isOwner = Number(request.requester_id) === Number(req.user.id);
+
+      // Only general users are restricted to their own requests
+      if (req.user.role === ROLES.GENERAL_USER && !isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'You can only access your own requests'
         });
       }
 
@@ -193,7 +269,8 @@ class RequestController {
       res.json({
         success: true,
         data: {
-          ...requests[0],
+          ...request,
+          has_per_diem_claim: Boolean(request.has_per_diem_claim),
           items,
           approvalTrail
         }
@@ -228,12 +305,8 @@ class RequestController {
       if (userRole === ROLES.GENERAL_USER) {
         whereClause += ' AND r.requester_id = ?';
         params.push(userId);
-      } else if (userRole === ROLES.PROGRAM_LEAD) {
-        // Program Lead sees requests from their own department
-        whereClause += ' AND r.department_id = ?';
-        params.push(departmentId);
       }
-      // HEAD_OF_PROGRAMS, FINANCE_CLERK and ADMIN can see all
+      // HEAD_OF_PROGRAMS, PROGRAM_LEAD, FINANCE_CLERK and ADMIN can all see all requests.
 
       // Status filter
       if (status) {
@@ -242,7 +315,7 @@ class RequestController {
       }
 
       // Get total count
-      const [countResult] = await query(
+      const countResult = await query(
         `SELECT COUNT(*) as total FROM requests r WHERE ${whereClause}`,
         params
       );
@@ -272,10 +345,10 @@ class RequestController {
         data: {
           requests,
           pagination: {
-            total: countResult.total,
+            total: countResult[0].total,
             page: pageNum,
             limit: limitNum,
-            totalPages: Math.ceil(countResult.total / limitNum)
+            totalPages: Math.ceil(countResult[0].total / limitNum)
           }
         }
       });
@@ -321,9 +394,12 @@ class RequestController {
           throw new Error('You can only edit your own requests');
         }
 
-        if (requests[0].status !== REQUEST_STATUS.DRAFT) {
-          throw new Error('Can only edit requests in DRAFT status');
+        const canEditStatuses = [REQUEST_STATUS.DRAFT, REQUEST_STATUS.REJECTED];
+        if (!canEditStatuses.includes(requests[0].status)) {
+          throw new Error('Can only edit requests in DRAFT or REJECTED status');
         }
+
+        const previousStatus = requests[0].status;
 
         // Update request
         await connection.execute(
@@ -345,6 +421,15 @@ class RequestController {
                item.unitPrice, item.budgetLineId, item.notes || null]
             );
           }
+        }
+
+        if (previousStatus === REQUEST_STATUS.REJECTED) {
+          await connection.execute(
+            `INSERT INTO approval_logs
+             (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
+             VALUES (?, ?, ?, 'EDITED_AFTER_REJECTION', ?, ?, ?, ?)`,
+            [requestId, userId, req.user.role || ROLES.GENERAL_USER, REQUEST_STATUS.REJECTED, REQUEST_STATUS.REJECTED, 'Requester updated rejected request', req.ip]
+          );
         }
       });
 

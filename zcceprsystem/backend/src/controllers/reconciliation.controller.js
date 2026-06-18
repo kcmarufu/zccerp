@@ -45,12 +45,13 @@ class ReconciliationController {
   async approveReconciliation(req, res) {
     try {
       const { requestId } = req.params;
-      const financeUserId = req.user.id;
+      const approverId = req.user.id;
+      const approverRole = req.user.role;
       const { comments } = req.body;
       const ipAddress = req.ip;
 
       const result = await reconciliationService.approveReconciliation(
-        requestId, financeUserId, comments, ipAddress
+        requestId, approverId, approverRole, comments, ipAddress
       );
 
       res.json({
@@ -73,12 +74,13 @@ class ReconciliationController {
   async rejectReconciliation(req, res) {
     try {
       const { requestId } = req.params;
-      const financeUserId = req.user.id;
+      const approverId = req.user.id;
+      const approverRole = req.user.role;
       const { comments } = req.body;
       const ipAddress = req.ip;
 
       const result = await reconciliationService.rejectReconciliation(
-        requestId, financeUserId, comments, ipAddress
+        requestId, approverId, approverRole, comments, ipAddress
       );
 
       res.json({
@@ -144,7 +146,7 @@ class ReconciliationController {
    */
   async getPendingReconciliations(req, res) {
     try {
-      const requests = await reconciliationService.getPendingReconciliations();
+      const requests = await reconciliationService.getPendingReconciliations(req.user.role);
 
       res.json({
         success: true,
@@ -211,11 +213,12 @@ class ReconciliationController {
       const { requestId } = req.params;
       const approverId = req.user.id;
       const approverRole = req.user.role;
+      const approverDeptCode = req.user.department_code;
       const { comments } = req.body;
       const ipAddress = req.ip;
 
       const result = await reconciliationService.approveReconciliationAsLead(
-        requestId, approverId, approverRole, comments, ipAddress
+        requestId, approverId, approverRole, comments, ipAddress, approverDeptCode
       );
 
       res.json({ success: true, ...result });
@@ -237,11 +240,12 @@ class ReconciliationController {
       const { requestId } = req.params;
       const approverId = req.user.id;
       const approverRole = req.user.role;
+      const approverDeptCode = req.user.department_code;
       const { comments } = req.body;
       const ipAddress = req.ip;
 
       const result = await reconciliationService.rejectReconciliationAsLead(
-        requestId, approverId, approverRole, comments, ipAddress
+        requestId, approverId, approverRole, comments, ipAddress, approverDeptCode
       );
 
       res.json({ success: true, ...result });
@@ -263,9 +267,10 @@ class ReconciliationController {
       const approverId = req.user.id;
       const approverRole = req.user.role;
       const departmentId = req.user.department_id;
+      const departmentCode = req.user.department_code;
 
       const requests = await reconciliationService.getPendingLeadReconciliations(
-        approverId, approverRole, departmentId
+        approverId, approverRole, departmentId, departmentCode
       );
 
       res.json({ success: true, data: requests });
@@ -274,6 +279,79 @@ class ReconciliationController {
       res.status(500).json({
         success: false,
         error: 'Failed to fetch pending reconciliations'
+      });
+    }
+  }
+
+  /**
+   * Get reconciliations already approved by this lead (audit trail)
+   * GET /api/reconciliations/lead-approved
+   */
+  async getLeadApprovedReconciliations(req, res) {
+    try {
+      const approverId = req.user.id;
+      const approverRole = req.user.role;
+      const departmentId = req.user.department_id;
+
+      const requests = await reconciliationService.getLeadApprovedReconciliations(
+        approverId, approverRole, departmentId
+      );
+
+      res.json({ success: true, data: requests });
+    } catch (error) {
+      console.error('Error fetching lead approved reconciliations:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch approved reconciliations'
+      });
+    }
+  }
+
+  /**
+   * Check if current user has 2+ overdue unsubmitted reconciliations
+   * GET /api/reconciliations/overdue-check
+   */
+  async getOverdueCheck(req, res) {
+    try {
+      const userId = req.user.id;
+      const count = await reconciliationService.getOverdueCount(userId);
+      res.json({
+        success: true,
+        data: {
+          overdueCount: count,
+          isBlocked: count >= 2
+        }
+      });
+    } catch (error) {
+      console.error('Error checking overdue reconciliations:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check overdue reconciliations'
+      });
+    }
+  }
+
+  /**
+   * Update an existing reconciliation (requester edits before final approval)
+   * PUT /api/reconciliations/:requestId
+   */
+  async updateReconciliation(req, res) {
+    try {
+      const { requestId } = req.params;
+      const userId = req.user.id;
+      const ipAddress = req.ip;
+      const { items, notes, overspendNotes, totalSpent, totalReturned } = req.body;
+
+      const result = await reconciliationService.updateReconciliation(
+        requestId, userId, { items, notes, overspendNotes, totalSpent, totalReturned }, ipAddress
+      );
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error('Reconciliation update error:', error);
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Failed to update reconciliation'
       });
     }
   }

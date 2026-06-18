@@ -61,6 +61,7 @@ import { useAuthStore } from '../store/authStore';
 import { requestService } from '../services/requestService';
 import { approvalService } from '../services/approvalService';
 import { budgetService } from '../services/budgetService';
+import { getProcurementDashboard } from '../services/procurementService';
 import { Request, BudgetLine } from '../types';
 
 const COLORS = ['#4caf50', '#ff9800', '#f44336', '#2196f3', '#9c27b0', '#00bcd4'];
@@ -71,6 +72,8 @@ const DashboardPage: React.FC = () => {
   const { user, hasRole, hasPermission } = useAuthStore();
 
   const [isLoading, setIsLoading] = useState(true);
+  const [procStats, setProcStats] = useState({ total: 0, pending: 0, approved: 0, rejected: 0 });
+
   const [stats, setStats] = useState({
     totalRequests: 0,
     pendingApprovals: 0,
@@ -89,7 +92,7 @@ const DashboardPage: React.FC = () => {
   const fetchDashboardData = async () => {
     try {
       setIsLoading(true);
-      const isApprover = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK');
+      const isApprover = hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK');
 
       const requestsResponse = await requestService.getAll({ limit: 100 });
       if (requestsResponse.success && requestsResponse.data) {
@@ -135,6 +138,17 @@ const DashboardPage: React.FC = () => {
       } catch (err) {
         console.error('Error fetching budgets:', err);
       }
+      try {
+        const pd = await getProcurementDashboard();
+        const total = Object.values(pd.statusSummary || {}).reduce((a: number, b) => a + (b as number), 0);
+        const pending = (pd.pendingDeptApproval ?? 0) + (pd.totalAwaitingCommittee ?? 0) + (pd.totalInProcurement ?? 0) + (pd.totalFinalFinance ?? 0);
+        setProcStats({
+          total,
+          pending,
+          approved: pd.totalCompleted ?? 0,
+          rejected: pd.totalRejected ?? 0
+        });
+      } catch { /* silent — procurement stats are supplemental */ }
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
     } finally {
@@ -193,7 +207,7 @@ const DashboardPage: React.FC = () => {
       color: '#1565c0',
       bgColor: alpha('#1565c0', 0.1),
       path: '/procurement',
-      stats: 'Coming Soon',
+      stats: `${procStats.total} requests`,
       active: true
     },
     {
@@ -318,7 +332,7 @@ const DashboardPage: React.FC = () => {
                   New Request
                 </Button>
               )}
-              {hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && stats.pendingApprovals > 0 && (
+              {hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && stats.pendingApprovals > 0 && (
                 <Button
                   variant="contained"
                   startIcon={<PendingIcon />}
@@ -339,7 +353,7 @@ const DashboardPage: React.FC = () => {
 
       {/* KPI Cards */}
       <Grid container spacing={2.5} sx={{ mb: 3 }}>
-        {hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && (
+        {hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && (
           <Grid item xs={12} sm={6} md={3}>
             <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}`, cursor: 'pointer', '&:hover': { borderColor: theme.palette.warning.main, boxShadow: `0 0 0 1px ${theme.palette.warning.main}` } }} onClick={() => navigate('/finance/approvals')}>
               <CardContent sx={{ p: 2.5 }}>
@@ -433,6 +447,91 @@ const DashboardPage: React.FC = () => {
         </Grid>
       </Grid>
 
+      {/* Procurement KPI Cards */}
+      <Typography variant="subtitle2" color="text.secondary" fontWeight={600} textTransform="uppercase" letterSpacing={1} sx={{ mb: 1.5 }}>
+        Procurement Overview
+      </Typography>
+      <Grid container spacing={2.5} sx={{ mb: 3 }}>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}`, cursor: 'pointer', '&:hover': { borderColor: '#1565c0', boxShadow: `0 0 0 1px #1565c0` } }} onClick={() => navigate('/procurement/requests')}>
+            <CardContent sx={{ p: 2.5 }}>
+              <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                <Box>
+                  <Typography variant="caption" color="text.secondary" fontWeight={500} textTransform="uppercase" letterSpacing={0.5}>
+                    Purchase Requests
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} sx={{ mt: 0.5 }}>
+                    {procStats.total}
+                  </Typography>
+                </Box>
+                <Avatar sx={{ bgcolor: alpha('#1565c0', 0.1), color: '#1565c0', width: 44, height: 44 }}>
+                  <ProcurementIcon />
+                </Avatar>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}`, cursor: 'pointer', '&:hover': { borderColor: theme.palette.warning.main, boxShadow: `0 0 0 1px ${theme.palette.warning.main}` } }} onClick={() => navigate('/procurement/approvals')}>
+            <CardContent sx={{ p: 2.5 }}>
+              <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                <Box>
+                  <Typography variant="caption" color="text.secondary" fontWeight={500} textTransform="uppercase" letterSpacing={0.5}>
+                    Pending Approvals
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} color="warning.main" sx={{ mt: 0.5 }}>
+                    {procStats.pending}
+                  </Typography>
+                </Box>
+                <Avatar sx={{ bgcolor: alpha(theme.palette.warning.main, 0.1), color: 'warning.main', width: 44, height: 44 }}>
+                  <PendingIcon />
+                </Avatar>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}`, cursor: 'pointer', '&:hover': { borderColor: theme.palette.success.main, boxShadow: `0 0 0 1px ${theme.palette.success.main}` } }} onClick={() => navigate('/procurement/requests')}>            <CardContent sx={{ p: 2.5 }}>
+              <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                <Box>
+                  <Typography variant="caption" color="text.secondary" fontWeight={500} textTransform="uppercase" letterSpacing={0.5}>
+                    Approved
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} color="success.main" sx={{ mt: 0.5 }}>
+                    {procStats.approved}
+                  </Typography>
+                </Box>
+                <Avatar sx={{ bgcolor: alpha(theme.palette.success.main, 0.1), color: 'success.main', width: 44, height: 44 }}>
+                  <ApprovedIcon />
+                </Avatar>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}`, cursor: 'pointer', '&:hover': { borderColor: '#c62828', boxShadow: `0 0 0 1px #c62828` } }} onClick={() => navigate('/procurement/requests')}>
+            <CardContent sx={{ p: 2.5 }}>
+              <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                <Box>
+                  <Typography variant="caption" color="text.secondary" fontWeight={500} textTransform="uppercase" letterSpacing={0.5}>
+                    Rejected
+                  </Typography>
+                  <Typography variant="h4" fontWeight={700} color="error.main" sx={{ mt: 0.5 }}>
+                    {procStats.rejected}
+                  </Typography>
+                </Box>
+                <Avatar sx={{ bgcolor: alpha('#c62828', 0.1), color: '#c62828', width: 44, height: 44 }}>
+                  <RejectedIcon />
+                </Avatar>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+
       {/* Module Quick Access */}
       <Typography variant="subtitle2" color="text.secondary" fontWeight={600} textTransform="uppercase" letterSpacing={1} sx={{ mb: 1.5 }}>
         System Modules
@@ -488,25 +587,25 @@ const DashboardPage: React.FC = () => {
       </Grid>
 
       {/* Bottom Row */}
-      <Grid container spacing={3}>
+      <Grid container spacing={2}>
         {/* Request Status Chart */}
         <Grid item xs={12} md={4}>
-          <Paper elevation={0} sx={{ p: 3, height: '100%', border: `1px solid ${theme.palette.divider}` }}>
-            <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+          <Paper elevation={0} sx={{ p: 2, border: `1px solid ${theme.palette.divider}` }}>
+            <Typography variant="subtitle2" fontWeight={600} gutterBottom>
               Request Overview
             </Typography>
-            <Divider sx={{ mb: 2 }} />
+            <Divider sx={{ mb: 1 }} />
             {pieData.length > 0 ? (
-              <Box height={200}>
+              <Box height={150}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
                       data={pieData}
                       cx="50%"
                       cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
-                      paddingAngle={5}
+                      innerRadius={38}
+                      outerRadius={60}
+                      paddingAngle={4}
                       dataKey="value"
                     >
                       {pieData.map((_entry, index) => (
@@ -518,15 +617,14 @@ const DashboardPage: React.FC = () => {
                 </ResponsiveContainer>
               </Box>
             ) : (
-              <Box display="flex" justifyContent="center" alignItems="center" height={200}>
-                <Typography color="text.secondary">No data yet</Typography>
+              <Box display="flex" justifyContent="center" alignItems="center" height={150}>
+                <Typography variant="caption" color="text.secondary">No data yet</Typography>
               </Box>
             )}
-            {/* Legend */}
-            <Box display="flex" justifyContent="center" gap={2} mt={1}>
+            <Box display="flex" justifyContent="center" flexWrap="wrap" gap={1.5} mt={0.5}>
               {pieData.map((entry, index) => (
                 <Box key={entry.name} display="flex" alignItems="center" gap={0.5}>
-                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: COLORS[index] }} />
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: COLORS[index], flexShrink: 0 }} />
                   <Typography variant="caption">{entry.name}: {entry.value}</Typography>
                 </Box>
               ))}
@@ -536,59 +634,48 @@ const DashboardPage: React.FC = () => {
 
         {/* Recent Activity */}
         <Grid item xs={12} md={4}>
-          <Paper elevation={0} sx={{ p: 3, height: '100%', border: `1px solid ${theme.palette.divider}` }}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-              <Typography variant="subtitle1" fontWeight={600}>
+          <Paper elevation={0} sx={{ p: 2, border: `1px solid ${theme.palette.divider}` }}>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.5}>
+              <Typography variant="subtitle2" fontWeight={600}>
                 Recent Requests
               </Typography>
-              <Button size="small" endIcon={<ArrowForwardIcon />} onClick={() => navigate('/finance/requests')}>
+              <Button size="small" endIcon={<ArrowForwardIcon />} onClick={() => navigate('/finance/requests')} sx={{ fontSize: '0.7rem', py: 0 }}>
                 View All
               </Button>
             </Box>
-            <Divider sx={{ mb: 1 }} />
+            <Divider sx={{ mb: 0.5 }} />
             {recentRequests.length === 0 ? (
-              <Box display="flex" flexDirection="column" alignItems="center" justifyContent="center" py={4}>
-                <RequestIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
-                <Typography color="text.secondary">No requests yet</Typography>
+              <Box display="flex" flexDirection="column" alignItems="center" justifyContent="center" py={3}>
+                <RequestIcon sx={{ fontSize: 32, color: 'text.disabled', mb: 0.5 }} />
+                <Typography variant="caption" color="text.secondary">No requests yet</Typography>
               </Box>
             ) : (
-              <List disablePadding>
-                {recentRequests.map((request, index) => (
+              <List disablePadding dense>
+                {recentRequests.slice(0, 4).map((request, index) => (
                   <React.Fragment key={request.id}>
                     <ListItem
-                      sx={{
-                        px: 1,
-                        py: 1,
-                        cursor: 'pointer',
-                        borderRadius: 1,
-                        '&:hover': { backgroundColor: 'grey.50' }
-                      }}
+                      sx={{ px: 0.5, py: 0.5, cursor: 'pointer', borderRadius: 1, '&:hover': { backgroundColor: 'grey.50' } }}
                       onClick={() => navigate(`/finance/requests/${request.id}`)}
                     >
-                      <ListItemAvatar sx={{ minWidth: 40 }}>
-                        <Avatar sx={{ width: 32, height: 32, bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.main' }}>
-                          <RequestIcon sx={{ fontSize: 16 }} />
+                      <ListItemAvatar sx={{ minWidth: 32 }}>
+                        <Avatar sx={{ width: 24, height: 24, bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.main' }}>
+                          <RequestIcon sx={{ fontSize: 12 }} />
                         </Avatar>
                       </ListItemAvatar>
                       <ListItemText
                         primary={
-                          <Box display="flex" alignItems="center" gap={1}>
-                            <Typography variant="body2" fontWeight={600}>
+                          <Box display="flex" alignItems="center" gap={0.5}>
+                            <Typography variant="caption" fontWeight={600} noWrap sx={{ maxWidth: 90 }}>
                               {request.request_code}
                             </Typography>
-                            <Chip
-                              label={request.status.replace(/_/g, ' ')}
-                              size="small"
-                              color={getStatusColor(request.status)}
-                              sx={{ height: 20, fontSize: '0.65rem' }}
-                            />
+                            <Chip label={request.status.replace(/_/g, ' ')} size="small" color={getStatusColor(request.status)} sx={{ height: 16, fontSize: '0.6rem' }} />
                           </Box>
                         }
                         secondary={`$${Number(request.total_amount || 0).toLocaleString()} • ${request.department_name}`}
-                        secondaryTypographyProps={{ fontSize: '0.75rem' }}
+                        secondaryTypographyProps={{ fontSize: '0.68rem' }}
                       />
                     </ListItem>
-                    {index < recentRequests.length - 1 && <Divider variant="inset" component="li" />}
+                    {index < Math.min(recentRequests.length, 4) - 1 && <Divider variant="inset" component="li" />}
                   </React.Fragment>
                 ))}
               </List>
@@ -598,21 +685,21 @@ const DashboardPage: React.FC = () => {
 
         {/* Budget Alerts & Quick Actions */}
         <Grid item xs={12} md={4}>
-          <Paper elevation={0} sx={{ p: 3, height: '100%', border: `1px solid ${theme.palette.divider}` }}>
-            <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+          <Paper elevation={0} sx={{ p: 2, border: `1px solid ${theme.palette.divider}` }}>
+            <Typography variant="subtitle2" fontWeight={600} gutterBottom>
               Alerts & Quick Actions
             </Typography>
-            <Divider sx={{ mb: 2 }} />
+            <Divider sx={{ mb: 1 }} />
 
             {/* Low Budget Alerts */}
             {lowBudgets.length > 0 && (
-              <Box sx={{ mb: 2, p: 2, bgcolor: alpha(theme.palette.warning.main, 0.05), borderRadius: 1.5, border: `1px solid ${alpha(theme.palette.warning.main, 0.2)}` }}>
-                <Box display="flex" alignItems="center" gap={1} mb={1}>
-                  <WarningIcon color="warning" fontSize="small" />
-                  <Typography variant="subtitle2" color="warning.dark">Low Budget Alerts</Typography>
+              <Box sx={{ mb: 1.5, p: 1.5, bgcolor: alpha(theme.palette.warning.main, 0.05), borderRadius: 1, border: `1px solid ${alpha(theme.palette.warning.main, 0.2)}` }}>
+                <Box display="flex" alignItems="center" gap={0.5} mb={0.5}>
+                  <WarningIcon color="warning" sx={{ fontSize: 16 }} />
+                  <Typography variant="caption" fontWeight={600} color="warning.dark">Low Budget Alerts</Typography>
                 </Box>
                 {lowBudgets.slice(0, 3).map((budget) => (
-                  <Box key={budget.id} display="flex" justifyContent="space-between" alignItems="center" py={0.5}>
+                  <Box key={budget.id} display="flex" justifyContent="space-between" alignItems="center" py={0.25}>
                     <Typography variant="caption" fontWeight={500}>{budget.budget_code}</Typography>
                     <Typography variant="caption" color="error">${Number(budget.balance || 0).toLocaleString()} left</Typography>
                   </Box>
@@ -621,50 +708,22 @@ const DashboardPage: React.FC = () => {
             )}
 
             {/* Quick Actions */}
-            <Box display="flex" flexDirection="column" gap={1.5}>
+            <Box display="flex" flexDirection="column" gap={1}>
               {hasRole('GENERAL_USER') && (
-                <Button
-                  variant="outlined"
-                  startIcon={<AddIcon />}
-                  fullWidth
-                  size="small"
-                  onClick={() => navigate('/finance/requests/create')}
-                  sx={{ justifyContent: 'flex-start' }}
-                >
+                <Button variant="outlined" startIcon={<AddIcon />} fullWidth size="small" onClick={() => navigate('/finance/requests/create')} sx={{ justifyContent: 'flex-start', py: 0.5 }}>
                   Create Float Request
                 </Button>
               )}
               {hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && (
-                <Button
-                  variant="outlined"
-                  startIcon={<PendingIcon />}
-                  fullWidth
-                  size="small"
-                  onClick={() => navigate('/finance/approvals')}
-                  sx={{ justifyContent: 'flex-start' }}
-                >
+                <Button variant="outlined" startIcon={<PendingIcon />} fullWidth size="small" onClick={() => navigate('/finance/approvals')} sx={{ justifyContent: 'flex-start', py: 0.5 }}>
                   Review Approvals ({stats.pendingApprovals})
                 </Button>
               )}
-              <Button
-                variant="outlined"
-                startIcon={<BudgetIcon />}
-                fullWidth
-                size="small"
-                onClick={() => navigate('/finance/budgets')}
-                sx={{ justifyContent: 'flex-start' }}
-              >
+              <Button variant="outlined" startIcon={<BudgetIcon />} fullWidth size="small" onClick={() => navigate('/finance/budgets')} sx={{ justifyContent: 'flex-start', py: 0.5 }}>
                 View Budget Lines
               </Button>
               {hasRole('FINANCE_CLERK') && (
-                <Button
-                  variant="outlined"
-                  startIcon={<DispatchIcon />}
-                  fullWidth
-                  size="small"
-                  onClick={() => navigate('/finance/dispatch')}
-                  sx={{ justifyContent: 'flex-start' }}
-                >
+                <Button variant="outlined" startIcon={<DispatchIcon />} fullWidth size="small" onClick={() => navigate('/finance/dispatch')} sx={{ justifyContent: 'flex-start', py: 0.5 }}>
                   Dispatch Desk
                 </Button>
               )}

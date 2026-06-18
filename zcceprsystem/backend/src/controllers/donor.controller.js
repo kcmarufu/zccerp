@@ -1,4 +1,12 @@
 const { query, transaction } = require('../config/database');
+const { ROLES, isFinanceManager } = require('../config/roles');
+
+// Non-Finance-Manager HOPs/LEADs only see donors that have at least one
+// budget line in their own department. Finance Managers and Finance Clerks
+// see all donors (global view). General users also see all for dropdown usage.
+const needsDonorDeptFilter = (user) =>
+  [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role) &&
+  !isFinanceManager(user);
 
 /**
  * Get all donors
@@ -10,6 +18,13 @@ exports.getAllDonors = async (req, res) => {
     let whereClause = '1=1';
     const params = [];
     
+    // Non-Finance HOPs/LEADs: limit to donors with budget lines in their dept
+    // Always include the Admin partner (donor_type = 'ADMIN') regardless
+    if (needsDonorDeptFilter(req.user)) {
+      whereClause += ' AND (EXISTS (SELECT 1 FROM budget_lines bl WHERE bl.donor_id = d.id AND bl.department_id = ?) OR d.donor_type = \'ADMIN\')';
+      params.push(req.user.department_id);
+    }
+
     if (fiscal_year) {
       whereClause += ' AND d.fiscal_year = ?';
       params.push(parseInt(fiscal_year));
@@ -40,7 +55,7 @@ exports.getAllDonors = async (req, res) => {
     res.json(donors);
   } catch (error) {
     console.error('Error fetching donors:', error);
-    res.status(500).json({ error: 'Failed to fetch donors' });
+    res.status(500).json({ error: 'Failed to fetch partners' });
   }
 };
 
@@ -63,11 +78,11 @@ exports.getDonorById = async (req, res) => {
     );
     
     if (donorResult.length === 0) {
-      return res.status(404).json({ error: 'Donor not found' });
+      return res.status(404).json({ error: 'Partner not found' });
     }
-    
+
     const donor = donorResult[0];
-    
+
     // Get budget lines
     const budgetLines = await query(
       `SELECT bl.*,
@@ -97,7 +112,7 @@ exports.getDonorById = async (req, res) => {
     res.json(donor);
   } catch (error) {
     console.error('Error fetching donor:', error);
-    res.status(500).json({ error: 'Failed to fetch donor' });
+    res.status(500).json({ error: 'Failed to fetch partner' });
   }
 };
 
@@ -130,7 +145,7 @@ exports.getNextDonorCode = async (req, res) => {
     res.json({ donor_code: donorCode });
   } catch (error) {
     console.error('Error generating donor code:', error);
-    res.status(500).json({ error: 'Failed to generate donor code' });
+    res.status(500).json({ error: 'Failed to generate partner code' });
   }
 };
 
@@ -141,6 +156,7 @@ exports.createDonor = async (req, res) => {
   try {
     const userId = req.user.id;
     const {
+      donor_code,
       donor_name,
       donor_type,
       contact_person,
@@ -157,14 +173,24 @@ exports.createDonor = async (req, res) => {
       restrictions,
       notes
     } = req.body;
-    
-    // Auto-generate donor code
-    const donor_code = await generateDonorCode();
-    
+
+    // Manual partner code entry (required, must be unique)
+    const code = (donor_code || '').trim();
+    if (!code) {
+      return res.status(400).json({ error: 'Partner code is required' });
+    }
+    if (code.length > 50) {
+      return res.status(400).json({ error: 'Partner code must be 50 characters or fewer' });
+    }
+    const existing = await query('SELECT id FROM donors WHERE donor_code = ? LIMIT 1', [code]);
+    if (existing.length > 0) {
+      return res.status(409).json({ error: `Partner code "${code}" is already in use` });
+    }
+
     // Convert empty strings to null for date fields
     const startDate = agreement_start_date && agreement_start_date !== '' ? agreement_start_date : null;
     const endDate = agreement_end_date && agreement_end_date !== '' ? agreement_end_date : null;
-    
+
     const result = await query(
       `INSERT INTO donors (
         donor_code, donor_name, donor_type, contact_person, email, phone,
@@ -173,7 +199,7 @@ exports.createDonor = async (req, res) => {
         restrictions, notes, created_by, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
-        donor_code, donor_name, donor_type,
+        code, donor_name, donor_type,
         contact_person || null, email || null, phone || null,
         address || null, country || null, total_committed || 0,
         currency_code || 'USD', fiscal_year, agreement_reference || null,
@@ -181,7 +207,7 @@ exports.createDonor = async (req, res) => {
         restrictions || null, notes || null, userId
       ]
     );
-    
+
     const newDonor = await query(
       `SELECT d.*,
               u.first_name as creator_first_name,
@@ -196,7 +222,7 @@ exports.createDonor = async (req, res) => {
     res.status(201).json(newDonor[0]);
   } catch (error) {
     console.error('Error creating donor:', error);
-    res.status(500).json({ error: 'Failed to create donor' });
+    res.status(500).json({ error: 'Failed to create partner' });
   }
 };
 
@@ -215,9 +241,9 @@ exports.updateDonor = async (req, res) => {
     );
     
     if (existing.length === 0) {
-      return res.status(404).json({ error: 'Donor not found' });
+      return res.status(404).json({ error: 'Partner not found' });
     }
-    
+
     // If updating donor_code, check for uniqueness
     if (updates.donor_code && updates.donor_code !== existing[0].donor_code) {
       const codeExists = await query(
@@ -226,7 +252,7 @@ exports.updateDonor = async (req, res) => {
       );
       
       if (codeExists.length > 0) {
-        return res.status(400).json({ error: 'Donor code already exists' });
+        return res.status(400).json({ error: 'Partner code already exists' });
       }
     }
     
@@ -273,7 +299,35 @@ exports.updateDonor = async (req, res) => {
     res.json(updated[0]);
   } catch (error) {
     console.error('Error updating donor:', error);
-    res.status(500).json({ error: 'Failed to update donor' });
+    res.status(500).json({ error: 'Failed to update partner' });
+  }
+};
+
+/**
+ * Activate donor (Finance Clerk only)
+ */
+exports.activateDonor = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await query(
+      'UPDATE donors SET is_active = 1, updated_at = NOW() WHERE id = ?',
+      [parseInt(id)]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Partner not found' });
+    }
+
+    const donor = await query(
+      'SELECT * FROM donors WHERE id = ?',
+      [parseInt(id)]
+    );
+
+    res.json({ message: 'Partner activated successfully', donor: donor[0] });
+  } catch (error) {
+    console.error('Error activating donor:', error);
+    res.status(500).json({ error: 'Failed to activate partner' });
   }
 };
 
@@ -290,24 +344,26 @@ exports.deactivateDonor = async (req, res) => {
     );
     
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Donor not found' });
+      return res.status(404).json({ error: 'Partner not found' });
     }
-    
+
     const donor = await query(
       'SELECT * FROM donors WHERE id = ?',
       [parseInt(id)]
     );
-    
-    res.json({ message: 'Donor deactivated successfully', donor: donor[0] });
+
+    res.json({ message: 'Partner deactivated successfully', donor: donor[0] });
   } catch (error) {
     console.error('Error deactivating donor:', error);
-    res.status(500).json({ error: 'Failed to deactivate donor' });
+    res.status(500).json({ error: 'Failed to deactivate partner' });
   }
 };
 
 /**
- * Delete donor permanently (Finance Clerk only)
- * Only allowed if donor has no budget lines or requests
+ * Soft-delete a partner (archive).
+ * Sets is_active = 0 on the donor and all its projects + budget lines.
+ * NO transaction records, requests, or FK references are removed.
+ * Historical financial data remains fully intact and viewable in reports.
  */
 exports.deleteDonor = async (req, res) => {
   try {
@@ -317,33 +373,19 @@ exports.deleteDonor = async (req, res) => {
     // Check donor exists
     const existing = await query('SELECT * FROM donors WHERE id = ?', [donorId]);
     if (existing.length === 0) {
-      return res.status(404).json({ error: 'Donor not found' });
+      return res.status(404).json({ error: 'Partner not found' });
     }
 
-    // Check for linked budget lines
-    const budgetLines = await query('SELECT COUNT(*) as count FROM budget_lines WHERE donor_id = ?', [donorId]);
-    if (budgetLines[0].count > 0) {
-      return res.status(400).json({ 
-        error: `Cannot delete donor with ${budgetLines[0].count} linked budget line(s). Delete the budget lines first or deactivate the donor instead.` 
-      });
-    }
+    // Archive (soft delete) the donor and all its projects + budget lines.
+    // All FK references (budget_transactions, donor_transactions, requests, etc.) stay intact.
+    await query('UPDATE donors SET is_active = 0, updated_at = NOW() WHERE id = ?', [donorId]);
+    await query('UPDATE projects SET is_active = 0, updated_at = NOW() WHERE donor_id = ?', [donorId]);
+    await query('UPDATE budget_lines SET is_active = 0, updated_at = NOW() WHERE donor_id = ?', [donorId]);
 
-    // Check for linked requests
-    const requests = await query('SELECT COUNT(*) as count FROM requests WHERE donor_id = ?', [donorId]);
-    if (requests[0].count > 0) {
-      return res.status(400).json({ 
-        error: `Cannot delete donor with ${requests[0].count} linked request(s). Deactivate the donor instead.` 
-      });
-    }
-
-    // Safe to delete
-    await query('DELETE FROM donor_transactions WHERE donor_id = ?', [donorId]);
-    await query('DELETE FROM donors WHERE id = ?', [donorId]);
-
-    res.json({ message: 'Donor deleted successfully' });
+    res.json({ message: 'Partner archived successfully. All transaction history has been preserved.' });
   } catch (error) {
     console.error('Error deleting donor:', error);
-    res.status(500).json({ error: 'Failed to delete donor' });
+    res.status(500).json({ error: 'Failed to archive partner' });
   }
 };
 
@@ -370,7 +412,7 @@ exports.addFunds = async (req, res) => {
       );
 
       if (donors.length === 0) {
-        throw new Error('Donor not found');
+        throw new Error('Partner not found');
       }
 
       const currentCommitted = parseFloat(donors[0].total_committed);
@@ -398,7 +440,7 @@ exports.addFunds = async (req, res) => {
     });
   } catch (error) {
     console.error('Error adding funds:', error);
-    res.status(error.message === 'Donor not found' ? 404 : 500).json({ 
+    res.status(error.message === 'Partner not found' ? 404 : 500).json({
       error: error.message || 'Failed to add funds' 
     });
   }
@@ -427,7 +469,7 @@ exports.removeFunds = async (req, res) => {
       );
 
       if (donors.length === 0) {
-        throw new Error('Donor not found');
+        throw new Error('Partner not found');
       }
 
       const currentCommitted = parseFloat(donors[0].total_committed);
@@ -546,11 +588,11 @@ exports.getDonorStats = async (req, res) => {
     );
     
     if (donorResult.length === 0) {
-      return res.status(404).json({ error: 'Donor not found' });
+      return res.status(404).json({ error: 'Partner not found' });
     }
-    
+
     const donor = donorResult[0];
-    
+
     // Get budget lines summary
     const budgetSummary = await query(
       `SELECT 
@@ -605,6 +647,6 @@ exports.getDonorStats = async (req, res) => {
     res.json(stats);
   } catch (error) {
     console.error('Error fetching donor stats:', error);
-    res.status(500).json({ error: 'Failed to fetch donor statistics' });
+    res.status(500).json({ error: 'Failed to fetch partner statistics' });
   }
 };

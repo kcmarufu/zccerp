@@ -11,6 +11,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { testConnection, logger } = require('./config/database');
 const routes = require('./routes');
+const leaveAccrualScheduler = require('./scheduler/leaveAccrual.scheduler');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -116,6 +117,9 @@ const startServer = async () => {
 ║  Database: Connected                                          ║
 ╚═══════════════════════════════════════════════════════════════╝
       `);
+
+      // Start leave accrual scheduler (fires monthly on the 25th)
+      leaveAccrualScheduler.start();
     });
   } catch (error) {
     logger.error('Failed to start server:', error);

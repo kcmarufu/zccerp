@@ -19,8 +19,8 @@ import {
 
 const features = [
   {
-    title: 'Donor Database',
-    description: 'Complete donor profiles: contact info, funding history, conditions, restrictions, and communications',
+    title: 'Partner Database',
+    description: 'Complete partner profiles: contact info, funding history, conditions, restrictions, and communications',
     icon: <DonorDBIcon />,
     color: '#1976d2'
   },
@@ -38,20 +38,20 @@ const features = [
   },
   {
     title: 'Restricted Funds',
-    description: 'Separate restricted vs unrestricted funds to ensure donor funds are used as designated',
+    description: 'Separate restricted vs unrestricted funds to ensure partner funds are used as designated',
     icon: <RestrictedIcon />,
     color: '#d32f2f'
   },
   {
-    title: 'Donor Reporting',
-    description: 'Automated financial and activity reports to donors with customizable templates per funder',
+    title: 'Partner Reporting',
+    description: 'Automated financial and activity reports to partners with customizable templates per funder',
     icon: <ReportIcon />,
     color: '#9c27b0'
   }
 ];
 
 const plannedCapabilities = [
-  'Donor relationship management (DRM)',
+  'Partner relationship management (PRM)',
   'Grant proposal tracking pipeline',
   'Grant agreement repository',
   'Multi-currency fund tracking',
@@ -59,12 +59,12 @@ const plannedCapabilities = [
   'Indirect cost rate application',
   'Restricted vs unrestricted fund segregation',
   'Fund balance alerts & warnings',
-  'Donor compliance tracking',
+  'Partner compliance tracking',
   'Grant financial report generation',
-  'Activity-based donor reporting',
+  'Activity-based partner reporting',
   'Grant closeout procedures',
   'Co-funding & match tracking',
-  'Donor communication log',
+  'Partner communication log',
   'Grant modificat & amendments',
   'Budget vs actual per grant'
 ];
@@ -85,9 +85,9 @@ const GrantDonorPage: React.FC = () => {
         <Box display="flex" alignItems="center" gap={2}>
           <GrantIcon sx={{ fontSize: 36 }} />
           <Box>
-            <Typography variant="h5" fontWeight={600}>Grant & Donor Management</Typography>
+            <Typography variant="h5" fontWeight={600}>Grant & Partner Management</Typography>
             <Typography variant="body2" sx={{ opacity: 0.85 }}>
-              Comprehensive donor tracking, grant lifecycle management, restricted funds, and donor reporting
+              Comprehensive partner tracking, grant lifecycle management, restricted funds, and partner reporting
             </Typography>
           </Box>
           <Chip label="Coming Soon" sx={{ ml: 'auto', bgcolor: 'rgba(255,255,255,0.2)', color: 'white', fontWeight: 600 }} />
@@ -97,8 +97,8 @@ const GrantDonorPage: React.FC = () => {
       <Alert severity="info" icon={<StarIcon />} sx={{ mb: 3 }}>
         <Typography variant="subtitle2" fontWeight={600}>Key NGO Differentiator</Typography>
         <Typography variant="body2">
-          This is what differentiates an NGO ERP from a normal business ERP. Grant & donor management ensures
-          compliance with donor requirements, proper fund segregation, and transparent financial reporting to funders.
+          This is what differentiates an NGO ERP from a normal business ERP. Grant & partner management ensures
+          compliance with partner requirements, proper fund segregation, and transparent financial reporting to funders.
         </Typography>
       </Alert>
 
