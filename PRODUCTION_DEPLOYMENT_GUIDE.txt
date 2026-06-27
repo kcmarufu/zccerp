@@ -1,0 +1,521 @@
+================================================================================
+  ZCC ERP SYSTEM — PRODUCTION DEPLOYMENT GUIDE
+  DigitalOcean + Hostinger Domain + GitHub CI/CD
+  Version: 1.0  |  Last Updated: June 2026
+================================================================================
+
+OVERVIEW
+--------
+This guide deploys the ZCC ERP system so that:
+  - The application is live at your domain (e.g. erp.zccin.org)
+  - Every "git push" to the main branch automatically deploys to the server
+  - Existing data (users, budgets, records, uploads) is NEVER overwritten
+  - SSL is active via Let's Encrypt (auto-renews)
+  - Daily backups run automatically at 02:00 server time
+
+Files that were added to the project for deployment:
+  .github/workflows/deploy.yml         <- GitHub Actions pipeline
+  zcceprsystem/backend/scripts/migrate.js      <- Safe migration runner
+  zcceprsystem/backend/ecosystem.config.js     <- PM2 process config
+  zcceprsystem/deploy/nginx.conf               <- Nginx web server config
+  zcceprsystem/deploy/setup-server.sh          <- One-time server setup
+  zcceprsystem/deploy/deploy.sh                <- Automated deploy script
+  zcceprsystem/deploy/backup.sh                <- Daily backup script
+
+Time required for first setup: approximately 45 - 60 minutes.
+After setup, every deployment takes 3 - 5 minutes automatically.
+
+================================================================================
+PART A — BEFORE YOU TOUCH THE SERVER (Do this on your local Windows machine)
+================================================================================
+
+STEP A1 — Push the project to GitHub
+--------------------------------------
+Your project must be in a GitHub repository before the server can pull it.
+
+Open PowerShell in your project root folder and run:
+
+  git init
+  git add .
+  git commit -m "initial production setup"
+
+Now go to github.com, sign in, and create a new repository.
+Do NOT tick "Add README" or "Add .gitignore" — leave it completely empty.
+
+After creating the repository, GitHub will show you a page with setup commands.
+Copy the remote URL (it looks like: https://github.com/YourName/YourRepo.git)
+
+Back in PowerShell, run these (replace the URL with your actual repository URL):
+
+  git remote add origin https://github.com/YourName/YourRepo.git
+  git branch -M main
+  git push -u origin main
+
+Confirm the files appear on github.com before continuing.
+
+
+STEP A2 — Generate an SSH key pair for GitHub Actions
+------------------------------------------------------
+This key lets GitHub Actions log into your server automatically.
+Generate it on your local machine (not the server).
+
+Open PowerShell and run:
+
+  ssh-keygen -t ed25519 -C "github-actions-deploy" -f deploy_key -N ""
+
+This creates two files in the current folder:
+  deploy_key        <- PRIVATE key  (goes to GitHub as a secret)
+  deploy_key.pub    <- PUBLIC key   (goes to the server)
+
+Open deploy_key (the private key, no extension) in Notepad and copy ALL its
+contents. You will paste this into GitHub in Step B3.
+
+Open deploy_key.pub in Notepad and copy its contents. You will paste this
+into the server in Step C2.
+
+KEEP BOTH FILES. Store them somewhere safe (e.g. a password manager).
+Do NOT commit these files to git.
+
+================================================================================
+PART B — DIGITALOCEAN DROPLET SETUP
+================================================================================
+
+STEP B1 — Create the Droplet
+------------------------------
+1. Log in to digitalocean.com
+2. Click "Create" then "Droplets"
+3. Choose these settings:
+     Region:      Choose the nearest to Zimbabwe (London or Amsterdam)
+     Image:       Ubuntu 22.04 LTS  (IMPORTANT: must be 22.04, not 24.04)
+     Size:        2 vCPU / 4 GB RAM / 80 GB SSD  (minimum; 4 GB recommended)
+     Authentication: SSH Key — add your own personal SSH public key so YOU
+                     can log in as root initially
+4. Click "Create Droplet"
+5. Wait 60 seconds for it to start
+6. Copy the Droplet's IP address (e.g. 157.230.45.12)
+
+
+STEP B2 — Point your Hostinger domain to the Droplet
+-----------------------------------------------------
+Log in to hpanel.hostinger.com
+Go to Domains -> Your Domain -> DNS / Nameservers -> DNS Records
+
+Add or edit an A record:
+  Type:  A
+  Name:  erp          (this creates erp.yourdomain.com)
+         OR use @     (this points the root domain, e.g. yourdomain.com)
+  Value: 157.230.45.12   (your actual Droplet IP)
+  TTL:   300
+
+DNS changes can take 15 - 60 minutes to spread globally.
+You can test by running this in PowerShell (replace the domain):
+  nslookup erp.yourdomain.com
+
+When it returns your Droplet IP, DNS is ready.
+
+
+STEP B3 — Add GitHub Secrets
+------------------------------
+Go to your GitHub repository -> Settings -> Secrets and variables -> Actions
+Click "New repository secret" and add these three secrets:
+
+  Secret name: DO_HOST
+  Secret value: 157.230.45.12        (your actual Droplet IP address)
+
+  Secret name: DO_USER
+  Secret value: deploy               (exactly this, lowercase — the deploy user)
+
+  Secret name: DO_SSH_KEY
+  Secret value: paste the ENTIRE contents of your deploy_key file (private key)
+                It starts with: -----BEGIN OPENSSH PRIVATE KEY-----
+                Include the BEGIN and END lines
+
+These three secrets are all that GitHub Actions needs.
+
+================================================================================
+PART C — SERVER PROVISIONING (Run these commands on the Droplet)
+================================================================================
+
+STEP C1 — Connect to the server as root
+-----------------------------------------
+From PowerShell on your Windows machine:
+
+  ssh root@157.230.45.12
+
+Accept the fingerprint prompt by typing "yes" and pressing Enter.
+You are now inside the server.
+
+
+STEP C2 — Run the automated setup script
+------------------------------------------
+This single command installs everything: Node.js, MySQL, Nginx, PM2, firewall,
+the deploy user, the directory structure, and the environment files.
+
+Replace erp.yourdomain.com with your actual domain.
+Replace the GitHub URL with your actual repository URL.
+
+  bash <(curl -fsSL https://raw.githubusercontent.com/YourName/YourRepo/main/zcceprsystem/deploy/setup-server.sh) \
+    erp.yourdomain.com \
+    https://github.com/YourName/YourRepo.git
+
+The script will run for approximately 5 - 10 minutes.
+
+IMPORTANT: Near the end, it will print a box like this:
+  ═══ SAVE THESE CREDENTIALS ═══
+  DB_NAME=finance_erp
+  DB_USER=zccapp
+  DB_PASS=AbCdEf123...
+  ═══════════════════════════════
+
+COPY AND SAVE THAT PASSWORD IMMEDIATELY. You will need it in Step C4.
+It is also automatically written to /var/www/zcc-erp/shared/.env on the server.
+
+
+STEP C3 — Install the GitHub Actions deploy public key on the server
+---------------------------------------------------------------------
+While still logged in as root, switch to the deploy user:
+
+  su - deploy
+
+Open the authorized_keys file:
+
+  nano /home/deploy/.ssh/authorized_keys
+
+Paste the contents of your deploy_key.pub file (the PUBLIC key you generated
+in Step A2). It is a single long line starting with "ssh-ed25519".
+
+Save and exit: press Ctrl+X, then Y, then Enter.
+
+Switch back to root:
+
+  exit
+
+
+STEP C4 — Import your existing production database
+----------------------------------------------------
+You need to export your current database from your development machine and
+import it to the server. This preserves all your users, budgets, and records.
+
+On your local Windows machine, open PowerShell and run:
+  mysqldump -u root -p finance_erp > zcc_production_backup.sql
+
+This creates a file called zcc_production_backup.sql in your current folder.
+
+Now upload it to the server (still in PowerShell, replace the IP):
+  scp zcc_production_backup.sql root@157.230.45.12:/tmp/
+
+Back on the server (SSH in as root), import the database:
+  mysql -u zccapp -p finance_erp < /tmp/zcc_production_backup.sql
+
+When prompted for password, enter the DB_PASS that was shown in Step C2.
+
+After the import, verify it worked:
+  mysql -u zccapp -p finance_erp -e "SELECT COUNT(*) FROM users;"
+
+You should see a number greater than zero.
+
+Clean up the temporary file:
+  rm /tmp/zcc_production_backup.sql
+
+
+STEP C5 — Mark all existing migrations as already applied
+----------------------------------------------------------
+CRITICAL STEP. This tells the migration runner that all existing SQL files
+have already been applied to your imported database.
+If you skip this step, the deploy script will try to re-run all old SQL files
+on your production database, which may cause errors.
+
+  cd /var/www/zcc-erp/app/zcceprsystem/backend
+  npm install --omit=dev
+  npm run migrate:mark-all
+
+You should see output listing all SQL files in the database/ folder, each
+marked as [MARKED]. No SQL is actually executed in this step.
+
+
+STEP C6 — Verify the environment file
+---------------------------------------
+The setup script created the environment file automatically. Verify it:
+
+  cat /var/www/zcc-erp/shared/.env
+
+It should contain:
+  NODE_ENV=production
+  PORT=5000
+  DB_HOST=localhost
+  DB_PORT=3306
+  DB_NAME=finance_erp
+  DB_USER=zccapp
+  DB_PASSWORD=<the password from Step C2>
+  DB_CONNECTION_LIMIT=30
+  JWT_SECRET=<a long random string>
+  JWT_EXPIRES_IN=8h
+  CORS_ORIGIN=https://erp.yourdomain.com
+  UPLOAD_DIR=/var/www/zcc-erp/shared/uploads
+  LOG_LEVEL=warn
+
+If anything looks wrong, edit it:
+  nano /var/www/zcc-erp/shared/.env
+
+Also verify the frontend environment file:
+  cat /var/www/zcc-erp/shared/frontend.env
+
+It should contain:
+  REACT_APP_API_URL=https://erp.yourdomain.com/api
+  GENERATE_SOURCEMAP=false
+
+If the domain is wrong, edit it:
+  nano /var/www/zcc-erp/shared/frontend.env
+
+
+STEP C7 — Install the SSL Certificate
+----------------------------------------
+DNS must be pointing to your server before this step works.
+Test DNS first (run from PowerShell on Windows):
+  nslookup erp.yourdomain.com
+
+When it returns your Droplet IP, run this on the server (replace domain and email):
+
+  certbot --nginx -d erp.yourdomain.com --non-interactive --agree-tos \
+    -m yourname@youremail.com
+
+Certbot will:
+  - Obtain a free SSL certificate from Let's Encrypt
+  - Automatically configure Nginx to use it
+  - Set up auto-renewal (runs twice daily via systemd timer)
+
+Verify Nginx is running correctly:
+  nginx -t
+  systemctl status nginx
+
+================================================================================
+PART D — FIRST DEPLOYMENT AND CI/CD ACTIVATION
+================================================================================
+
+STEP D1 — Run the first manual deploy
+---------------------------------------
+This builds and starts the application for the first time.
+
+Still on the server as root, run:
+
+  sudo -u deploy /var/www/zcc-erp/deploy.sh
+
+Watch the output. It will:
+  1. Pull the latest code from GitHub
+  2. Link the persistent .env and uploads folder
+  3. Install backend dependencies
+  4. Run any pending database migrations
+  5. Build the React frontend
+  6. Start the backend with PM2
+  7. Reload Nginx
+
+Expected ending output:
+  [TIMESTAMP] DEPLOY COMPLETE
+  [TIMESTAMP]   Commit : abc1234 your commit message
+  [TIMESTAMP]   Backend: 2 online instances
+
+If you see "DEPLOY COMPLETE", the application is live.
+
+Open your browser and go to: https://erp.yourdomain.com
+You should see the ZCC ERP login page.
+
+If you see a browser security warning about the certificate, wait a few minutes
+and try again — SSL propagation can take a moment.
+
+
+STEP D2 — Save PM2 process list so it survives server reboots
+--------------------------------------------------------------
+  sudo -u deploy pm2 save
+
+Verify PM2 auto-starts on boot:
+  sudo -u deploy pm2 list
+
+You should see "zcc-erp-api" with status "online".
+
+
+STEP D3 — Test the CI/CD pipeline
+------------------------------------
+The CI/CD pipeline is now fully active. Test it by making any small change
+on your local machine and pushing to GitHub.
+
+Example test on Windows PowerShell (from your project folder):
+
+  echo "# test" >> README.md
+  git add README.md
+  git commit -m "test: verify CI/CD pipeline"
+  git push origin main
+
+Now go to your GitHub repository -> Actions tab.
+You will see a workflow run called "Deploy to Production" start within seconds.
+Click on it to watch the live log.
+
+When it shows a green checkmark, the change is live on your server.
+The full deployment process takes 3 - 5 minutes.
+
+
+================================================================================
+PART E — BACKUP SYSTEM
+================================================================================
+
+The backup script runs automatically every day at 02:00 server time.
+It is installed by the setup script as a cron job for the deploy user.
+
+Backups are stored at:
+  /var/backups/zcc-erp/db/       <- MySQL dumps (.sql.gz files)
+  /var/backups/zcc-erp/uploads/  <- Uploaded files (.tar.gz archives)
+
+Backups older than 30 days are deleted automatically.
+
+To run a backup manually at any time:
+  sudo -u deploy /var/www/zcc-erp/app/zcceprsystem/deploy/backup.sh
+
+To view backup logs:
+  tail -50 /var/www/zcc-erp/shared/logs/backup.log
+
+To restore from a database backup (replace the filename):
+  gunzip -c /var/backups/zcc-erp/db/finance_erp_2026-06-27_02-00-00.sql.gz \
+    | mysql -u zccapp -p finance_erp
+
+================================================================================
+PART F — ONGOING OPERATIONS AND MONITORING
+================================================================================
+
+HOW TO DEPLOY A CODE CHANGE
+-----------------------------
+Make your code changes locally, then:
+  git add .
+  git commit -m "describe your change"
+  git push origin main
+
+GitHub Actions handles everything automatically. No server login needed.
+
+
+HOW TO VIEW APPLICATION LOGS
+------------------------------
+SSH into the server, then:
+
+  # Live application log (Ctrl+C to exit)
+  sudo -u deploy pm2 logs zcc-erp-api
+
+  # Last 100 lines of error log
+  tail -100 /var/www/zcc-erp/shared/logs/pm2-error.log
+
+  # Last 100 lines of access log (all HTTP requests)
+  tail -100 /var/www/zcc-erp/shared/logs/nginx-access.log
+
+  # Last deployment log
+  tail -100 /var/www/zcc-erp/shared/logs/deploy.log
+
+
+HOW TO ADD A NEW DATABASE MIGRATION IN THE FUTURE
+---------------------------------------------------
+If you need to add a new table or column to the database:
+  1. Create a new .sql file in the zcceprsystem/database/ folder
+  2. Name it starting with the date so it sorts after existing files,
+     e.g.:  20260701_add_new_feature.sql
+  3. Write only ADD or CREATE statements — never DROP or TRUNCATE
+  4. Commit and push to GitHub
+  5. The deploy pipeline will automatically run it on the next push
+
+The migration runner tracks which files have been applied in a table called
+schema_migrations inside your database. It will never run a file twice.
+
+
+HOW TO RESTART THE APPLICATION
+--------------------------------
+  sudo -u deploy pm2 reload zcc-erp-api
+
+This is a zero-downtime reload — active requests are not interrupted.
+
+
+HOW TO CHECK APPLICATION STATUS
+---------------------------------
+  sudo -u deploy pm2 list           # process status and memory
+  sudo -u deploy pm2 monit          # live dashboard (Ctrl+C to exit)
+  curl https://erp.yourdomain.com/health   # API health check
+
+
+HOW TO RENEW THE SSL CERTIFICATE MANUALLY
+------------------------------------------
+Let's Encrypt certificates expire after 90 days. Certbot auto-renews them.
+To trigger a manual renewal:
+  certbot renew --dry-run          # test renewal without actually renewing
+  certbot renew                    # actually renew if due
+
+================================================================================
+PART G — TROUBLESHOOTING
+================================================================================
+
+PROBLEM: GitHub Actions shows a red X (deployment failed)
+SOLUTION:
+  1. Click the failed run on github.com/YourRepo/actions
+  2. Expand the "Deploy via SSH" step to read the error
+  3. SSH into the server and read the deploy log:
+       tail -100 /var/www/zcc-erp/shared/logs/deploy.log
+  4. Common causes:
+       - SSH key secret is wrong -> re-paste deploy_key content into DO_SSH_KEY
+       - Server IP changed -> update DO_HOST secret
+       - npm install failed -> check disk space: df -h
+
+
+PROBLEM: Website shows "502 Bad Gateway"
+SOLUTION: The Node.js backend is not running.
+  sudo -u deploy pm2 list
+  If zcc-erp-api shows "errored", check the error log:
+  sudo -u deploy pm2 logs zcc-erp-api --lines 50
+  Fix the error, then:
+  sudo -u deploy pm2 restart zcc-erp-api
+
+
+PROBLEM: Website is unreachable (ERR_CONNECTION_REFUSED)
+SOLUTION:
+  Check Nginx: systemctl status nginx
+  Check firewall: ufw status
+  Check DNS: nslookup erp.yourdomain.com  (from Windows PowerShell)
+
+
+PROBLEM: SSL certificate error in browser
+SOLUTION:
+  Check certificate: certbot certificates
+  Force renew: certbot renew --force-renewal
+  Reload Nginx: systemctl reload nginx
+
+
+PROBLEM: Database migration error on deploy
+SOLUTION:
+  The migration runner blocked a dangerous statement. Read the deploy log:
+    tail -50 /var/www/zcc-erp/shared/logs/deploy.log
+  If a migration file was incorrectly flagged, you can run it manually:
+    mysql -u zccapp -p finance_erp < zcceprsystem/database/the_file.sql
+  Then mark it as applied so the runner skips it:
+    cd /var/www/zcc-erp/app/zcceprsystem/backend
+    node -e "
+      require('dotenv').config();
+      const m=require('mysql2/promise');
+      m.createConnection({host:'localhost',user:process.env.DB_USER,
+        password:process.env.DB_PASSWORD,database:process.env.DB_NAME})
+      .then(c=>c.execute('INSERT IGNORE INTO schema_migrations (filename) VALUES (?)',
+        ['the_file.sql']).then(()=>{console.log('marked');c.end()}));
+    "
+
+
+================================================================================
+QUICK REFERENCE — FILE LOCATIONS ON THE SERVER
+================================================================================
+
+Application code:     /var/www/zcc-erp/app/zcceprsystem/
+Backend:              /var/www/zcc-erp/app/zcceprsystem/backend/
+Frontend build:       /var/www/zcc-erp/app/zcceprsystem/frontend/build/
+Environment file:     /var/www/zcc-erp/shared/.env
+Frontend env:         /var/www/zcc-erp/shared/frontend.env
+Uploaded files:       /var/www/zcc-erp/shared/uploads/
+Application logs:     /var/www/zcc-erp/shared/logs/
+Deploy script:        /var/www/zcc-erp/deploy.sh
+Database backups:     /var/backups/zcc-erp/db/
+Upload backups:       /var/backups/zcc-erp/uploads/
+Nginx config:         /etc/nginx/sites-available/zcc-erp
+SSL certificates:     /etc/letsencrypt/live/erp.yourdomain.com/
+
+================================================================================
+END OF GUIDE
+================================================================================

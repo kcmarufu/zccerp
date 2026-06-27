@@ -1,0 +1,377 @@
+================================================================================
+  ZCC EPR SYSTEM — COMPLETE DEPLOYMENT GUIDE
+  Digital Ocean + Hostinger Domain + GitHub Auto-Deployment
+  Version: 1.0  |  Date: June 2026
+================================================================================
+
+OVERVIEW
+--------
+This guide covers:
+  1. Initial server setup on Digital Ocean
+  2. MySQL database setup with migration strategy (zero data loss)
+  3. Backend (Node.js) deployment with PM2
+  4. Frontend (React) build and serve with Nginx
+  5. Connecting your Hostinger domain with SSL (HTTPS)
+  6. GitHub Actions CI/CD for automatic deployment on git push
+  7. How to safely push database changes in future without losing data
+
+================================================================================
+PART 1 — DIGITAL OCEAN SERVER SETUP
+================================================================================
+
+STEP 1: Create a Droplet
+  - Log in to digitalocean.com
+  - Click "Create" → "Droplets"
+  - Choose: Ubuntu 22.04 LTS
+  - Plan: Basic — $12/month (2 GB RAM, 1 vCPU, 50 GB SSD) — MINIMUM recommended
+  - Choose a datacenter region (e.g., London for Africa-adjacent latency)
+  - Authentication: Add your SSH key (or use password — SSH key is safer)
+  - Click "Create Droplet"
+  - Note the Droplet's public IP address (e.g., 167.99.XX.XX)
+
+STEP 2: Connect to the Server
+  From your local machine (PowerShell or terminal):
+    ssh root@YOUR_DROPLET_IP
+
+STEP 3: Update the Server
+    apt update && apt upgrade -y
+
+STEP 4: Install Node.js 20
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt install -y nodejs
+    node -v   # Should show v20.x.x
+
+STEP 5: Install MySQL
+    apt install -y mysql-server
+    mysql_secure_installation
+    # Follow prompts: set root password, remove anonymous users, disallow remote root
+
+STEP 6: Create the Database and User
+    mysql -u root -p
+    -- Inside MySQL:
+    CREATE DATABASE zcc_epr CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE USER 'zccapp'@'localhost' IDENTIFIED BY 'CHOOSE_A_STRONG_PASSWORD';
+    GRANT ALL PRIVILEGES ON zcc_epr.* TO 'zccapp'@'localhost';
+    FLUSH PRIVILEGES;
+    EXIT;
+
+STEP 7: Import Initial Schema
+  Copy your SQL file to the server first:
+    scp zcceprsystem/finance_erp_structure.sql root@YOUR_DROPLET_IP:/root/
+  Then on the server:
+    mysql -u zccapp -p zcc_epr < /root/finance_erp_structure.sql
+
+STEP 8: Install PM2 (Node.js process manager) and Nginx
+    npm install -g pm2
+    apt install -y nginx
+    ufw allow 'Nginx Full'
+    ufw allow OpenSSH
+    ufw enable
+
+================================================================================
+PART 2 — APPLICATION DEPLOYMENT (MANUAL FIRST TIME)
+================================================================================
+
+STEP 9: Create a deploy user (safer than root)
+    adduser deployer
+    usermod -aG sudo deployer
+    # Copy your SSH key to deployer as well
+    rsync --archive --chown=deployer:deployer ~/.ssh /home/deployer
+
+STEP 10: Clone the Repository onto the Server
+  Switch to deployer:
+    su - deployer
+  Clone from GitHub:
+    git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git /home/deployer/zcceprsystem
+    cd /home/deployer/zcceprsystem/zcceprsystem
+
+STEP 11: Set Up Backend Environment File
+    cd /home/deployer/zcceprsystem/zcceprsystem/backend
+    cp settings.json settings.json.bak    # keep a backup reference
+    nano .env
+  Paste the following (replace values):
+    NODE_ENV=production
+    PORT=5000
+    DB_HOST=localhost
+    DB_PORT=3306
+    DB_NAME=zcc_epr
+    DB_USER=zccapp
+    DB_PASSWORD=CHOOSE_A_STRONG_PASSWORD
+    JWT_SECRET=GENERATE_A_LONG_RANDOM_STRING_HERE
+    JWT_EXPIRES_IN=8h
+    UPLOAD_DIR=/home/deployer/zcceprsystem/zcceprsystem/backend/uploads
+
+  Generate a secure JWT secret (run on server):
+    node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+
+STEP 12: Install Backend Dependencies and Start
+    cd /home/deployer/zcceprsystem/zcceprsystem/backend
+    npm install --omit=dev
+    pm2 start src/server.js --name "zcc-backend"
+    pm2 save
+    pm2 startup    # Run the printed command as root to auto-start on reboot
+
+STEP 13: Build the Frontend
+    cd /home/deployer/zcceprsystem/zcceprsystem/frontend
+    npm install
+  Create frontend environment file:
+    nano .env.production
+    # Paste:
+    REACT_APP_API_URL=https://yourdomain.com/api
+  Build:
+    npm run build
+  This creates a /build folder with static files.
+
+STEP 14: Configure Nginx
+    sudo nano /etc/nginx/sites-available/zcc-epr
+  Paste:
+    server {
+        listen 80;
+        server_name yourdomain.com www.yourdomain.com;
+
+        # Serve React frontend
+        root /home/deployer/zcceprsystem/zcceprsystem/frontend/build;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Proxy API calls to Node.js backend
+        location /api {
+            proxy_pass http://localhost:5000;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_cache_bypass $http_upgrade;
+            client_max_body_size 50M;
+        }
+    }
+
+    sudo ln -s /etc/nginx/sites-available/zcc-epr /etc/nginx/sites-enabled/
+    sudo nginx -t
+    sudo systemctl reload nginx
+
+================================================================================
+PART 3 — CONNECTING YOUR HOSTINGER DOMAIN
+================================================================================
+
+STEP 15: Point Domain DNS to Digital Ocean
+  Log in to Hostinger → Domains → Manage → DNS/Nameservers
+  Change nameservers to Digital Ocean's (recommended for full control):
+    ns1.digitalocean.com
+    ns2.digitalocean.com
+    ns3.digitalocean.com
+
+  OR keep Hostinger nameservers and add an A Record:
+    Type: A
+    Host: @
+    Points to: YOUR_DROPLET_IP
+    TTL: 3600
+
+    Type: A
+    Host: www
+    Points to: YOUR_DROPLET_IP
+    TTL: 3600
+
+  DNS changes take up to 24–48 hours to fully propagate.
+
+STEP 16: Enable HTTPS with Let's Encrypt (FREE SSL)
+    sudo apt install -y certbot python3-certbot-nginx
+    sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+  Follow the prompts. Certbot will automatically:
+    - Get a free SSL certificate
+    - Modify your Nginx config to redirect HTTP → HTTPS
+    - Auto-renew every 90 days (check with: sudo certbot renew --dry-run)
+
+================================================================================
+PART 4 — GITHUB ACTIONS AUTO-DEPLOYMENT (CI/CD)
+================================================================================
+
+STEP 17: Add GitHub Secrets
+  In your GitHub repository → Settings → Secrets and variables → Actions
+  Add these secrets:
+    DROPLET_HOST    = YOUR_DROPLET_IP
+    DROPLET_USER    = deployer
+    DROPLET_SSH_KEY = (paste contents of your private SSH key ~\.ssh\id_rsa)
+    DROPLET_PORT    = 22
+
+STEP 18: Create the GitHub Actions Workflow File
+  Create the file in your repo at:
+    .github/workflows/deploy.yml
+
+  Paste the following:
+  -------------------------------------------------------------------
+  name: Deploy to Digital Ocean
+
+  on:
+    push:
+      branches: [ main ]
+
+  jobs:
+    deploy:
+      runs-on: ubuntu-latest
+      steps:
+        - name: Deploy via SSH
+          uses: appleboy/ssh-action@v1.0.3
+          with:
+            host: ${{ secrets.DROPLET_HOST }}
+            username: ${{ secrets.DROPLET_USER }}
+            key: ${{ secrets.DROPLET_SSH_KEY }}
+            port: ${{ secrets.DROPLET_PORT }}
+            script: |
+              set -e
+              cd /home/deployer/zcceprsystem
+
+              echo "=== Pulling latest code ==="
+              git pull origin main
+
+              echo "=== Backend: install dependencies ==="
+              cd zcceprsystem/backend
+              npm install --omit=dev
+
+              echo "=== Running database migrations ==="
+              npm run db:migrate:prod
+
+              echo "=== Restarting backend ==="
+              pm2 restart zcc-backend
+
+              echo "=== Frontend: install and build ==="
+              cd ../frontend
+              npm install
+              npm run build
+
+              echo "=== Reloading Nginx ==="
+              sudo systemctl reload nginx
+
+              echo "=== Deployment complete ==="
+  -------------------------------------------------------------------
+
+  IMPORTANT: For `sudo systemctl reload nginx` to work without a password,
+  run this on the server:
+    sudo visudo
+  Add at the bottom:
+    deployer ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
+
+  Now every time you push to the 'main' branch on GitHub, the system
+  automatically pulls the code, runs migrations, rebuilds the frontend,
+  and restarts the backend — with ZERO manual steps.
+
+================================================================================
+PART 5 — DATABASE MIGRATIONS (ZERO DATA LOSS STRATEGY)
+================================================================================
+
+  The system uses raw SQL migration files (in /database folder).
+  Follow this process every time you make a database change:
+
+  ---- LOCAL DEVELOPMENT ----
+
+  STEP 1: Create a new migration file
+    Name it with a timestamp and description, e.g.:
+      database/migration_YYYYMMDD_your_change_description.sql
+
+  STEP 2: Write SAFE SQL only
+    ALWAYS USE:
+      ALTER TABLE ... ADD COLUMN ...
+      ALTER TABLE ... MODIFY COLUMN ...
+      CREATE TABLE IF NOT EXISTS ...
+      CREATE INDEX IF NOT EXISTS ...
+
+    NEVER USE ON PRODUCTION:
+      DROP TABLE
+      DROP COLUMN
+      TRUNCATE TABLE
+    (These destroy data. Only use them locally for cleanup.)
+
+  STEP 3: Test locally first
+    Apply the migration to your local database, test the system thoroughly.
+
+  ---- DEPLOYING DATABASE CHANGES ----
+
+  STEP 4: Add migration to the deploy script
+    Edit .github/workflows/deploy.yml
+    After "git pull", add:
+      mysql -u zccapp -p"$DB_PASSWORD" zcc_epr < zcceprsystem/database/migration_YYYYMMDD_your_change.sql
+
+    But do NOT hardcode the password in the workflow file.
+    Instead, store it as a GitHub Secret (DB_PASSWORD) and reference it:
+      mysql -u zccapp -p"${{ secrets.DB_PASSWORD }}" zcc_epr < ...
+
+  STEP 5: Make the migration idempotent (safe to run multiple times)
+    Use IF NOT EXISTS / IF EXISTS guards, for example:
+      ALTER TABLE budget_lines ADD COLUMN IF NOT EXISTS notes TEXT;
+      CREATE TABLE IF NOT EXISTS new_feature_table (...);
+
+  STEP 6: ALWAYS backup before a big deployment
+    On the server before deploying:
+      mysqldump -u zccapp -p zcc_epr > /home/deployer/backup_$(date +%Y%m%d_%H%M%S).sql
+    Keep at least 5 recent backups.
+
+  ---- AUTOMATED BACKUP (RECOMMENDED) ----
+  Set up a daily cron job:
+    crontab -e -u deployer
+  Add:
+    0 2 * * * mysqldump -u zccapp -pYOUR_PASSWORD zcc_epr > /home/deployer/backups/backup_$(date +\%Y\%m\%d).sql 2>/dev/null
+
+================================================================================
+PART 6 — USEFUL COMMANDS AFTER DEPLOYMENT
+================================================================================
+
+  Check backend status:
+    pm2 status
+    pm2 logs zcc-backend --lines 50
+
+  Restart backend manually:
+    pm2 restart zcc-backend
+
+  Check Nginx:
+    sudo nginx -t
+    sudo systemctl status nginx
+
+  Check disk space:
+    df -h
+
+  Check MySQL:
+    sudo systemctl status mysql
+
+  View recent deployment logs from GitHub Actions:
+    Go to your repo → Actions tab → click latest workflow run
+
+================================================================================
+PART 7 — WORKFLOW SUMMARY (DAY-TO-DAY)
+================================================================================
+
+  When you want to make a change:
+
+  1. Make code changes locally (on your laptop)
+  2. If you changed the database, create a new migration SQL file in /database/
+  3. Test everything locally
+  4. Add, commit, and push to GitHub:
+       git add .
+       git commit -m "describe your change"
+       git push origin main
+  5. GitHub Actions automatically:
+       - Pulls new code onto the server
+       - Runs the database migration
+       - Rebuilds the frontend
+       - Restarts the backend
+  6. Your live system is updated in ~3-5 minutes with NO data loss.
+
+================================================================================
+SECURITY CHECKLIST BEFORE GOING LIVE
+================================================================================
+
+  [ ] .env file is NOT committed to GitHub (add it to .gitignore)
+  [ ] JWT_SECRET is a long random string (64+ chars)
+  [ ] MySQL is NOT accessible from the internet (only localhost)
+  [ ] UFW firewall is enabled (only ports 22, 80, 443 open)
+  [ ] SSL certificate installed (HTTPS working)
+  [ ] PM2 is configured to auto-restart on server reboot
+  [ ] Automated daily database backup configured
+  [ ] Default admin password changed after first login
+
+================================================================================
+END OF GUIDE
+================================================================================

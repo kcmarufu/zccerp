@@ -1,0 +1,17 @@
+{
+  "org_name": "ERP Connect",
+  "org_short_name": "Syntra",
+  "org_address": "27 St Patricks Rd Hatfield Harare Zimbabwe",
+  "org_email": "zccinzim@gmail.com",
+  "org_phone": "+263771107173",
+  "currency": "USD",
+  "currency_symbol": "$",
+  "fiscal_year_start": "01-01",
+  "timezone": "Africa/Harare",
+  "date_format": "DD/MM/YYYY",
+  "low_budget_threshold": 20,
+  "require_dept_approval": true,
+  "allow_override": false,
+  "session_timeout_hours": 1,
+  "max_login_attempts": 3
+}
