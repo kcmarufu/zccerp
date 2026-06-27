@@ -19,7 +19,11 @@ const logger = winston.createLogger({
   ]
 });
 
+<<<<<<< HEAD
 // Create connection pool — sized for production (39+ concurrent users)
+=======
+// Create connection pool
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT) || 3306,
@@ -27,11 +31,18 @@ const pool = mysql.createPool({
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'finance_erp',
   waitForConnections: true,
+<<<<<<< HEAD
   connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT) || 30, // 30 concurrent DB connections
   queueLimit: 100,             // max 100 requests queued; beyond this → error (prevents memory bloat)
   connectTimeout: 10000,       // 10s to establish a connection
   enableKeepAlive: true,
   keepAliveInitialDelay: 30000 // ping idle connections every 30s
+=======
+  connectionLimit: 10,
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 });
 
 // Test database connection
@@ -47,6 +58,7 @@ const testConnection = async () => {
   }
 };
 
+<<<<<<< HEAD
 // Slow query threshold (ms) — log any query taking longer than this
 const SLOW_QUERY_MS = parseInt(process.env.SLOW_QUERY_THRESHOLD_MS) || 2000;
 
@@ -62,6 +74,15 @@ const query = async (sql, params = []) => {
     return results;
   } catch (error) {
     logger.error('Query execution error:', { sql: sql.substring(0, 200), error: error.message });
+=======
+// Execute query with automatic connection handling
+const query = async (sql, params = []) => {
+  try {
+    const [results] = await pool.execute(sql, params);
+    return results;
+  } catch (error) {
+    logger.error('Query execution error:', { sql, error: error.message });
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     throw error;
   }
 };

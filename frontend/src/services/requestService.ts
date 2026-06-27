@@ -23,7 +23,11 @@ interface RequestFilters {
 
 export const requestService = {
   // Create a new request
+<<<<<<< HEAD
   create: async (data: CreateRequestPayload): Promise<ApiResponse<{ requestId: number; requestCode: string }>> => {
+=======
+  create: async (data: CreateRequestPayload): Promise<ApiResponse<{ requestId: number; requestNumber: string }>> => {
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     const response = await api.post('/requests', data);
     return response.data;
   },

@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+<<<<<<< HEAD
 **/node_modules/
 
 # Environment variables - NEVER commit these
@@ -12,10 +13,20 @@ node_modules/
 # Build outputs
 frontend/build/
 frontend/.cache/
+=======
+
+# Environment variables (contains passwords)
+.env
+
+# Build outputs
+build/
+dist/
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 # Logs
 logs/
 *.log
+<<<<<<< HEAD
 backend/logs/
 
 # Uploads (user files - too large and contain sensitive data)
@@ -40,3 +51,22 @@ Thumbs.db
 
 # VS Code
 .vscode/settings.json
+=======
+
+# Uploads (user-generated content)
+uploads/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Prisma generated
+**/generated/prisma
+
+# Temp files
+*.tmp
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87

@@ -4,7 +4,11 @@
  */
 
 // User & Auth Types
+<<<<<<< HEAD
 export type UserRole = 'ADMIN' | 'GENERAL_USER' | 'PROGRAM_LEAD' | 'HEAD_OF_PROGRAMS' | 'FINANCE_CLERK' | 'PROCUREMENT_OFFICER' | 'PROCUREMENT_COMMITTEE';
+=======
+export type UserRole = 'GENERAL_USER' | 'PROGRAM_LEAD' | 'HEAD_OF_PROGRAMS' | 'FINANCE_CLERK';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 export interface User {
   id: number;
@@ -32,16 +36,22 @@ export interface AuthState {
 // Request Types
 export type RequestStatus = 
   | 'DRAFT'
+<<<<<<< HEAD
   | 'PENDING_ADMIN_APPROVAL'
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   | 'PENDING_LEAD_APPROVAL'
   | 'PENDING_HOP_APPROVAL'
   | 'PENDING_FINANCE_APPROVAL'
   | 'APPROVED'
+<<<<<<< HEAD
   | 'DISPATCHED'
   | 'PENDING_RECONCILIATION'
   | 'RECON_PENDING_LEAD'
   | 'RECON_PENDING_FINANCE'
   | 'RECONCILED'
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   | 'REJECTED'
   | 'CANCELLED';
 
@@ -66,7 +76,11 @@ export interface RequestItem {
 
 export interface Request {
   id: number;
+<<<<<<< HEAD
   request_code: string;
+=======
+  request_number: string;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   requester_id: number;
   requester_first_name: string;
   requester_last_name: string;
@@ -74,6 +88,7 @@ export interface Request {
   department_id: number;
   department_name: string;
   department_code: string;
+<<<<<<< HEAD
   donor_id?: number;
   donor_name?: string;
   donor_code?: string;
@@ -83,20 +98,28 @@ export interface Request {
   routing_department_id?: number | null;
   routing_department_name?: string | null;
   routing_department_code?: string | null;
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   status: RequestStatus;
   total_amount: number;
   justification: string;
   description?: string;
   priority: Priority;
+<<<<<<< HEAD
   has_per_diem_claim?: boolean;
   is_activity_request?: boolean;
   activity_start_date?: string | null;
   activity_end_date?: string | null;
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   submitted_at: string | null;
   lead_approved_at: string | null;
   hop_approved_at: string | null;
   finance_approved_at: string | null;
+<<<<<<< HEAD
   dispatched_at: string | null;
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   completed_at: string | null;
   created_at: string;
   created_by?: number;
@@ -151,6 +174,7 @@ export interface ApprovalPayload {
   version: number;
 }
 
+<<<<<<< HEAD
 // Project Types
 export interface Project {
   id: number;
@@ -177,11 +201,14 @@ export interface Project {
   budget_lines?: BudgetLine[];
 }
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 // Budget Types
 export interface BudgetLine {
   id: number;
   budget_code: string;
   budget_name: string;
+<<<<<<< HEAD
   donor_id?: number;
   donor_name?: string;
   donor_code?: string;
@@ -193,6 +220,11 @@ export interface BudgetLine {
   project_id?: number;
   project_code?: string;
   project_name?: string;
+=======
+  department_id: number;
+  department_name: string;
+  department_code: string;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   fiscal_year: number;
   allocated_amount: number;
   spent_amount: number;
@@ -221,7 +253,11 @@ export interface BudgetTransaction {
   id: number;
   budget_line_id: number;
   request_id: number | null;
+<<<<<<< HEAD
   request_code?: string;
+=======
+  request_number?: string;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   transaction_type: 'ALLOCATION' | 'TOP_UP' | 'DEDUCTION' | 'REVERSAL' | 'ADJUSTMENT';
   amount: number;
   balance_before: number;
@@ -263,6 +299,7 @@ export interface PaginatedResponse<T> {
 // Currency Type
 export type Currency = 'ZIG' | 'USD';
 
+<<<<<<< HEAD
 // Request Category Type
 export type RequestCategory =
   | 'PROCUREMENT'
@@ -301,10 +338,19 @@ export interface RequestFormItem {
   totalCost: number;
   budgetLineId: number | '';
   notes: string;
+=======
+// Form Types for Request Creation
+export interface RequestFormItem {
+  id: string; // UUID for React key
+  itemDescription: string;
+  totalCost: number;
+  budgetLineId: number | '';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 }
 
 export interface RequestFormData {
   justification: string;
+<<<<<<< HEAD
   currency: Currency;
   isAdminRequest: boolean;
   isActivityRequest: boolean;
@@ -930,4 +976,11 @@ export interface HRDashboardStats {
   pendingLeaveRequests: number;
   expiringContracts: number;
   upcomingBirthdays: Array<{ id: number; first_name: string; last_name: string; date_of_birth: string }>;
+=======
+  priority: Priority;
+  currency: Currency;
+  isAdminRequest: boolean;
+  items: RequestFormItem[];
+  supportingDocuments: File[];
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 }

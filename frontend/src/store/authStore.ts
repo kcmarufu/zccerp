@@ -15,12 +15,16 @@ interface AuthStore extends AuthState {
   setLoading: (loading: boolean) => void;
   hasRole: (...roles: UserRole[]) => boolean;
   hasPermission: (permission: string) => boolean;
+<<<<<<< HEAD
   /** True for ADMIN, or for HEAD_OF_PROGRAMS/PROGRAM_LEAD in the Finance (AF) dept */
   isFinanceManager: () => boolean;
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 }
 
 // Role-based permissions mapping
 const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
+<<<<<<< HEAD
   ADMIN: [
     // Full system access - all permissions
     'create_request',
@@ -50,29 +54,39 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'committee_review',
     'proc_finance_approve'
   ],
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   GENERAL_USER: [
     'create_request',
     'view_own_requests',
     'edit_request',
     'delete_request',
     'submit_request',
+<<<<<<< HEAD
     'view_budget_lines',
     'view_reports',
     // Procurement: can create and view own purchase requests
     'create_purchase_request',
     'view_purchase_requests'
+=======
+    'view_budget_lines'
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   ],
   PROGRAM_LEAD: [
     'create_request',
     'view_own_requests',
     'view_department_requests',
+<<<<<<< HEAD
     'view_all_requests',
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     'edit_request',
     'delete_request',
     'submit_request',
     'approve_as_lead',
     'reject_request',
     'view_budget_lines',
+<<<<<<< HEAD
     'manage_budget_lines',
     'top_up_budget',
     'view_reports',
@@ -80,6 +94,9 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     // Procurement: dept-level approval only
     'view_purchase_requests',
     'approve_purchase_request'
+=======
+    'view_reports'
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   ],
   HEAD_OF_PROGRAMS: [
     'view_own_requests',
@@ -87,6 +104,7 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'approve_as_hop',
     'reject_request',
     'view_budget_lines',
+<<<<<<< HEAD
     'manage_budget_lines',
     'top_up_budget',
     'view_reports',
@@ -94,6 +112,10 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     // Procurement: dept-level approval only
     'view_purchase_requests',
     'approve_purchase_request'
+=======
+    'view_reports'
+    // Note: export_data removed - only Finance can access Dispatch Desk
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   ],
   FINANCE_CLERK: [
     'view_all_requests',
@@ -104,6 +126,7 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'top_up_budget',
     'view_reports',
     'export_data',
+<<<<<<< HEAD
     'view_users',
     // Procurement: finance-level and final approval
     'view_purchase_requests',
@@ -123,6 +146,9 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'committee_review',
     'view_reports',
     'view_budget_lines'
+=======
+    'view_users'
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   ]
 };
 
@@ -199,6 +225,7 @@ export const useAuthStore = create<AuthStore>()(
         if (!user) return false;
         const permissions = ROLE_PERMISSIONS[user.role] || [];
         return permissions.includes(permission);
+<<<<<<< HEAD
       },
 
       isFinanceManager: () => {
@@ -208,11 +235,17 @@ export const useAuthStore = create<AuthStore>()(
         // Only Finance dept (FOS) HOPs/Leads see all data across departments
         return ['HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'].includes(user.role) &&
           user.department_code === 'FOS';
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       }
     }),
     {
       name: 'auth-storage',
+<<<<<<< HEAD
       storage: createJSONStorage(() => sessionStorage),
+=======
+      storage: createJSONStorage(() => localStorage),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       partialize: (state) => ({
         user: state.user,
         accessToken: state.accessToken,

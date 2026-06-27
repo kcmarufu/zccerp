@@ -1,6 +1,10 @@
 /**
  * Dispatch Desk Component
+<<<<<<< HEAD
  * View ALL requests (dispatched and non-dispatched) with full detail view
+=======
+ * View approved requests with PDF/Excel export functionality
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
  */
 
 import React, { useState, useEffect } from 'react';
@@ -23,6 +27,7 @@ import {
   IconButton,
   Tooltip,
   Card,
+<<<<<<< HEAD
   CardContent,
   Dialog,
   DialogTitle,
@@ -32,12 +37,16 @@ import {
   Tabs,
   Tab,
   TablePagination
+=======
+  CardContent
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   PictureAsPdf as PdfIcon,
   TableChart as ExcelIcon,
   Visibility as ViewIcon,
   FilterList as FilterIcon,
+<<<<<<< HEAD
   Download as DownloadIcon,
   LocalShipping as DispatchIcon,
   CheckCircle as ApprovedIcon,
@@ -46,11 +55,16 @@ import {
   Warning as WarningIcon
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
+=======
+  Download as DownloadIcon
+} from '@mui/icons-material';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 import { toast } from 'react-toastify';
 import { format } from 'date-fns';
 
 import { Request, Department } from '../../types';
 import { requestService } from '../../services/requestService';
+<<<<<<< HEAD
 import { reconciliationService } from '../../services/reconciliationService';
 import api from '../../services/api';
 import { downloadHTMLAsPDF, buildTravelClaimPageHTML, buildDigitalStamp } from '../../utils/pdfUtils';
@@ -72,10 +86,22 @@ const DispatchDesk: React.FC = () => {
     status: '',
     departmentId: '',
     projectId: '',
+=======
+import api from '../../services/api';
+
+const DispatchDesk: React.FC = () => {
+  const [requests, setRequests] = useState<Request[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [filters, setFilters] = useState({
+    status: 'APPROVED',
+    departmentId: '',
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     startDate: '',
     endDate: ''
   });
   const [selectedRequests, setSelectedRequests] = useState<number[]>([]);
+<<<<<<< HEAD
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRequest, setDetailRequest] = useState<any>(null);
   const [detailItems, setDetailItems] = useState<any[]>([]);
@@ -92,6 +118,8 @@ const DispatchDesk: React.FC = () => {
   const [reverseDispatchReason, setReverseDispatchReason] = useState('');
   const [reconSubFilter, setReconSubFilter] = useState('');
   const [searchText, setSearchText] = useState('');
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   // Fetch data on mount
   useEffect(() => {
@@ -110,14 +138,22 @@ const DispatchDesk: React.FC = () => {
     }
   };
 
+<<<<<<< HEAD
   useEffect(() => {
     api.get('/projects').then(res => { if (res.data.success) setProjects(res.data.data); }).catch(() => {});
   }, []);
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const fetchRequests = async () => {
     try {
       setIsLoading(true);
 
+<<<<<<< HEAD
+=======
+      // If no specific status, we need to fetch both APPROVED and REJECTED
+      // For "All Completed", we fetch without status filter and then filter client-side
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       const statusToFetch = filters.status || undefined;
 
       const response = await requestService.getAll({
@@ -126,10 +162,15 @@ const DispatchDesk: React.FC = () => {
       });
 
       if (response.success && response.data) {
+<<<<<<< HEAD
+=======
+        // Handle both array and nested object response formats
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         let filteredRequests = Array.isArray(response.data)
           ? response.data
           : (response.data.requests || []);
 
+<<<<<<< HEAD
         // Show ALL completed/dispatched/recon statuses when no filter
         if (!filters.status) {
           filteredRequests = filteredRequests.filter(
@@ -139,6 +180,13 @@ const DispatchDesk: React.FC = () => {
         } else {
           // Keep server-side filtered results as-is, but ensure DISPATCHED appears in recon tab
           filteredRequests = filteredRequests.filter(r => r.status === filters.status);
+=======
+        // If "All Completed" is selected, filter to only show completed statuses
+        if (!filters.status) {
+          filteredRequests = filteredRequests.filter(
+            r => r.status === 'APPROVED' || r.status === 'REJECTED' || r.status === 'DISPATCHED'
+          );
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         }
 
         // Apply department filter
@@ -148,6 +196,7 @@ const DispatchDesk: React.FC = () => {
           );
         }
 
+<<<<<<< HEAD
         // Apply project filter
         if (filters.projectId) {
           filteredRequests = filteredRequests.filter(
@@ -155,6 +204,8 @@ const DispatchDesk: React.FC = () => {
           );
         }
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         // Apply date filters
         if (filters.startDate) {
           filteredRequests = filteredRequests.filter(
@@ -180,6 +231,7 @@ const DispatchDesk: React.FC = () => {
     }
   };
 
+<<<<<<< HEAD
   // Open detail view dialog
   const handleViewDetail = async (request: any) => {
     try {
@@ -474,6 +526,81 @@ ${buildDigitalStamp('')}
     downloadHTMLAsPDF(html, `dispatch-report-${format(new Date(), 'yyyy-MM-dd')}`);
   };
 
+=======
+  // Download PDF for a request
+  const handleDownloadPDF = async (requestId: number, requestNumber: string) => {
+    try {
+      const response = await api.get(`/export/dispatch/${requestId}/pdf`, {
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `dispatch-${requestNumber}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      toast.success('PDF downloaded successfully');
+    } catch (error) {
+      toast.error('Failed to download PDF');
+    }
+  };
+
+  // Download Excel for a request
+  const handleDownloadExcel = async (requestId: number, requestNumber: string) => {
+    try {
+      const response = await api.get(`/export/dispatch/${requestId}/excel`, {
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `dispatch-${requestNumber}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      toast.success('Excel downloaded successfully');
+    } catch (error) {
+      toast.error('Failed to download Excel');
+    }
+  };
+
+  // Bulk export selected requests
+  const handleBulkExport = async () => {
+    if (selectedRequests.length === 0) {
+      toast.warning('Please select requests to export');
+      return;
+    }
+
+    try {
+      const response = await api.post('/export/bulk', 
+        { requestIds: selectedRequests },
+        { responseType: 'blob' }
+      );
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `requests-export-${Date.now()}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      toast.success('Bulk export completed');
+      setSelectedRequests([]);
+    } catch (error) {
+      toast.error('Failed to export');
+    }
+  };
+
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   // Toggle request selection
   const toggleSelection = (requestId: number) => {
     setSelectedRequests(prev => 
@@ -492,6 +619,7 @@ ${buildDigitalStamp('')}
     }
   };
 
+<<<<<<< HEAD
   // Mark request as dispatched
   const handleMarkDispatched = async (requestId: number) => {
     setDispatchTargetId(requestId);
@@ -548,10 +676,17 @@ ${buildDigitalStamp('')}
       case 'RECON_PENDING_LEAD': return 'warning';
       case 'RECON_PENDING_FINANCE': return 'warning';
       case 'RECONCILED': return 'success';
+=======
+  const getStatusColor = (status: string): 'success' | 'error' | 'warning' | 'default' => {
+    switch (status) {
+      case 'APPROVED': return 'success';
+      case 'REJECTED': return 'error';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       default: return 'default';
     }
   };
 
+<<<<<<< HEAD
   const getStatusLabel = (status: string): string => {
     switch (status) {
       case 'RECON_PENDING_LEAD': return 'On Lead/HOP Review';
@@ -607,6 +742,8 @@ ${buildDigitalStamp('')}
   const displayedRequests = getTabRequests();
   const pagedRequests = displayedRequests.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   return (
     <Box>
       <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
@@ -614,6 +751,7 @@ ${buildDigitalStamp('')}
           Dispatch Desk
         </Typography>
         <Typography variant="body2" color="text.secondary">
+<<<<<<< HEAD
           View all requests, manage dispatch, and generate printable documents. Track dispatched and non-dispatched requests.
         </Typography>
       </Paper>
@@ -679,6 +817,15 @@ ${buildDigitalStamp('')}
               InputProps={{ startAdornment: <FilterIcon sx={{ mr: 0.5, color: 'text.secondary', fontSize: 18 }} /> }}
             />
           </Grid>
+=======
+          View approved requests and generate printable dispatch documents with full audit trails.
+        </Typography>
+      </Paper>
+
+      {/* Filters */}
+      <Paper elevation={1} sx={{ p: 2, mb: 3 }}>
+        <Grid container spacing={2} alignItems="center">
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <Grid item xs={12} sm={6} md={2}>
             <TextField
               select
@@ -688,6 +835,7 @@ ${buildDigitalStamp('')}
               value={filters.status}
               onChange={(e) => setFilters({ ...filters, status: e.target.value })}
             >
+<<<<<<< HEAD
               <MenuItem value="">All Statuses</MenuItem>
               <MenuItem value="APPROVED">Pending Dispatch</MenuItem>
               <MenuItem value="DISPATCHED">Dispatched</MenuItem>
@@ -695,6 +843,11 @@ ${buildDigitalStamp('')}
               <MenuItem value="RECON_PENDING_FINANCE">On Finance Review</MenuItem>
               <MenuItem value="PENDING_RECONCILIATION">Waiting for Reconciliation</MenuItem>
               <MenuItem value="RECONCILED">Reconciled</MenuItem>
+=======
+              <MenuItem value="APPROVED">Approved</MenuItem>
+              <MenuItem value="REJECTED">Rejected</MenuItem>
+              <MenuItem value="">All Completed</MenuItem>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             </TextField>
           </Grid>
           <Grid item xs={12} sm={6} md={2}>
@@ -716,6 +869,7 @@ ${buildDigitalStamp('')}
           </Grid>
           <Grid item xs={12} sm={6} md={2}>
             <TextField
+<<<<<<< HEAD
               select
               label="Project"
               size="small"
@@ -733,6 +887,8 @@ ${buildDigitalStamp('')}
           </Grid>
           <Grid item xs={12} sm={6} md={2}>
             <TextField
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               type="date"
               label="From Date"
               size="small"
@@ -753,7 +909,11 @@ ${buildDigitalStamp('')}
               onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
             />
           </Grid>
+<<<<<<< HEAD
           <Grid item xs={12} md={6}>
+=======
+          <Grid item xs={12} md={4}>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             <Box display="flex" gap={1}>
               <Button
                 variant="outlined"
@@ -768,6 +928,7 @@ ${buildDigitalStamp('')}
                   startIcon={<DownloadIcon />}
                   onClick={handleBulkExport}
                 >
+<<<<<<< HEAD
                   Export Excel ({selectedRequests.length})
                 </Button>
               )}
@@ -784,6 +945,9 @@ ${buildDigitalStamp('')}
               {selectedRequests.length === 0 && displayedRequests.length > 0 && (
                 <Button variant="outlined" color="error" startIcon={<PdfIcon />} onClick={handleBulkPDF}>
                   Print All PDF
+=======
+                  Export Selected ({selectedRequests.length})
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 </Button>
               )}
             </Box>
@@ -791,6 +955,7 @@ ${buildDigitalStamp('')}
         </Grid>
       </Paper>
 
+<<<<<<< HEAD
       {/* Reconciliation sub-filter (only on tab 3) */}
       {activeTab === 3 && (
         <Paper elevation={1} sx={{ p: 2, mb: 2 }}>
@@ -814,6 +979,37 @@ ${buildDigitalStamp('')}
           </Grid>
         </Paper>
       )}
+=======
+      {/* Summary Cards */}
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        <Grid item xs={12} sm={4}>
+          <Card>
+            <CardContent>
+              <Typography color="text.secondary" gutterBottom>Total Requests</Typography>
+              <Typography variant="h4">{requests.length}</Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <Card>
+            <CardContent>
+              <Typography color="text.secondary" gutterBottom>Total Amount</Typography>
+              <Typography variant="h4">
+                ${requests.reduce((sum, r) => sum + Number(r.total_amount || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <Card>
+            <CardContent>
+              <Typography color="text.secondary" gutterBottom>Selected for Export</Typography>
+              <Typography variant="h4">{selectedRequests.length}</Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
       {/* Requests Table */}
       {isLoading ? (
@@ -821,7 +1017,10 @@ ${buildDigitalStamp('')}
           <CircularProgress />
         </Box>
       ) : (
+<<<<<<< HEAD
         <>
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         <TableContainer component={Paper}>
           <Table>
             <TableHead>
@@ -829,7 +1028,11 @@ ${buildDigitalStamp('')}
                 <TableCell padding="checkbox">
                   <input
                     type="checkbox"
+<<<<<<< HEAD
                     checked={selectedRequests.length === pagedRequests.length && pagedRequests.length > 0}
+=======
+                    checked={selectedRequests.length === requests.length && requests.length > 0}
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     onChange={toggleSelectAll}
                   />
                 </TableCell>
@@ -837,6 +1040,7 @@ ${buildDigitalStamp('')}
                 <TableCell sx={{ fontWeight: 'bold' }}>Requester</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Department</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Amount</TableCell>
+<<<<<<< HEAD
                 <TableCell sx={{ fontWeight: 'bold' }}>Priority</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Date</TableCell>
@@ -852,6 +1056,22 @@ ${buildDigitalStamp('')}
                 </TableRow>
               ) : (
                 pagedRequests.map((request) => (
+=======
+                <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Approved Date</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }} align="center">Export</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {requests.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
+                    <Typography color="text.secondary">No requests found</Typography>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                requests.map((request) => (
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   <TableRow 
                     key={request.id}
                     hover
@@ -865,7 +1085,11 @@ ${buildDigitalStamp('')}
                       />
                     </TableCell>
                     <TableCell>
+<<<<<<< HEAD
                       <Typography fontWeight="medium">{request.request_code}</Typography>
+=======
+                      <Typography fontWeight="medium">{request.request_number}</Typography>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     </TableCell>
                     <TableCell>
                       {request.requester_first_name} {request.requester_last_name}
@@ -878,6 +1102,7 @@ ${buildDigitalStamp('')}
                     </TableCell>
                     <TableCell>
                       <Chip 
+<<<<<<< HEAD
                         label={request.priority || 'MEDIUM'}
                         size="small"
                         color={request.priority === 'URGENT' ? 'error' : request.priority === 'HIGH' ? 'warning' : 'default'}
@@ -886,11 +1111,15 @@ ${buildDigitalStamp('')}
                     <TableCell>
                       <Chip 
                         label={getStatusLabel(request.status)} 
+=======
+                        label={request.status} 
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         color={getStatusColor(request.status)}
                         size="small"
                       />
                     </TableCell>
                     <TableCell>
+<<<<<<< HEAD
                       {request.submitted_at 
                         ? format(new Date(request.submitted_at), 'MMM d, yyyy')
                         : request.created_at ? format(new Date(request.created_at), 'MMM d, yyyy') : '-'}
@@ -951,6 +1180,31 @@ ${buildDigitalStamp('')}
                           </IconButton>
                         </Tooltip>
                       </Box>
+=======
+                      {request.completed_at 
+                        ? format(new Date(request.completed_at), 'MMM d, yyyy HH:mm')
+                        : '-'}
+                    </TableCell>
+                    <TableCell align="center">
+                      <Tooltip title="Download PDF">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => handleDownloadPDF(request.id, request.request_number)}
+                        >
+                          <PdfIcon />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Download Excel">
+                        <IconButton
+                          size="small"
+                          color="success"
+                          onClick={() => handleDownloadExcel(request.id, request.request_number)}
+                        >
+                          <ExcelIcon />
+                        </IconButton>
+                      </Tooltip>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     </TableCell>
                   </TableRow>
                 ))
@@ -958,6 +1212,7 @@ ${buildDigitalStamp('')}
             </TableBody>
           </Table>
         </TableContainer>
+<<<<<<< HEAD
         <TablePagination
           component="div"
           count={displayedRequests.length}
@@ -1227,6 +1482,9 @@ ${buildDigitalStamp('')}
           </Button>
         </DialogActions>
       </Dialog>
+=======
+      )}
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     </Box>
   );
 };

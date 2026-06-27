@@ -28,6 +28,7 @@ import {
   Alert,
   Card,
   CardContent,
+<<<<<<< HEAD
   Grid,
   Tooltip,
   Button,
@@ -42,11 +43,15 @@ import {
   alpha,
   useTheme,
   useMediaQuery
+=======
+  Grid
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   Search as SearchIcon,
   AccountBalance as BudgetIcon,
   TrendingUp as SpentIcon,
+<<<<<<< HEAD
   TrendingDown as BalanceIcon,
   OpenInNew as ViewIcon,
   Add as AddIcon,
@@ -59,10 +64,15 @@ import {
   Delete as DeleteIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
+=======
+  TrendingDown as BalanceIcon
+} from '@mui/icons-material';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 import { useAuthStore } from '../store/authStore';
 import { budgetService } from '../services/budgetService';
 import { BudgetLine } from '../types';
+<<<<<<< HEAD
 import api from '../services/api';
 import BudgetDetailDialog from '../components/budgets/BudgetDetailDialog';
 
@@ -75,14 +85,23 @@ const BudgetListPage: React.FC = () => {
   const canManage = isFinanceManager();
   const isFinanceOrApprover = hasRole('FINANCE_CLERK', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'ADMIN');
   const isFinanceClerk = hasRole('FINANCE_CLERK');
+=======
+
+const BudgetListPage: React.FC = () => {
+  const navigate = useNavigate();
+  const { hasPermission } = useAuthStore();
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   const [budgets, setBudgets] = useState<BudgetLine[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+<<<<<<< HEAD
   // Checkbox selection
   const [selectedBudgets, setSelectedBudgets] = useState<number[]>([]);
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   // Pagination
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -91,12 +110,15 @@ const BudgetListPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [fiscalYear, setFiscalYear] = useState<number | ''>('');
   const [activeFilter, setActiveFilter] = useState<boolean | ''>('');
+<<<<<<< HEAD
   const [deptFilter, setDeptFilter] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
 
   // Department & Project lists
   const [departments, setDepartments] = useState<{id: number; department_name: string}[]>([]);
   const [projects, setProjects] = useState<{id: number; project_name: string; project_code: string}[]>([]);
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   // Summary stats
   const [summary, setSummary] = useState({
@@ -105,6 +127,7 @@ const BudgetListPage: React.FC = () => {
     totalBalance: 0
   });
 
+<<<<<<< HEAD
   // Budget detail dialog
   const [selectedBudgetId, setSelectedBudgetId] = useState<number | null>(null);
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
@@ -128,6 +151,8 @@ const BudgetListPage: React.FC = () => {
   const [actionDescription, setActionDescription] = useState('');
   const [isActionSubmitting, setIsActionSubmitting] = useState(false);
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   // Generate fiscal year options
   const currentYear = new Date().getFullYear();
   const fiscalYears = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
@@ -136,11 +161,14 @@ const BudgetListPage: React.FC = () => {
     fetchBudgets();
   }, [fiscalYear, activeFilter]);
 
+<<<<<<< HEAD
   useEffect(() => {
     api.get('/departments').then(res => { if (res.data.success) setDepartments(res.data.data); }).catch(() => {});
     api.get('/projects').then(res => { if (res.data.success) setProjects(res.data.data); }).catch(() => {});
   }, []);
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const fetchBudgets = async () => {
     try {
       setIsLoading(true);
@@ -153,6 +181,7 @@ const BudgetListPage: React.FC = () => {
       const response = await budgetService.getAll(params);
 
       if (response.success && response.data) {
+<<<<<<< HEAD
         // Normalize string amounts to numbers
         const normalizedBudgets = normalizeBudgetData(response.data);
         setBudgets(normalizedBudgets);
@@ -161,6 +190,13 @@ const BudgetListPage: React.FC = () => {
         const allocated = normalizedBudgets.reduce((sum, b) => sum + (b.allocated_amount || 0), 0);
         const spent = normalizedBudgets.reduce((sum, b) => sum + (b.spent_amount || 0), 0);
         
+=======
+        setBudgets(response.data);
+
+        // Calculate summary
+        const allocated = response.data.reduce((sum, b) => sum + b.allocated_amount, 0);
+        const spent = response.data.reduce((sum, b) => sum + b.spent_amount, 0);
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         setSummary({
           totalAllocated: allocated,
           totalSpent: spent,
@@ -187,6 +223,7 @@ const BudgetListPage: React.FC = () => {
     return 'error';
   };
 
+<<<<<<< HEAD
   const formatCurrency = (amount: number | string) => {
     // Convert string to number if needed
     const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
@@ -345,6 +382,17 @@ const BudgetListPage: React.FC = () => {
     if (projectFilter && String((budget as any).project_id) !== projectFilter) return false;
     return true;
   });
+=======
+  const formatCurrency = (amount: number) => {
+    return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  // Filter by search term (client-side)
+  const filteredBudgets = budgets.filter(budget =>
+    budget.budget_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (budget.description || '').toLowerCase().includes(searchTerm.toLowerCase())
+  );
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   // Paginate
   const paginatedBudgets = filteredBudgets.slice(
@@ -354,6 +402,7 @@ const BudgetListPage: React.FC = () => {
 
   return (
     <Box>
+<<<<<<< HEAD
       {/* ── Gradient Header ── */}
       <Paper elevation={0} sx={{ p: 3, mb: 3, background: 'linear-gradient(135deg, #006064 0%, #00363a 100%)', color: 'white', borderRadius: 2 }}>
         <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={2}>
@@ -412,6 +461,41 @@ const BudgetListPage: React.FC = () => {
           </Grid>
         )}
         <Grid item xs={12} sm={isFinanceOrApprover ? 4 : 6}>
+=======
+      {/* Header */}
+      <Typography variant="h5" sx={{ mb: 3 }}>
+        Budget Lines
+      </Typography>
+
+      {/* Summary Cards */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        <Grid item xs={12} sm={4}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={2}>
+                <Box
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 2,
+                    backgroundColor: 'primary.light'
+                  }}
+                >
+                  <BudgetIcon sx={{ color: 'primary.main' }} />
+                </Box>
+                <Box>
+                  <Typography variant="h5" fontWeight="bold">
+                    {formatCurrency(summary.totalAllocated)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Total Allocated
+                  </Typography>
+                </Box>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={4}>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <Card>
             <CardContent>
               <Box display="flex" alignItems="center" gap={2}>
@@ -436,7 +520,11 @@ const BudgetListPage: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
+<<<<<<< HEAD
         <Grid item xs={12} sm={isFinanceOrApprover ? 4 : 6}>
+=======
+        <Grid item xs={12} sm={4}>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <Card>
             <CardContent>
               <Box display="flex" alignItems="center" gap={2}>
@@ -454,7 +542,11 @@ const BudgetListPage: React.FC = () => {
                     {formatCurrency(summary.totalBalance)}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
+<<<<<<< HEAD
                     Total Remaining
+=======
+                    Total Balance
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   </Typography>
                 </Box>
               </Box>
@@ -470,6 +562,7 @@ const BudgetListPage: React.FC = () => {
       )}
 
       {/* Filters */}
+<<<<<<< HEAD
       <Paper elevation={0} sx={{ p: 2, mb: 3, borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
         <Stack direction="row" alignItems="center" spacing={1} mb={1.5}>
           <FilterIcon fontSize="small" color="action" />
@@ -481,10 +574,15 @@ const BudgetListPage: React.FC = () => {
           )}
         </Stack>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} flexWrap="wrap" useFlexGap>
+=======
+      <Paper elevation={2} sx={{ p: 2, mb: 3 }}>
+        <Box display="flex" gap={2} flexWrap="wrap" alignItems="center">
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <TextField
             size="small"
             placeholder="Search by code or description..."
             value={searchTerm}
+<<<<<<< HEAD
             onChange={(e) => { setSearchTerm(e.target.value); setPage(0); }}
             InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
             sx={{ minWidth: 270, flex: 2 }}
@@ -499,11 +597,57 @@ const BudgetListPage: React.FC = () => {
           <FormControl size="small" sx={{ minWidth: 120, flex: 1 }}>
             <InputLabel>Status</InputLabel>
             <Select value={activeFilter} label="Status" onChange={(e) => { setActiveFilter(e.target.value as boolean | ''); setPage(0); }}>
+=======
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setPage(0);
+            }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              )
+            }}
+            sx={{ minWidth: 300 }}
+          />
+
+          <FormControl size="small" sx={{ minWidth: 150 }}>
+            <InputLabel>Fiscal Year</InputLabel>
+            <Select
+              value={fiscalYear}
+              label="Fiscal Year"
+              onChange={(e) => {
+                setFiscalYear(e.target.value as number | '');
+                setPage(0);
+              }}
+            >
+              <MenuItem value="">All Years</MenuItem>
+              {fiscalYears.map((year) => (
+                <MenuItem key={year} value={year}>
+                  {year}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>Status</InputLabel>
+            <Select
+              value={activeFilter}
+              label="Status"
+              onChange={(e) => {
+                setActiveFilter(e.target.value as boolean | '');
+                setPage(0);
+              }}
+            >
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               <MenuItem value="">All</MenuItem>
               <MenuItem value={true as any}>Active</MenuItem>
               <MenuItem value={false as any}>Inactive</MenuItem>
             </Select>
           </FormControl>
+<<<<<<< HEAD
           <FormControl size="small" sx={{ minWidth: 180, flex: 1 }}>
             <InputLabel>Department</InputLabel>
             <Select value={deptFilter} label="Department" onChange={(e) => { setDeptFilter(e.target.value); setPage(0); }}>
@@ -552,25 +696,56 @@ const BudgetListPage: React.FC = () => {
                 <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }}>Usage</TableCell>
                 <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }}>Status</TableCell>
                 {canManage && <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }} align="center">Actions</TableCell>}
+=======
+        </Box>
+      </Paper>
+
+      {/* Table */}
+      <Paper elevation={2}>
+        <TableContainer>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>Budget Code</TableCell>
+                <TableCell>Description</TableCell>
+                <TableCell>Fiscal Year</TableCell>
+                <TableCell align="right">Allocated</TableCell>
+                <TableCell align="right">Spent</TableCell>
+                <TableCell align="right">Balance</TableCell>
+                <TableCell>Utilization</TableCell>
+                <TableCell>Status</TableCell>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               </TableRow>
             </TableHead>
             <TableBody>
               {isLoading ? (
                 <TableRow>
+<<<<<<< HEAD
                   <TableCell colSpan={9} align="center" sx={{ py: 4 }}>
+=======
+                  <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     <CircularProgress />
                   </TableCell>
                 </TableRow>
               ) : paginatedBudgets.length === 0 ? (
                 <TableRow>
+<<<<<<< HEAD
                   <TableCell colSpan={9} align="center" sx={{ py: 5 }}>
                     <BudgetIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
                     <Typography color="text.secondary">No budget lines found</Typography>
+=======
+                  <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
+                    <Typography color="text.secondary">
+                      No budget lines found
+                    </Typography>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   </TableCell>
                 </TableRow>
               ) : (
                 paginatedBudgets.map((budget) => {
                   const utilization = getUtilization(budget);
+<<<<<<< HEAD
                   const isSelected = selectedBudgets.includes(budget.id);
                   return (
                     <TableRow
@@ -633,25 +808,64 @@ const BudgetListPage: React.FC = () => {
                           variant="caption"
                           fontWeight={700}
                           color={budget.balance < 0 ? 'error.main' : 'text.primary'}
+=======
+                  return (
+                    <TableRow key={budget.id} hover>
+                      <TableCell>
+                        <Typography fontWeight="medium">
+                          {budget.budget_code}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography noWrap sx={{ maxWidth: 200 }}>
+                          {budget.description}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>{budget.fiscal_year}</TableCell>
+                      <TableCell align="right">
+                        {formatCurrency(budget.allocated_amount)}
+                      </TableCell>
+                      <TableCell align="right">
+                        {formatCurrency(budget.spent_amount)}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography
+                          fontWeight="medium"
+                          color={budget.balance < 0 ? 'error.main' : 'inherit'}
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         >
                           {formatCurrency(budget.balance)}
                         </Typography>
                       </TableCell>
+<<<<<<< HEAD
                       <TableCell sx={{ py: 0.5, px: 1 }}>
                         <Box display="flex" alignItems="center" gap={0.75}>
                           <Box sx={{ width: 80 }}>
+=======
+                      <TableCell>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Box sx={{ width: 100 }}>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                             <LinearProgress
                               variant="determinate"
                               value={Math.min(utilization, 100)}
                               color={getUtilizationColor(utilization)}
+<<<<<<< HEAD
                               sx={{ height: 4, borderRadius: 2 }}
                             />
                           </Box>
                           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 36, fontSize: '0.68rem' }}>
+=======
+                              sx={{ height: 8, borderRadius: 4 }}
+                            />
+                          </Box>
+                          <Typography variant="body2" color="text.secondary">
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                             {utilization.toFixed(1)}%
                           </Typography>
                         </Box>
                       </TableCell>
+<<<<<<< HEAD
                       <TableCell sx={{ py: 0.5, px: 1 }}>
                         <Chip
                           label={budget.is_active ? 'Active' : 'Suspended'}
@@ -694,6 +908,15 @@ const BudgetListPage: React.FC = () => {
                           </Tooltip>
                         </TableCell>
                       )}
+=======
+                      <TableCell>
+                        <Chip
+                          label={budget.is_active ? 'Active' : 'Inactive'}
+                          size="small"
+                          color={budget.is_active ? 'success' : 'default'}
+                        />
+                      </TableCell>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     </TableRow>
                   );
                 })
@@ -701,6 +924,7 @@ const BudgetListPage: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
+<<<<<<< HEAD
         <Divider />
         <Box display="flex" alignItems="center" justifyContent="space-between" px={2} py={0.5}>
           <Typography variant="caption" color="text.secondary">
@@ -872,6 +1096,21 @@ const BudgetListPage: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+=======
+        <TablePagination
+          component="div"
+          count={filteredBudgets.length}
+          page={page}
+          onPageChange={(_, newPage) => setPage(newPage)}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(e) => {
+            setRowsPerPage(parseInt(e.target.value, 10));
+            setPage(0);
+          }}
+          rowsPerPageOptions={[5, 10, 25, 50]}
+        />
+      </Paper>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     </Box>
   );
 };

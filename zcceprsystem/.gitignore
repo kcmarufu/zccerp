@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment variables - NEVER commit these
+.env
+**/.env
+.env.local
+.env.production
+.env.staging
+
+# Build outputs
+frontend/build/
+frontend/.cache/
+
+# Logs
+logs/
+*.log
+backend/logs/
+
+# Uploads (user files - too large and contain sensitive data)
+backend/uploads/invoices/*
+backend/uploads/quotations/*
+backend/uploads/receipts/*
+backend/uploads/reconciliations/*
+backend/uploads/temp/*
+# Keep the folder structure
+!backend/uploads/invoices/.gitkeep
+!backend/uploads/quotations/.gitkeep
+!backend/uploads/receipts/.gitkeep
+!backend/uploads/reconciliations/.gitkeep
+!backend/uploads/temp/.gitkeep
+
+# Prisma generated
+backend/src/generated/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/settings.json

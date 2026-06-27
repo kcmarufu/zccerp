@@ -18,7 +18,14 @@ class AuthController {
       const { email, password } = req.body;
 
       if (!email || !password) {
+<<<<<<< HEAD
         return res.status(400).json({ success: false, error: 'Email and password are required' });
+=======
+        return res.status(400).json({
+          success: false,
+          error: 'Email and password are required'
+        });
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       }
 
       // Fetch user with role and department
@@ -28,6 +35,7 @@ class AuthController {
          JOIN roles r ON u.role_id = r.id
          JOIN departments d ON u.department_id = d.id
          WHERE u.email = ? AND u.is_active = TRUE`,
+<<<<<<< HEAD
         [email.toLowerCase().trim()]
       );
 
@@ -73,6 +81,37 @@ class AuthController {
       // ── Success: reset lockout counters ─────────────────────────────────────
       const accessToken = jwt.sign(
         { userId: user.id, role: user.role_name, departmentId: user.department_id },
+=======
+        [email.toLowerCase()]
+      );
+
+      if (users.length === 0) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid credentials'
+        });
+      }
+
+      const user = users[0];
+
+      // Verify password
+      const isValidPassword = await bcrypt.compare(password, user.password_hash);
+      
+      if (!isValidPassword) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid credentials'
+        });
+      }
+
+      // Generate tokens
+      const accessToken = jwt.sign(
+        { 
+          userId: user.id,
+          role: user.role_name,
+          departmentId: user.department_id
+        },
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
       );
@@ -83,25 +122,50 @@ class AuthController {
         { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
       );
 
+<<<<<<< HEAD
       await query(
         'UPDATE users SET last_login = NOW(), failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = ?',
         [user.id]
       );
 
       const { password_hash, failed_login_attempts, locked_until, ...userData } = user;
+=======
+      // Update last login
+      await query(
+        'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?',
+        [user.id]
+      );
+
+      // Return user data (excluding password)
+      const { password_hash, ...userData } = user;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
       res.json({
         success: true,
         message: 'Login successful',
         data: {
+<<<<<<< HEAD
           user: { ...userData, role: user.role_name },
+=======
+          user: {
+            ...userData,
+            role: user.role_name
+          },
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           accessToken,
           refreshToken
         }
       });
     } catch (error) {
       console.error('Login error:', error);
+<<<<<<< HEAD
       res.status(500).json({ success: false, error: 'Authentication failed' });
+=======
+      res.status(500).json({
+        success: false,
+        error: 'Authentication failed'
+      });
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     }
   }
 
@@ -223,12 +287,21 @@ class AuthController {
         });
       }
 
+<<<<<<< HEAD
       // Hash new password (cost 12 — strong for production)
       const newHash = await bcrypt.hash(newPassword, 12);
 
       // Update password
       await query(
         'UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?',
+=======
+      // Hash new password
+      const newHash = await bcrypt.hash(newPassword, 10);
+
+      // Update password
+      await query(
+        'UPDATE users SET password_hash = ? WHERE id = ?',
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         [newHash, userId]
       );
 

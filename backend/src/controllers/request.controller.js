@@ -24,12 +24,17 @@ class RequestController {
         });
       }
 
+<<<<<<< HEAD
       const { justification, items, donor_id, category, projectCode,
               is_activity_request, activity_start_date, activity_end_date } = req.body;
+=======
+      const { justification, priority, items } = req.body;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       const userId = req.user.id;
       const departmentId = req.user.department_id;
 
       const result = await transaction(async (connection) => {
+<<<<<<< HEAD
         // Generate structured reference number:
         //   With donor+project: DONORCODE-PROJECTCODE-0000001
         //   Fallback:           REQ-YYYY-000001
@@ -113,6 +118,15 @@ class RequestController {
           );
           requestNumber = `REQ-${year}-${String(countResult[0].seq).padStart(6, '0')}`;
         }
+=======
+        // Generate request number
+        const year = new Date().getFullYear();
+        const [countResult] = await connection.execute(
+          `SELECT COUNT(*) + 1 as seq FROM requests WHERE YEAR(created_at) = ?`,
+          [year]
+        );
+        const requestNumber = `REQ-${year}-${String(countResult[0].seq).padStart(6, '0')}`;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
         // Calculate total amount from items
         const totalAmount = items.reduce((sum, item) => {
@@ -120,6 +134,7 @@ class RequestController {
           return sum + itemTotal;
         }, 0);
 
+<<<<<<< HEAD
         // Check cross-department routing: if the selected project belongs to a different
         // department, store that department's ID so approvals are routed there.
         // Skip for Admin-donor requests — they use a shared approval queue without cross-dept routing.
@@ -174,16 +189,32 @@ class RequestController {
            is_activity_request ? 1 : 0,
            (is_activity_request && activity_start_date) ? activity_start_date : null,
            (is_activity_request && activity_end_date)   ? activity_end_date   : null]
+=======
+        // Insert request
+        const [requestResult] = await connection.execute(
+          `INSERT INTO requests (request_number, requester_id, department_id, status, justification, priority, total_amount)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [requestNumber, userId, departmentId, REQUEST_STATUS.DRAFT, justification, priority || 'MEDIUM', totalAmount]
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         );
 
         const requestId = requestResult.insertId;
 
+<<<<<<< HEAD
         // Insert items with category
         for (const item of items) {
           await connection.execute(
             `INSERT INTO request_items (request_id, item_description, category, quantity, unit_of_measure, unit_price, budget_line_id, notes, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
             [requestId, item.itemDescription, item.category || category || 'PROCUREMENT', item.quantity, item.unitOfMeasure || 'EACH', 
+=======
+        // Insert items
+        for (const item of items) {
+          await connection.execute(
+            `INSERT INTO request_items (request_id, item_description, quantity, unit_of_measure, unit_price, budget_line_id, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [requestId, item.itemDescription, item.quantity, item.unitOfMeasure || 'EACH', 
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
              item.unitPrice, item.budgetLineId, item.notes || null]
           );
         }
@@ -220,6 +251,7 @@ class RequestController {
                 u.last_name as requester_last_name,
                 u.email as requester_email,
                 d.department_name,
+<<<<<<< HEAD
                 d.department_code,
                 dn.donor_name,
                 dn.donor_code,
@@ -233,6 +265,12 @@ class RequestController {
          LEFT JOIN donors dn ON r.donor_id = dn.id
          LEFT JOIN projects p ON r.project_id = p.id
          LEFT JOIN departments rd ON r.routing_department_id = rd.id
+=======
+                d.department_code
+         FROM requests r
+         JOIN users u ON r.requester_id = u.id
+         JOIN departments d ON r.department_id = d.id
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
          WHERE r.id = ?`,
         [requestId]
       );
@@ -244,6 +282,7 @@ class RequestController {
         });
       }
 
+<<<<<<< HEAD
       const request = requests[0];
       const isOwner = Number(request.requester_id) === Number(req.user.id);
 
@@ -255,12 +294,18 @@ class RequestController {
         });
       }
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       // Get items with budget line info
       const items = await query(
         `SELECT ri.*, 
                 bl.budget_code,
                 bl.budget_name,
+<<<<<<< HEAD
                 (bl.allocated_amount - bl.spent_amount) as budget_balance
+=======
+                bl.balance as budget_balance
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
          FROM request_items ri
          JOIN budget_lines bl ON ri.budget_line_id = bl.id
          WHERE ri.request_id = ?`,
@@ -273,8 +318,12 @@ class RequestController {
       res.json({
         success: true,
         data: {
+<<<<<<< HEAD
           ...request,
           has_per_diem_claim: Boolean(request.has_per_diem_claim),
+=======
+          ...requests[0],
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           items,
           approvalTrail
         }
@@ -295,9 +344,15 @@ class RequestController {
   async getRequests(req, res) {
     try {
       const { status, page = 1, limit = 20, sortBy = 'created_at', sortOrder = 'DESC' } = req.query;
+<<<<<<< HEAD
       const pageNum = Math.max(1, parseInt(page) || 1);
       const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 20));
       const offset = Math.max(0, (pageNum - 1) * limitNum);
+=======
+      const pageNum = parseInt(page) || 1;
+      const limitNum = parseInt(limit) || 20;
+      const offset = (pageNum - 1) * limitNum;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       const userRole = req.user.role;
       const userId = req.user.id;
       const departmentId = req.user.department_id;
@@ -309,8 +364,16 @@ class RequestController {
       if (userRole === ROLES.GENERAL_USER) {
         whereClause += ' AND r.requester_id = ?';
         params.push(userId);
+<<<<<<< HEAD
       }
       // HEAD_OF_PROGRAMS, PROGRAM_LEAD, FINANCE_CLERK and ADMIN can all see all requests.
+=======
+      } else if (userRole === ROLES.PROGRAM_LEAD) {
+        whereClause += ' AND r.department_id = ?';
+        params.push(departmentId);
+      }
+      // HOP and Finance can see all
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
       // Status filter
       if (status) {
@@ -319,14 +382,22 @@ class RequestController {
       }
 
       // Get total count
+<<<<<<< HEAD
       const countResult = await query(
+=======
+      const [countResult] = await query(
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         `SELECT COUNT(*) as total FROM requests r WHERE ${whereClause}`,
         params
       );
 
       // Validate sort order
       const validSortOrder = sortOrder === 'ASC' ? 'ASC' : 'DESC';
+<<<<<<< HEAD
       const validSortBy = ['created_at', 'updated_at', 'submitted_at', 'total_amount', 'status', 'request_code'].includes(sortBy) ? sortBy : 'created_at';
+=======
+      const validSortBy = ['created_at', 'updated_at', 'submitted_at', 'total_amount', 'status', 'request_number'].includes(sortBy) ? sortBy : 'created_at';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
       // Get paginated results
       const requests = await query(
@@ -340,8 +411,13 @@ class RequestController {
          JOIN departments d ON r.department_id = d.id
          WHERE ${whereClause}
          ORDER BY r.${validSortBy} ${validSortOrder}
+<<<<<<< HEAD
          LIMIT ${limitNum} OFFSET ${offset}`,
         params
+=======
+         LIMIT ? OFFSET ?`,
+        [...params, limitNum, offset]
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       );
 
       res.json({
@@ -380,8 +456,12 @@ class RequestController {
       }
 
       const { requestId } = req.params;
+<<<<<<< HEAD
       const { justification, priority, items,
               is_activity_request, activity_start_date, activity_end_date } = req.body;
+=======
+      const { justification, priority, items } = req.body;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       const userId = req.user.id;
 
       await transaction(async (connection) => {
@@ -399,6 +479,7 @@ class RequestController {
           throw new Error('You can only edit your own requests');
         }
 
+<<<<<<< HEAD
         const canEditStatuses = [REQUEST_STATUS.DRAFT, REQUEST_STATUS.REJECTED];
         if (!canEditStatuses.includes(requests[0].status)) {
           throw new Error('Can only edit requests in DRAFT or REJECTED status');
@@ -418,6 +499,16 @@ class RequestController {
            (is_activity_request && activity_start_date) ? activity_start_date : (is_activity_request === 0 ? null : requests[0].activity_start_date),
            (is_activity_request && activity_end_date)   ? activity_end_date   : (is_activity_request === 0 ? null : requests[0].activity_end_date),
            requestId]
+=======
+        if (requests[0].status !== REQUEST_STATUS.DRAFT) {
+          throw new Error('Can only edit requests in DRAFT status');
+        }
+
+        // Update request
+        await connection.execute(
+          'UPDATE requests SET justification = ?, priority = ? WHERE id = ?',
+          [justification || requests[0].justification, priority || requests[0].priority, requestId]
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         );
 
         // Update items if provided
@@ -425,16 +516,26 @@ class RequestController {
           // Delete existing items
           await connection.execute('DELETE FROM request_items WHERE request_id = ?', [requestId]);
 
+<<<<<<< HEAD
           // Insert new items with category
           for (const item of items) {
             await connection.execute(
               `INSERT INTO request_items (request_id, item_description, category, quantity, unit_of_measure, unit_price, budget_line_id, notes, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
               [requestId, item.itemDescription, item.category || 'PROCUREMENT', item.quantity, item.unitOfMeasure || 'EACH',
+=======
+          // Insert new items
+          for (const item of items) {
+            await connection.execute(
+              `INSERT INTO request_items (request_id, item_description, quantity, unit_of_measure, unit_price, budget_line_id, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [requestId, item.itemDescription, item.quantity, item.unitOfMeasure || 'EACH',
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                item.unitPrice, item.budgetLineId, item.notes || null]
             );
           }
         }
+<<<<<<< HEAD
 
         if (previousStatus === REQUEST_STATUS.REJECTED) {
           await connection.execute(
@@ -444,6 +545,8 @@ class RequestController {
             [requestId, userId, req.user.role || ROLES.GENERAL_USER, REQUEST_STATUS.REJECTED, REQUEST_STATUS.REJECTED, 'Requester updated rejected request', req.ip]
           );
         }
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       });
 
       res.json({

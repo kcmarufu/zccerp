@@ -163,10 +163,15 @@ const topUpBudgetValidator = [
     .withMessage('Valid budget line ID is required'),
   
   body('amount')
+<<<<<<< HEAD
     .isFloat()
     .withMessage('Amount is required and must be a valid number')
     .custom((value) => value !== 0)
     .withMessage('Amount cannot be zero'),
+=======
+    .isFloat({ min: 0.01 })
+    .withMessage('Top-up amount must be greater than 0'),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   
   body('description')
     .optional()

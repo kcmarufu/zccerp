@@ -12,6 +12,7 @@ const requestController = require('../controllers/request.controller');
 const approvalController = require('../controllers/approval.controller');
 const budgetController = require('../controllers/budget.controller');
 const exportController = require('../controllers/export.controller');
+<<<<<<< HEAD
 const donorController = require('../controllers/donor.controller');
 const attachmentController = require('../controllers/attachment.controller');
 const reconciliationController = require('../controllers/reconciliation.controller');
@@ -24,6 +25,11 @@ const notificationService = require('../services/notification.service');
 // Middleware
 const { authenticateToken, requireRole, requirePermission, requireSameDepartment, requireFinanceManager } = require('../middleware/auth.middleware');
 const { uploadSingle, uploadMultiple, handleUploadError } = require('../middleware/upload.middleware');
+=======
+
+// Middleware
+const { authenticateToken, requireRole, requirePermission, requireSameDepartment } = require('../middleware/auth.middleware');
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 const { 
   createRequestValidator, 
   updateRequestValidator, 
@@ -78,7 +84,10 @@ router.get('/requests/:requestId',
 // Update request (Draft only)
 router.put('/requests/:requestId',
   authenticateToken,
+<<<<<<< HEAD
   requirePermission(PERMISSIONS.EDIT_REQUEST),
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   updateRequestValidator,
   requestController.updateRequest.bind(requestController)
 );
@@ -92,7 +101,10 @@ router.delete('/requests/:requestId',
 // Submit request for approval
 router.post('/requests/:requestId/submit',
   authenticateToken,
+<<<<<<< HEAD
   requirePermission(PERMISSIONS.SUBMIT_REQUEST),
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   requestController.submitRequest.bind(requestController)
 );
 
@@ -103,6 +115,7 @@ router.get('/requests/:requestId/budget-impact',
 );
 
 // ============================================================================
+<<<<<<< HEAD
 // PER DIEM / TRAVEL CLAIM ROUTES
 // ============================================================================
 
@@ -133,20 +146,30 @@ router.delete('/requests/:requestId/per-diem',
 );
 
 // ============================================================================
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 // APPROVAL ROUTES
 // ============================================================================
 
 // Get pending approvals for current user's role
 router.get('/approvals/pending',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   approvalController.getPendingApprovals.bind(approvalController)
 );
 
 // Approve request
 router.post('/approvals/:requestId/approve',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   requireSameDepartment,
   approvalValidator,
   approvalController.approveRequest.bind(approvalController)
@@ -155,7 +178,11 @@ router.post('/approvals/:requestId/approve',
 // Reject request
 router.post('/approvals/:requestId/reject',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   requireSameDepartment,
   approvalValidator,
   approvalController.rejectRequest.bind(approvalController)
@@ -170,6 +197,7 @@ router.get('/approvals/:requestId/trail',
 // Get budget impact before approval
 router.get('/approvals/:requestId/budget-impact',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
   approvalController.getBudgetImpact.bind(approvalController)
 );
@@ -178,41 +206,71 @@ router.get('/approvals/:requestId/budget-impact',
 router.post('/approvals/:requestId/reverse',
   authenticateToken,
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+  approvalController.getBudgetImpact.bind(approvalController)
+);
+
+// Reverse approval (within 5 hours)
+router.post('/approvals/:requestId/reverse',
+  authenticateToken,
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   approvalController.reverseApproval.bind(approvalController)
 );
 
 // Check if approval can be reversed
 router.get('/approvals/:requestId/can-reverse',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   approvalController.canReverseApproval.bind(approvalController)
 );
 
 // Get approval history for current user
 router.get('/approvals/history',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   approvalController.getApprovalHistory.bind(approvalController)
 );
 
 // Get all approved requests
 router.get('/approvals/approved',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   approvalController.getApprovedRequests.bind(approvalController)
 );
 
 // Get all rejected requests
 router.get('/approvals/rejected',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   approvalController.getRejectedRequests.bind(approvalController)
 );
 
 // Get approver dashboard stats
 router.get('/approvals/stats',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN),
+=======
+  requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   approvalController.getApproverStats.bind(approvalController)
 );
 
@@ -230,6 +288,7 @@ router.get('/budgets',
 // Get budget summary by department
 router.get('/budgets/summary',
   authenticateToken,
+<<<<<<< HEAD
   requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD, ROLES.FINANCE_CLERK),
   budgetController.getBudgetSummary.bind(budgetController)
 );
@@ -241,6 +300,12 @@ router.get('/budgets/reports',
   budgetController.getFinancialReports.bind(budgetController)
 );
 
+=======
+  requireRole(ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK),
+  budgetController.getBudgetSummary.bind(budgetController)
+);
+
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 // Get single budget line with history
 router.get('/budgets/:budgetLineId',
   authenticateToken,
@@ -248,6 +313,7 @@ router.get('/budgets/:budgetLineId',
   budgetController.getBudgetLineById.bind(budgetController)
 );
 
+<<<<<<< HEAD
 // Get budget line details with donor info
 router.get('/budgets/:budgetLineId/details',
   authenticateToken,
@@ -266,30 +332,57 @@ router.get('/budgets/:budgetLineId/requests',
 router.post('/budgets',
   authenticateToken,
   requireFinanceManager,
+=======
+// Create budget line (Finance only)
+router.post('/budgets',
+  authenticateToken,
+  requireRole(ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   budgetLineValidator,
   budgetController.createBudgetLine.bind(budgetController)
 );
 
+<<<<<<< HEAD
 // Update budget line (Finance Manager only)
 router.put('/budgets/:budgetLineId',
   authenticateToken,
   requireFinanceManager,
+=======
+// Update budget line (Finance only)
+router.put('/budgets/:budgetLineId',
+  authenticateToken,
+  requireRole(ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   budgetLineValidator,
   budgetController.updateBudgetLine.bind(budgetController)
 );
 
+<<<<<<< HEAD
 // Top up budget (Finance Manager only)
 router.post('/budgets/:budgetLineId/topup',
   authenticateToken,
   requireFinanceManager,
+=======
+// Top up budget (Finance only)
+router.post('/budgets/:budgetLineId/topup',
+  authenticateToken,
+  requireRole(ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   topUpBudgetValidator,
   budgetController.topUpBudget.bind(budgetController)
 );
 
+<<<<<<< HEAD
 // Delete budget line (Finance Manager only)
 router.delete('/budgets/:budgetLineId',
   authenticateToken,
   requireFinanceManager,
+=======
+// Delete budget line (Finance only)
+router.delete('/budgets/:budgetLineId',
+  authenticateToken,
+  requireRole(ROLES.FINANCE_CLERK),
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   budgetController.deleteBudgetLine.bind(budgetController)
 );
 
@@ -304,12 +397,15 @@ router.get('/export/dispatch/:requestId/pdf',
   exportController.generateDispatchPDF.bind(exportController)
 );
 
+<<<<<<< HEAD
 // Generate PDF reconciliation document
 router.get('/export/reconciliation/:requestId/pdf',
   authenticateToken,
   exportController.generateReconciliationPDF.bind(exportController)
 );
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 // Generate Excel dispatch document
 router.get('/export/dispatch/:requestId/excel',
   authenticateToken,
@@ -324,6 +420,7 @@ router.post('/export/bulk',
   exportController.generateBulkExport.bind(exportController)
 );
 
+<<<<<<< HEAD
 // Mark request as dispatched
 router.post('/export/dispatch/:requestId/mark-dispatched',
   authenticateToken,
@@ -769,10 +866,13 @@ router.delete('/admin/departments/:id',
   adminController.deleteDepartment.bind(adminController)
 );
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 // ============================================================================
 // LOOKUP ROUTES
 // ============================================================================
 
+<<<<<<< HEAD
 const { query: lookupQuery } = require('../config/database');
 
 // Get all users (names only, for dropdowns)
@@ -786,11 +886,18 @@ router.get('/users/list', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, error: 'Failed to fetch users' });
   }
 });
+=======
+const { query } = require('../config/database');
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 // Get all departments
 router.get('/departments', authenticateToken, async (req, res) => {
   try {
+<<<<<<< HEAD
     const departments = await lookupQuery(
+=======
+    const departments = await query(
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       'SELECT id, department_name, department_code FROM departments WHERE is_active = TRUE ORDER BY department_name'
     );
     res.json({ success: true, data: departments });
@@ -802,13 +909,18 @@ router.get('/departments', authenticateToken, async (req, res) => {
 // Get all roles
 router.get('/roles', authenticateToken, async (req, res) => {
   try {
+<<<<<<< HEAD
     const roles = await lookupQuery('SELECT id, role_name, role_description FROM roles');
+=======
+    const roles = await query('SELECT id, role_name, role_description FROM roles');
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     res.json({ success: true, data: roles });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to fetch roles' });
   }
 });
 
+<<<<<<< HEAD
 // ============================================================================
 // ASSET MANAGEMENT ROUTES
 // ============================================================================
@@ -1425,4 +1537,6 @@ router.put('/notifications/:id/read', authenticateToken, async (req, res) => {
   }
 });
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 module.exports = router;

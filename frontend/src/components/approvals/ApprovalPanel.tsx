@@ -29,26 +29,38 @@ import {
   Grid,
   IconButton,
   Tooltip,
+<<<<<<< HEAD
   LinearProgress,
   MenuItem
+=======
+  LinearProgress
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   CheckCircle as ApproveIcon,
   Cancel as RejectIcon,
   Visibility as ViewIcon,
   Warning as WarningIcon,
+<<<<<<< HEAD
   Info as InfoIcon,
   Download as DownloadIcon,
   FilterList as FilterIcon
+=======
+  Info as InfoIcon
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { format } from 'date-fns';
 
 import { Request, BudgetImpact, ApprovalPayload } from '../../types';
 import { approvalService } from '../../services/approvalService';
+<<<<<<< HEAD
 import attachmentService, { Attachment } from '../../services/attachmentService';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
+=======
+import { useAuthStore } from '../../store/authStore';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 const ApprovalPanel: React.FC = () => {
   const navigate = useNavigate();
@@ -62,6 +74,7 @@ const ApprovalPanel: React.FC = () => {
   const [dialogAction, setDialogAction] = useState<'approve' | 'reject'>('approve');
   const [comments, setComments] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+<<<<<<< HEAD
   const [requestAttachments, setRequestAttachments] = useState<Attachment[]>([]);
 
   // Department filter state
@@ -83,6 +96,8 @@ const ApprovalPanel: React.FC = () => {
     }
     return pendingRequests.filter(r => r.department_id === parseInt(deptFilter));
   })();
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   // Fetch pending approvals
   useEffect(() => {
@@ -122,12 +137,15 @@ const ApprovalPanel: React.FC = () => {
     setDialogAction(action);
     setComments('');
     setIsDialogOpen(true);
+<<<<<<< HEAD
     setRequestAttachments([]);
     
     // Fetch attachments for this request
     attachmentService.getEntityAttachments('REQUEST', request.id)
       .then(data => setRequestAttachments(data))
       .catch(() => console.log('Failed to fetch attachments'));
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     
     if (action === 'approve') {
       handleViewBudgetImpact(request);
@@ -182,7 +200,10 @@ const ApprovalPanel: React.FC = () => {
 
   const getStatusColor = (status: string): 'warning' | 'info' | 'success' | 'error' | 'default' => {
     switch (status) {
+<<<<<<< HEAD
       case 'PENDING_ADMIN_APPROVAL': return 'info';
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       case 'PENDING_LEAD_APPROVAL': return 'warning';
       case 'PENDING_HOP_APPROVAL': return 'info';
       case 'PENDING_FINANCE_APPROVAL': return 'success';
@@ -230,6 +251,7 @@ const ApprovalPanel: React.FC = () => {
           </Typography>
         </Paper>
       ) : (
+<<<<<<< HEAD
         <>
           {/* Department Filter */}
           <Paper elevation={1} sx={{ p: 2, mb: 2 }}>
@@ -260,6 +282,9 @@ const ApprovalPanel: React.FC = () => {
           </Paper>
 
           <TableContainer component={Paper}>
+=======
+        <TableContainer component={Paper}>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <Table>
             <TableHead>
               <TableRow sx={{ backgroundColor: 'grey.100' }}>
@@ -274,18 +299,26 @@ const ApprovalPanel: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
+<<<<<<< HEAD
               {pendingRequests.length === 0 ? (
                 <TableRow><TableCell colSpan={8} align="center"><Typography py={3} color="text.secondary">No pending approvals</Typography></TableCell></TableRow>
               ) : filteredRequests.length === 0 ? (
                 <TableRow><TableCell colSpan={8} align="center"><Typography py={3} color="text.secondary">No approvals match the selected department filter</Typography></TableCell></TableRow>
               ) : filteredRequests.map((request) => (
+=======
+              {pendingRequests.map((request) => (
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 <TableRow 
                   key={request.id}
                   hover
                   sx={{ '&:hover': { backgroundColor: 'grey.50' } }}
                 >
                   <TableCell>
+<<<<<<< HEAD
                     <Typography fontWeight="medium">{request.request_code}</Typography>
+=======
+                    <Typography fontWeight="medium">{request.request_number}</Typography>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   </TableCell>
                   <TableCell>
                     {request.requester_first_name} {request.requester_last_name}
@@ -321,7 +354,11 @@ const ApprovalPanel: React.FC = () => {
                     <Tooltip title="View Details">
                       <IconButton 
                         size="small"
+<<<<<<< HEAD
                         onClick={() => navigate(`/finance/requests/${request.id}`)}
+=======
+                        onClick={() => navigate(`/requests/${request.id}`)}
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                       >
                         <ViewIcon />
                       </IconButton>
@@ -349,8 +386,12 @@ const ApprovalPanel: React.FC = () => {
               ))}
             </TableBody>
           </Table>
+<<<<<<< HEAD
           </TableContainer>
         </>
+=======
+        </TableContainer>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       )}
 
       {/* Approval/Rejection Dialog */}
@@ -372,7 +413,11 @@ const ApprovalPanel: React.FC = () => {
                   <Grid container spacing={2}>
                     <Grid item xs={6}>
                       <Typography variant="body2" color="text.secondary">Request Number</Typography>
+<<<<<<< HEAD
                       <Typography fontWeight="medium">{selectedRequest.request_code}</Typography>
+=======
+                      <Typography fontWeight="medium">{selectedRequest.request_number}</Typography>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     </Grid>
                     <Grid item xs={6}>
                       <Typography variant="body2" color="text.secondary">Total Amount</Typography>
@@ -459,6 +504,7 @@ const ApprovalPanel: React.FC = () => {
                 </Alert>
               )}
 
+<<<<<<< HEAD
               {/* Attached Documents */}
               {requestAttachments.length > 0 && (
                 <Box mb={2}>
@@ -491,6 +537,8 @@ const ApprovalPanel: React.FC = () => {
                 </Box>
               )}
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               {/* Comments Field */}
               <TextField
                 label={dialogAction === 'approve' ? 'Comments (optional)' : 'Reason for rejection'}

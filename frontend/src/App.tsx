@@ -1,10 +1,17 @@
 /**
  * Main Application Component
+<<<<<<< HEAD
  * ZCC ERP - Enterprise Resource Planning
  * Module-based routing with role-based access control
  */
 
 import React, { Suspense } from 'react';
+=======
+ * Sets up routing with role-based access control
+ */
+
+import React from 'react';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -14,11 +21,15 @@ import 'react-toastify/dist/ReactToastify.css';
 // Components
 import Navigation from './components/layout/Navigation';
 import ProtectedRoute from './components/common/ProtectedRoute';
+<<<<<<< HEAD
 import InactivityTimer from './components/common/InactivityTimer';
 
 // Pages
 import LoginPage from './pages/LoginPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
+=======
+import LoginPage from './pages/LoginPage';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 import DashboardPage from './pages/DashboardPage';
 import RequestsListPage from './pages/RequestsListPage';
 import RequestForm from './components/requests/RequestForm';
@@ -26,6 +37,7 @@ import RequestDetailPage from './pages/RequestDetailPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import BudgetListPage from './pages/BudgetListPage';
 import BudgetManagement from './components/budgets/BudgetManagement';
+<<<<<<< HEAD
 import DonorManagementPage from './pages/DonorManagementPage';
 import ProjectManagementPage from './pages/ProjectManagementPage';
 import DispatchDesk from './components/dispatch/DispatchDesk';
@@ -58,6 +70,10 @@ const TrainingRecordsPage = React.lazy(() => import('./pages/hr/TrainingRecordsP
 const PayrollPage = React.lazy(() => import('./pages/hr/PayrollPage'));
 const DisciplinaryRecordsPage = React.lazy(() => import('./pages/hr/DisciplinaryRecordsPage'));
 const ExitClearancePage = React.lazy(() => import('./pages/hr/ExitClearancePage'));
+=======
+import DispatchDesk from './components/dispatch/DispatchDesk';
+import UnauthorizedPage from './pages/UnauthorizedPage';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 // Types
 import { UserRole } from './types';
@@ -135,6 +151,7 @@ const queryClient = new QueryClient({
 });
 
 // Role constants
+<<<<<<< HEAD
 const APPROVER_ROLES: UserRole[] = ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK', 'ADMIN'];
 const FINANCE_ROLES: UserRole[] = ['FINANCE_CLERK'];
 const ADMIN_ROLES: UserRole[] = ['ADMIN'];
@@ -142,6 +159,10 @@ const ADMIN_ROLES: UserRole[] = ['ADMIN'];
 const FINANCE_MANAGERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'];
 // All roles that access finance pages (managers + clerks)
 const ALL_FINANCE_ROLES: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'];
+=======
+const APPROVER_ROLES: UserRole[] = ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK'];
+const EXPORT_ROLES: UserRole[] = ['FINANCE_CLERK']; // Only Finance team can access Dispatch Desk
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 const App: React.FC = () => {
   return (
@@ -149,19 +170,27 @@ const App: React.FC = () => {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <BrowserRouter>
+<<<<<<< HEAD
           <InactivityTimer />
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <Routes>
             {/* Public Routes */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
+<<<<<<< HEAD
             {/* Protected Routes - All under Navigation shell */}
+=======
+            {/* Protected Routes */}
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             <Route
               path="/*"
               element={
                 <ProtectedRoute>
                   <Navigation>
                     <Routes>
+<<<<<<< HEAD
                       {/* ========== Dashboard ========== */}
                       <Route path="/dashboard" element={<DashboardPage />} />
                       <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -170,6 +199,15 @@ const App: React.FC = () => {
                       {/* Requests */}
                       <Route
                         path="/finance/requests"
+=======
+                      {/* Dashboard - All authenticated users */}
+                      <Route path="/dashboard" element={<DashboardPage />} />
+                      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+
+                      {/* Requests - Users who can create requests */}
+                      <Route
+                        path="/requests"
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         element={
                           <ProtectedRoute requiredPermission="view_own_requests">
                             <RequestsListPage />
@@ -177,7 +215,11 @@ const App: React.FC = () => {
                         }
                       />
                       <Route
+<<<<<<< HEAD
                         path="/finance/requests/create"
+=======
+                        path="/requests/create"
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         element={
                           <ProtectedRoute requiredPermission="create_request">
                             <RequestForm />
@@ -185,6 +227,7 @@ const App: React.FC = () => {
                         }
                       />
                       <Route
+<<<<<<< HEAD
                         path="/finance/requests/:requestId/edit"
                         element={
                           <ProtectedRoute requiredPermission="create_request">
@@ -200,6 +243,15 @@ const App: React.FC = () => {
                       {/* Approvals */}
                       <Route
                         path="/finance/approvals"
+=======
+                        path="/requests/:requestId"
+                        element={<RequestDetailPage />}
+                      />
+
+                      {/* Approvals - Approvers only */}
+                      <Route
+                        path="/approvals"
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         element={
                           <ProtectedRoute allowedRoles={APPROVER_ROLES}>
                             <ApprovalsPage />
@@ -207,6 +259,7 @@ const App: React.FC = () => {
                         }
                       />
 
+<<<<<<< HEAD
                       {/* Reconciliation */}
                       <Route
                         path="/finance/reconciliation"
@@ -226,32 +279,54 @@ const App: React.FC = () => {
                       {/* Budgets — all finance roles can view */}
                       <Route
                         path="/finance/budgets"
+=======
+                      {/* Budgets - View for all, manage for Finance */}
+                      <Route
+                        path="/budgets"
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         element={
                           <ProtectedRoute requiredPermission="view_budget_lines">
                             <BudgetListPage />
                           </ProtectedRoute>
                         }
                       />
+<<<<<<< HEAD
                       {/* Budget Management — only Finance HOP, Finance Lead, Admin */}
                       <Route
                         path="/finance/budgets/manage"
                         element={
                           <ProtectedRoute allowedRoles={FINANCE_MANAGERS}>
+=======
+                      <Route
+                        path="/budgets/manage"
+                        element={
+                          <ProtectedRoute allowedRoles={['FINANCE_CLERK']}>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                             <BudgetManagement />
                           </ProtectedRoute>
                         }
                       />
 
+<<<<<<< HEAD
                       {/* Donors/Partners — all finance roles can view; editing gated inside page */}
                       <Route
                         path="/finance/donors"
                         element={
                           <ProtectedRoute allowedRoles={ALL_FINANCE_ROLES}>
                             <DonorManagementPage />
+=======
+                      {/* Dispatch - HOP and Finance only */}
+                      <Route
+                        path="/dispatch"
+                        element={
+                          <ProtectedRoute allowedRoles={EXPORT_ROLES}>
+                            <DispatchDesk />
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                           </ProtectedRoute>
                         }
                       />
 
+<<<<<<< HEAD
                       {/* Projects — all finance roles can view; deleting gated inside page */}
                       <Route
                         path="/finance/projects"
@@ -363,6 +438,8 @@ const App: React.FC = () => {
                       <Route path="/donors" element={<Navigate to="/finance/donors" replace />} />
                       <Route path="/dispatch" element={<Navigate to="/finance/dispatch" replace />} />
 
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                       {/* 404 */}
                       <Route path="*" element={<Navigate to="/dashboard" replace />} />
                     </Routes>

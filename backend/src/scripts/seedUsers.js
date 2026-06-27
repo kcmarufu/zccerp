@@ -50,15 +50,24 @@ async function seedUsers() {
         if (existing.length > 0) {
           // Update existing user's password
           await connection.execute(
+<<<<<<< HEAD
             'UPDATE users SET password_hash = ?, is_active = TRUE, updated_at = NOW() WHERE email = ?',
+=======
+            'UPDATE users SET password_hash = ?, is_active = TRUE WHERE email = ?',
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             [passwordHash, user.email]
           );
           console.log(`Updated password for: ${user.email}`);
         } else {
           // Insert new user
           await connection.execute(
+<<<<<<< HEAD
             `INSERT INTO users (employee_id, email, password_hash, first_name, last_name, department_id, role_id, is_active, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, NOW(), NOW())`,
+=======
+            `INSERT INTO users (employee_id, email, password_hash, first_name, last_name, department_id, role_id, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)`,
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             [user.employee_id, user.email, passwordHash, user.first_name, user.last_name, user.department_id, user.role_id]
           );
           console.log(`Created new user: ${user.email}`);

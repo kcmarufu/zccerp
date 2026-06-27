@@ -1,9 +1,16 @@
 /**
  * Main Navigation Component
+<<<<<<< HEAD
  * Professional ERP sidebar with module-based navigation
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+=======
+ * Role-based navigation sidebar/menu
+ */
+
+import React, { useState } from 'react';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Box,
@@ -21,6 +28,7 @@ import {
   Menu,
   MenuItem,
   Divider,
+<<<<<<< HEAD
   Chip,
   useTheme,
   useMediaQuery,
@@ -35,6 +43,12 @@ import {
   Grow,
   Popper,
   CircularProgress
+=======
+  Badge,
+  Chip,
+  useTheme,
+  useMediaQuery
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -47,6 +61,7 @@ import {
   LocalShipping as DispatchIcon,
   Settings as SettingsIcon,
   Logout as LogoutIcon,
+<<<<<<< HEAD
   Person as PersonIcon,
   CardGiftcard as DonorIcon,
   ExpandLess,
@@ -98,6 +113,23 @@ interface NavSection {
   items: NavSubItem[];
   /** Marks a module as not yet available for production use */
   comingSoon?: boolean;
+=======
+  Person as PersonIcon
+} from '@mui/icons-material';
+import { useAuthStore } from '../../store/authStore';
+import { UserRole } from '../../types';
+
+const DRAWER_WIDTH = 260;
+
+// Navigation items configuration with role-based visibility
+interface NavItem {
+  path: string;
+  label: string;
+  icon: React.ReactNode;
+  roles?: UserRole[];
+  permission?: string;
+  badge?: number;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 }
 
 const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -109,6 +141,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+<<<<<<< HEAD
   const [expandedSections, setExpandedSections] = useState<string[]>(['finance']);
 
   // Notification state
@@ -515,6 +548,69 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         ? prev.filter(id => id !== sectionId)
         : [...prev, sectionId]
     );
+=======
+
+  // Define navigation items with role restrictions
+  const navItems: NavItem[] = [
+    {
+      path: '/dashboard',
+      label: 'Dashboard',
+      icon: <DashboardIcon />
+    },
+    {
+      path: '/requests',
+      label: 'My Requests',
+      icon: <RequestIcon />,
+      roles: ['GENERAL_USER']
+    },
+    {
+      path: '/requests/create',
+      label: 'Create Request',
+      icon: <CreateIcon />,
+      roles: ['GENERAL_USER']
+    },
+    {
+      path: '/approvals',
+      label: 'Pending Approvals',
+      icon: <ApprovalsIcon />,
+      roles: ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK']
+    },
+    {
+      path: '/budgets',
+      label: 'Budget Lines',
+      icon: <BudgetIcon />,
+      permission: 'view_budget_lines'
+    },
+    {
+      path: '/budgets/manage',
+      label: 'Manage Budgets',
+      icon: <SettingsIcon />,
+      roles: ['FINANCE_CLERK']
+    },
+    {
+      path: '/dispatch',
+      label: 'Dispatch Desk',
+      icon: <DispatchIcon />,
+      roles: ['FINANCE_CLERK'] // Only Finance team can access Dispatch Desk
+    },
+    {
+      path: '/reports',
+      label: 'Reports',
+      icon: <ReportsIcon />,
+      permission: 'view_reports'
+    }
+  ];
+
+  // Filter navigation items based on user role/permissions
+  const filteredNavItems = navItems.filter(item => {
+    if (item.roles && !hasRole(...item.roles)) return false;
+    if (item.permission && !hasPermission(item.permission)) return false;
+    return true;
+  });
+
+  const handleDrawerToggle = () => {
+    setMobileOpen(!mobileOpen);
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   };
 
   const handleNavClick = (path: string) => {
@@ -522,15 +618,26 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     if (isMobile) setMobileOpen(false);
   };
 
+<<<<<<< HEAD
   const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => setAnchorEl(event.currentTarget);
   const handleMenuClose = () => setAnchorEl(null);
+=======
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleMenuClose = () => {
+    setAnchorEl(null);
+  };
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
 
+<<<<<<< HEAD
   const getRoleColor = (role: UserRole): 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'error' => {
     switch (role) {
       case 'ADMIN': return 'error';
@@ -539,12 +646,20 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       case 'PROGRAM_LEAD': return 'primary';
       case 'PROCUREMENT_OFFICER': return 'warning';
       case 'PROCUREMENT_COMMITTEE': return 'secondary';
+=======
+  const getRoleColor = (role: UserRole): 'default' | 'primary' | 'secondary' | 'success' | 'warning' => {
+    switch (role) {
+      case 'FINANCE_CLERK': return 'success';
+      case 'HEAD_OF_PROGRAMS': return 'secondary';
+      case 'PROGRAM_LEAD': return 'primary';
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       default: return 'default';
     }
   };
 
   const getRoleLabel = (role: UserRole): string => {
     switch (role) {
+<<<<<<< HEAD
       case 'ADMIN': return 'System Admin';
       case 'FINANCE_CLERK': return 'Finance Clerk';
       case 'HEAD_OF_PROGRAMS': return 'Head of Programs';
@@ -839,22 +954,122 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   );
 
   const breadcrumbs = getBreadcrumbs();
+=======
+      case 'FINANCE_CLERK': return 'Finance';
+      case 'HEAD_OF_PROGRAMS': return 'HOP';
+      case 'PROGRAM_LEAD': return 'Lead';
+      default: return 'User';
+    }
+  };
+
+  const drawer = (
+    <Box>
+      {/* Logo/Brand */}
+      <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <BudgetIcon sx={{ color: 'primary.main', fontSize: 32 }} />
+        <Box>
+          <Typography variant="h6" fontWeight="bold" color="primary">
+            Float Request System
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Management Module
+          </Typography>
+        </Box>
+      </Box>
+      
+      <Divider />
+
+      {/* User Info */}
+      {user && (
+        <Box sx={{ p: 2 }}>
+          <Box display="flex" alignItems="center" gap={1} mb={1}>
+            <Avatar sx={{ bgcolor: 'primary.main', width: 36, height: 36 }}>
+              {user.first_name[0]}{user.last_name[0]}
+            </Avatar>
+            <Box>
+              <Typography variant="body2" fontWeight="medium">
+                {user.first_name} {user.last_name}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {user.department_name}
+              </Typography>
+            </Box>
+          </Box>
+          <Chip 
+            label={getRoleLabel(user.role)} 
+            color={getRoleColor(user.role)} 
+            size="small"
+            sx={{ width: '100%' }}
+          />
+        </Box>
+      )}
+
+      <Divider />
+
+      {/* Navigation Items */}
+      <List>
+        {filteredNavItems.map((item) => (
+          <ListItem key={item.path} disablePadding>
+            <ListItemButton
+              selected={location.pathname === item.path}
+              onClick={() => handleNavClick(item.path)}
+              sx={{
+                mx: 1,
+                borderRadius: 1,
+                '&.Mui-selected': {
+                  backgroundColor: 'primary.light',
+                  '&:hover': {
+                    backgroundColor: 'primary.light'
+                  }
+                }
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 40 }}>
+                {item.badge ? (
+                  <Badge badgeContent={item.badge} color="error">
+                    {item.icon}
+                  </Badge>
+                ) : (
+                  item.icon
+                )}
+              </ListItemIcon>
+              <ListItemText primary={item.label} />
+            </ListItemButton>
+          </ListItem>
+        ))}
+      </List>
+    </Box>
+  );
+
+  // Import AccountBalance icon that was missed
+  const AccountBalance = BudgetIcon;
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   return (
     <Box sx={{ display: 'flex' }}>
       {/* App Bar */}
       <AppBar
         position="fixed"
+<<<<<<< HEAD
         elevation={0}
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         sx={{
           width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           ml: { md: `${DRAWER_WIDTH}px` },
           backgroundColor: 'white',
           color: 'text.primary',
+<<<<<<< HEAD
           borderBottom: `1px solid ${theme.palette.divider}`
         }}
       >
         <Toolbar sx={{ minHeight: '56px !important' }}>
+=======
+          boxShadow: 1
+        }}
+      >
+        <Toolbar>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <IconButton
             color="inherit"
             edge="start"
@@ -864,6 +1079,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             <MenuIcon />
           </IconButton>
           
+<<<<<<< HEAD
           {/* Breadcrumbs — hidden on xs to save space */}
           <Breadcrumbs
             separator={<ChevronRightIcon sx={{ fontSize: 16 }} />}
@@ -985,6 +1201,15 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
           <IconButton onClick={handleMenuOpen}>
             <Avatar sx={{ bgcolor: 'primary.main', width: 32, height: 32, fontSize: '0.8rem' }}>
+=======
+          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
+            {/* Current page title could go here */}
+          </Typography>
+
+          {/* User Menu */}
+          <IconButton onClick={handleMenuOpen}>
+            <Avatar sx={{ bgcolor: 'primary.main', width: 32, height: 32 }}>
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               {user?.first_name[0]}{user?.last_name[0]}
             </Avatar>
           </IconButton>
@@ -995,15 +1220,19 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             transformOrigin={{ horizontal: 'right', vertical: 'top' }}
             anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
           >
+<<<<<<< HEAD
             <Box sx={{ px: 2, py: 1 }}>
               <Typography variant="subtitle2">{user?.first_name} {user?.last_name}</Typography>
               <Typography variant="caption" color="text.secondary">{user?.email}</Typography>
             </Box>
             <Divider />
+=======
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             <MenuItem onClick={() => { handleMenuClose(); navigate('/profile'); }}>
               <ListItemIcon><PersonIcon fontSize="small" /></ListItemIcon>
               Profile
             </MenuItem>
+<<<<<<< HEAD
             <MenuItem onClick={() => { handleMenuClose(); navigate('/settings'); }}>
               <ListItemIcon><SettingsIcon fontSize="small" /></ListItemIcon>
               Settings
@@ -1012,6 +1241,12 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             <MenuItem onClick={handleLogout}>
               <ListItemIcon><LogoutIcon fontSize="small" color="error" /></ListItemIcon>
               <Typography color="error">Logout</Typography>
+=======
+            <Divider />
+            <MenuItem onClick={handleLogout}>
+              <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
+              Logout
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             </MenuItem>
           </Menu>
         </Toolbar>
@@ -1022,6 +1257,10 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         component="nav"
         sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}
       >
+<<<<<<< HEAD
+=======
+        {/* Mobile drawer */}
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         <Drawer
           variant="temporary"
           open={mobileOpen}
@@ -1029,24 +1268,37 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           ModalProps={{ keepMounted: true }}
           sx={{
             display: { xs: 'block', md: 'none' },
+<<<<<<< HEAD
             '& .MuiDrawer-paper': { 
               boxSizing: 'border-box', 
               width: DRAWER_WIDTH,
               borderRight: `1px solid ${theme.palette.divider}`
             }
+=======
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: DRAWER_WIDTH }
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           }}
         >
           {drawer}
         </Drawer>
+<<<<<<< HEAD
+=======
+
+        {/* Desktop drawer */}
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         <Drawer
           variant="permanent"
           sx={{
             display: { xs: 'none', md: 'block' },
+<<<<<<< HEAD
             '& .MuiDrawer-paper': { 
               boxSizing: 'border-box', 
               width: DRAWER_WIDTH,
               borderRight: `1px solid ${theme.palette.divider}`
             }
+=======
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: DRAWER_WIDTH }
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           }}
           open
         >
@@ -1059,6 +1311,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         component="main"
         sx={{
           flexGrow: 1,
+<<<<<<< HEAD
           width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           minHeight: '100vh',
           backgroundColor: '#f8f9fa'
@@ -1068,6 +1321,16 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
           {children}
         </Box>
+=======
+          p: 3,
+          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
+          minHeight: '100vh',
+          backgroundColor: 'grey.100'
+        }}
+      >
+        <Toolbar /> {/* Spacer for fixed AppBar */}
+        {children}
+>>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       </Box>
     </Box>
   );
