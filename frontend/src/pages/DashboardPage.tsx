@@ -1,11 +1,6 @@
 /**
-<<<<<<< HEAD
  * ERP Dashboard Page
  * Module-based dashboard with KPIs, quick actions, and activity overview
-=======
- * Dashboard Page Component
- * Role-specific dashboard with stats and quick actions
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
  */
 
 import React, { useEffect, useState } from 'react';
@@ -17,18 +12,13 @@ import {
   Typography,
   Card,
   CardContent,
-<<<<<<< HEAD
   CardActionArea,
   Button,
   Alert,
-=======
-  Button,
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   List,
   ListItem,
   ListItemText,
   ListItemIcon,
-<<<<<<< HEAD
   ListItemAvatar,
   Chip,
   CircularProgress,
@@ -39,11 +29,6 @@ import {
   useTheme,
   IconButton,
   Skeleton
-=======
-  Chip,
-  CircularProgress,
-  Divider
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   Description as RequestIcon,
@@ -53,7 +38,6 @@ import {
   Add as AddIcon,
   TrendingUp as TrendingUpIcon,
   AccountBalance as BudgetIcon,
-<<<<<<< HEAD
   Warning as WarningIcon,
   AttachMoney as FinanceIcon,
   Inventory as AssetIcon,
@@ -72,9 +56,6 @@ import {
   VolunteerActivism as GrantsIcon,
   AdminPanelSettings as AdminIcon,
   NotificationsActive as AlertBellIcon
-=======
-  Warning as WarningIcon
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/icons-material';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 
@@ -82,7 +63,6 @@ import { useAuthStore } from '../store/authStore';
 import { requestService } from '../services/requestService';
 import { approvalService } from '../services/approvalService';
 import { budgetService } from '../services/budgetService';
-<<<<<<< HEAD
 import { getProcurementDashboard } from '../services/procurementService';
 import { reconciliationService } from '../services/reconciliationService';
 import { Request, BudgetLine } from '../types';
@@ -101,17 +81,6 @@ const DashboardPage: React.FC = () => {
   const [myReconStats, setMyReconStats] = useState({ total: 0, pending: 0, approved: 0 });
   const [pendingLeadCount, setPendingLeadCount] = useState(0);
 
-=======
-import { Request, BudgetLine } from '../types';
-
-const COLORS = ['#4caf50', '#ff9800', '#f44336', '#2196f3', '#9c27b0'];
-
-const DashboardPage: React.FC = () => {
-  const navigate = useNavigate();
-  const { user, hasRole, hasPermission } = useAuthStore();
-
-  const [isLoading, setIsLoading] = useState(true);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const [stats, setStats] = useState({
     totalRequests: 0,
     pendingApprovals: 0,
@@ -129,7 +98,6 @@ const DashboardPage: React.FC = () => {
 
   const fetchDashboardData = async () => {
     try {
-<<<<<<< HEAD
       const isApprover = hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK');
       const isGeneralUser = hasRole('GENERAL_USER') || (!isApprover);
 
@@ -210,27 +178,6 @@ const DashboardPage: React.FC = () => {
         setRecentRequests(requests.slice(0, 5));
       }
 
-=======
-      setIsLoading(true);
-      const isApprover = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK');
-
-      // Fetch requests - for general users, fetch their own requests
-      const requestsResponse = await requestService.getAll({ limit: 100 });
-      if (requestsResponse.success && requestsResponse.data) {
-        const requests = requestsResponse.data.requests;
-
-        setStats(prev => ({
-          ...prev,
-          totalRequests: requests.length,
-          approved: requests.filter(r => r.status === 'APPROVED').length,
-          rejected: requests.filter(r => r.status === 'REJECTED').length
-        }));
-
-        setRecentRequests(requests.slice(0, 5));
-      }
-
-      // Fetch approver-specific stats (pending, approved, rejected counts)
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       if (isApprover) {
         try {
           const statsResponse = await approvalService.getApproverStats();
@@ -248,15 +195,10 @@ const DashboardPage: React.FC = () => {
         }
       }
 
-<<<<<<< HEAD
-=======
-      // Fetch budget info
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       try {
         const budgetResponse = await budgetService.getAll({ isActive: true });
         if (budgetResponse.success && budgetResponse.data) {
           const budgets = budgetResponse.data;
-<<<<<<< HEAD
           const totalAllocated = budgets.reduce((sum: number, b: BudgetLine) => sum + (Number(b.allocated_amount) || 0), 0);
           const totalSpent = budgets.reduce((sum: number, b: BudgetLine) => sum + (Number(b.spent_amount) || 0), 0);
           setStats(prev => ({ ...prev, totalBudget: totalAllocated, totalSpent: totalSpent }));
@@ -264,27 +206,10 @@ const DashboardPage: React.FC = () => {
             Number(b.allocated_amount) > 0 && (Number(b.balance) / Number(b.allocated_amount)) < 0.1 && Number(b.balance) > 0
           );
           setLowBudgets(low);
-=======
-          const totalAllocated = budgets.reduce((sum, b) => sum + (b.allocated_amount || 0), 0);
-          const totalSpent = budgets.reduce((sum, b) => sum + (b.spent_amount || 0), 0);
-
-          setStats(prev => ({
-            ...prev,
-            totalBudget: totalAllocated,
-            totalSpent: totalSpent
-          }));
-
-          // Find low balance budgets (less than 10% remaining)
-          const lowBalanceBudgets = budgets.filter(b =>
-            b.allocated_amount > 0 && (b.balance / b.allocated_amount) < 0.1 && b.balance > 0
-          );
-          setLowBudgets(lowBalanceBudgets);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         }
       } catch (err) {
         console.error('Error fetching budgets:', err);
       }
-<<<<<<< HEAD
       try {
         const pd = await getProcurementDashboard();
         const total = Object.values(pd.statusSummary || {}).reduce((a: number, b) => a + (b as number), 0);
@@ -296,9 +221,6 @@ const DashboardPage: React.FC = () => {
           rejected: pd.totalRejected ?? 0
         });
       } catch { /* silent — procurement stats are supplemental */ }
-=======
-
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
     } finally {
@@ -311,15 +233,11 @@ const DashboardPage: React.FC = () => {
       case 'APPROVED': return 'success';
       case 'REJECTED': return 'error';
       case 'DRAFT': return 'default';
-<<<<<<< HEAD
       case 'DISPATCHED': return 'info';
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       default: return 'warning';
     }
   };
 
-<<<<<<< HEAD
   const formatCurrency = (amount: number) => {
     return `$${Number(amount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
   };
@@ -444,26 +362,12 @@ const DashboardPage: React.FC = () => {
             </Grid>
           ))}
         </Grid>
-=======
-  // Pie chart data
-  const pieData = [
-    { name: 'Approved', value: stats.approved },
-    { name: 'Pending', value: stats.totalRequests - stats.approved - stats.rejected },
-    { name: 'Rejected', value: stats.rejected }
-  ].filter(d => d.value > 0);
-
-  if (isLoading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-        <CircularProgress />
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       </Box>
     );
   }
 
   return (
     <Box>
-<<<<<<< HEAD
       {/* Welcome Banner */}
       <Paper
         elevation={0}
@@ -675,53 +579,12 @@ const DashboardPage: React.FC = () => {
                   <Avatar sx={{ bgcolor: alpha(theme.palette.warning.main, 0.1), color: 'warning.main', width: 44, height: 44 }}>
                     <PendingIcon />
                   </Avatar>
-=======
-      {/* Welcome Header */}
-      <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h5" gutterBottom>
-          Welcome, {user?.first_name}!
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {user?.department_name} • {user?.role.replace(/_/g, ' ')}
-        </Typography>
-      </Paper>
-
-      {/* Stats Cards */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        {/* Pending Approvals - for Approvers */}
-        {hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && (
-          <Grid item xs={12} sm={6} md={3}>
-            <Card 
-              sx={{ cursor: 'pointer', '&:hover': { boxShadow: 4 } }}
-              onClick={() => navigate('/approvals')}
-            >
-              <CardContent>
-                <Box display="flex" alignItems="center" gap={2}>
-                  <Box
-                    sx={{
-                      p: 1.5,
-                      borderRadius: 2,
-                      backgroundColor: 'warning.light'
-                    }}
-                  >
-                    <PendingIcon sx={{ color: 'warning.main' }} />
-                  </Box>
-                  <Box>
-                    <Typography variant="h4" fontWeight="bold">
-                      {stats.pendingApprovals}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      Pending Approvals
-                    </Typography>
-                  </Box>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 </Box>
               </CardContent>
             </Card>
           </Grid>
         )}
 
-<<<<<<< HEAD
         <Grid item xs={12} sm={6} md={3}>
           <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
             <CardContent sx={{ p: 2.5 }}>
@@ -737,36 +600,11 @@ const DashboardPage: React.FC = () => {
                 <Avatar sx={{ bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.main', width: 44, height: 44 }}>
                   <RequestIcon />
                 </Avatar>
-=======
-        {/* Total Requests */}
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box display="flex" alignItems="center" gap={2}>
-                <Box
-                  sx={{
-                    p: 1.5,
-                    borderRadius: 2,
-                    backgroundColor: 'primary.light'
-                  }}
-                >
-                  <RequestIcon sx={{ color: 'primary.main' }} />
-                </Box>
-                <Box>
-                  <Typography variant="h4" fontWeight="bold">
-                    {stats.totalRequests}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Total Requests
-                  </Typography>
-                </Box>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               </Box>
             </CardContent>
           </Card>
         </Grid>
 
-<<<<<<< HEAD
         <Grid item xs={12} sm={6} md={3}>
           <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
             <CardContent sx={{ p: 2.5 }}>
@@ -878,36 +716,11 @@ const DashboardPage: React.FC = () => {
                 <Avatar sx={{ bgcolor: alpha(theme.palette.success.main, 0.1), color: 'success.main', width: 44, height: 44 }}>
                   <ApprovedIcon />
                 </Avatar>
-=======
-        {/* Approved */}
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box display="flex" alignItems="center" gap={2}>
-                <Box
-                  sx={{
-                    p: 1.5,
-                    borderRadius: 2,
-                    backgroundColor: 'success.light'
-                  }}
-                >
-                  <ApprovedIcon sx={{ color: 'success.main' }} />
-                </Box>
-                <Box>
-                  <Typography variant="h4" fontWeight="bold">
-                    {stats.approved}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Approved
-                  </Typography>
-                </Box>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               </Box>
             </CardContent>
           </Card>
         </Grid>
 
-<<<<<<< HEAD
         <Grid item xs={12} sm={6} md={3}>
           <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}`, cursor: 'pointer', '&:hover': { borderColor: '#c62828', boxShadow: `0 0 0 1px #c62828` } }} onClick={() => navigate('/procurement/requests')}>
             <CardContent sx={{ p: 2.5 }}>
@@ -923,37 +736,12 @@ const DashboardPage: React.FC = () => {
                 <Avatar sx={{ bgcolor: alpha('#c62828', 0.1), color: '#c62828', width: 44, height: 44 }}>
                   <RejectedIcon />
                 </Avatar>
-=======
-        {/* Budget Balance - visible to all */}
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box display="flex" alignItems="center" gap={2}>
-                <Box
-                  sx={{
-                    p: 1.5,
-                    borderRadius: 2,
-                    backgroundColor: 'info.light'
-                  }}
-                >
-                  <BudgetIcon sx={{ color: 'info.main' }} />
-                </Box>
-                <Box>
-                  <Typography variant="h5" fontWeight="bold">
-                    ${((stats.totalBudget - stats.totalSpent) / 1000).toFixed(0)}K
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Total Balance
-                  </Typography>
-                </Box>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               </Box>
             </CardContent>
           </Card>
         </Grid>
       </Grid>
 
-<<<<<<< HEAD
       {/* Module Quick Access */}
       <Typography variant="subtitle2" color="text.secondary" fontWeight={600} textTransform="uppercase" letterSpacing={1} sx={{ mb: 1.5 }}>
         System Modules
@@ -1020,80 +808,18 @@ const DashboardPage: React.FC = () => {
             <Divider sx={{ mb: 1 }} />
             {pieData.length > 0 ? (
               <Box height={150}>
-=======
-      <Grid container spacing={3}>
-        {/* Quick Actions */}
-        <Grid item xs={12} md={4}>
-          <Paper elevation={2} sx={{ p: 3, height: '100%' }}>
-            <Typography variant="h6" gutterBottom>
-              Quick Actions
-            </Typography>
-            <Divider sx={{ mb: 2 }} />
-            <Box display="flex" flexDirection="column" gap={2}>
-              {hasRole('GENERAL_USER') && (
-                <Button
-                  variant="contained"
-                  startIcon={<AddIcon />}
-                  fullWidth
-                  onClick={() => navigate('/requests/create')}
-                >
-                  Create New Request
-                </Button>
-              )}
-              {hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && (
-                <Button
-                  variant="outlined"
-                  startIcon={<PendingIcon />}
-                  fullWidth
-                  onClick={() => navigate('/approvals')}
-                >
-                  Review Approvals ({stats.pendingApprovals})
-                </Button>
-              )}
-              <Button
-                variant="outlined"
-                startIcon={<BudgetIcon />}
-                fullWidth
-                onClick={() => navigate('/budgets')}
-              >
-                View Budgets
-              </Button>
-            </Box>
-          </Paper>
-        </Grid>
-
-        {/* Request Status Chart */}
-        <Grid item xs={12} md={4}>
-          <Paper elevation={2} sx={{ p: 3, height: '100%' }}>
-            <Typography variant="h6" gutterBottom>
-              Request Status
-            </Typography>
-            <Divider sx={{ mb: 2 }} />
-            {pieData.length > 0 ? (
-              <Box height={200}>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
                       data={pieData}
                       cx="50%"
                       cy="50%"
-<<<<<<< HEAD
                       innerRadius={38}
                       outerRadius={60}
                       paddingAngle={4}
                       dataKey="value"
                     >
                       {pieData.map((_entry, index) => (
-=======
-                      innerRadius={40}
-                      outerRadius={80}
-                      paddingAngle={5}
-                      dataKey="value"
-                      label={({ name, value }) => `${name}: ${value}`}
-                    >
-                      {pieData.map((entry, index) => (
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
@@ -1102,7 +828,6 @@ const DashboardPage: React.FC = () => {
                 </ResponsiveContainer>
               </Box>
             ) : (
-<<<<<<< HEAD
               <Box display="flex" justifyContent="center" alignItems="center" height={150}>
                 <Typography variant="caption" color="text.secondary">No data yet</Typography>
               </Box>
@@ -1163,46 +888,12 @@ const DashboardPage: React.FC = () => {
                     </ListItem>
                     {index < Math.min(recentRequests.length, 4) - 1 && <Divider variant="inset" component="li" />}
                   </React.Fragment>
-=======
-              <Box display="flex" justifyContent="center" alignItems="center" height={200}>
-                <Typography color="text.secondary">No data yet</Typography>
-              </Box>
-            )}
-          </Paper>
-        </Grid>
-
-        {/* Low Budget Alerts */}
-        <Grid item xs={12} md={4}>
-          <Paper elevation={2} sx={{ p: 3, height: '100%' }}>
-            <Box display="flex" alignItems="center" gap={1} mb={1}>
-              <WarningIcon color="warning" />
-              <Typography variant="h6">Low Budget Alerts</Typography>
-            </Box>
-            <Divider sx={{ mb: 2 }} />
-            {lowBudgets.length === 0 ? (
-              <Typography color="text.secondary">
-                All budgets are healthy
-              </Typography>
-            ) : (
-              <List dense>
-                {lowBudgets.slice(0, 5).map((budget) => (
-                  <ListItem key={budget.id}>
-                    <ListItemIcon>
-                      <WarningIcon color="warning" fontSize="small" />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={budget.budget_code}
-                      secondary={`Balance: $${Number(budget.balance || 0).toLocaleString()}`}
-                    />
-                  </ListItem>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 ))}
               </List>
             )}
           </Paper>
         </Grid>
 
-<<<<<<< HEAD
         {/* Budget Alerts & Quick Actions */}
         <Grid item xs={12} md={4}>
           <Paper elevation={0} sx={{ p: 2, border: `1px solid ${theme.palette.divider}` }}>
@@ -1248,51 +939,6 @@ const DashboardPage: React.FC = () => {
                 </Button>
               )}
             </Box>
-=======
-        {/* Recent Requests */}
-        <Grid item xs={12}>
-          <Paper elevation={2} sx={{ p: 3 }}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-              <Typography variant="h6">Recent Requests</Typography>
-              <Button size="small" onClick={() => navigate('/requests')}>
-                View All
-              </Button>
-            </Box>
-            <Divider sx={{ mb: 2 }} />
-            {recentRequests.length === 0 ? (
-              <Typography color="text.secondary">No requests yet</Typography>
-            ) : (
-              <List>
-                {recentRequests.map((request) => (
-                  <ListItem
-                    key={request.id}
-                    sx={{
-                      cursor: 'pointer',
-                      '&:hover': { backgroundColor: 'grey.50' },
-                      borderRadius: 1
-                    }}
-                    onClick={() => navigate(`/requests/${request.id}`)}
-                  >
-                    <ListItemText
-                      primary={
-                        <Box display="flex" alignItems="center" gap={1}>
-                          <Typography fontWeight="medium">
-                            {request.request_number}
-                          </Typography>
-                          <Chip
-                            label={request.status.replace(/_/g, ' ')}
-                            size="small"
-                            color={getStatusColor(request.status)}
-                          />
-                        </Box>
-                      }
-                      secondary={`$${Number(request.total_amount || 0).toLocaleString()} • ${request.department_name}`}
-                    />
-                  </ListItem>
-                ))}
-              </List>
-            )}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           </Paper>
         </Grid>
       </Grid>

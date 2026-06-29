@@ -5,11 +5,7 @@
 
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/database');
-<<<<<<< HEAD
 const { hasPermission, isFinanceManager, ROLES } = require('../config/roles');
-=======
-const { hasPermission, ROLES } = require('../config/roles');
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 /**
  * Verify JWT token and attach user to request
@@ -33,11 +29,7 @@ const authenticateToken = async (req, res, next) => {
       `SELECT u.*, r.role_name, d.department_name, d.department_code
        FROM users u
        JOIN roles r ON u.role_id = r.id
-<<<<<<< HEAD
        LEFT JOIN departments d ON u.department_id = d.id
-=======
-       JOIN departments d ON u.department_id = d.id
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
        WHERE u.id = ? AND u.is_active = TRUE`,
       [decoded.userId]
     );
@@ -86,14 +78,11 @@ const requireRole = (...allowedRoles) => {
     }
 
     const userRole = req.user.role;
-<<<<<<< HEAD
 
     // ADMIN is the super-admin role and always passes role checks.
     if (userRole === ROLES.ADMIN) {
       return next();
     }
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     
     if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({
@@ -136,15 +125,10 @@ const requirePermission = (...requiredPermissions) => {
 };
 
 /**
-<<<<<<< HEAD
  * Middleware to check department-based access
  * Head of Programs, Finance Clerk & Admin: can see all requests (cross-department)
  * Program Lead: can see requests from their own department only
  * General User: can only see own requests
-=======
- * Middleware to check if user belongs to same department
- * Used for Program Lead visibility restrictions
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
  */
 const requireSameDepartment = async (req, res, next) => {
   try {
@@ -154,7 +138,6 @@ const requireSameDepartment = async (req, res, next) => {
       return next();
     }
 
-<<<<<<< HEAD
     // Finance Clerk, Admin, and Head of Programs can see all departments.
     if ([ROLES.FINANCE_CLERK, ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
       return next();
@@ -191,15 +174,6 @@ const requireSameDepartment = async (req, res, next) => {
     // For GENERAL_USER: enforce owner-only access.
     const requests = await query(
       'SELECT requester_id, department_id FROM requests WHERE id = ?',
-=======
-    // Finance Clerk and HOP can see all departments
-    if ([ROLES.FINANCE_CLERK, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
-      return next();
-    }
-
-    const requests = await query(
-      'SELECT department_id FROM requests WHERE id = ?',
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       [requestId]
     );
 
@@ -210,7 +184,6 @@ const requireSameDepartment = async (req, res, next) => {
       });
     }
 
-<<<<<<< HEAD
     if (requests[0].requester_id === req.user.id) {
       return next();
     }
@@ -219,16 +192,6 @@ const requireSameDepartment = async (req, res, next) => {
       success: false,
       error: 'You can only access your own requests'
     });
-=======
-    if (requests[0].department_id !== req.user.department_id) {
-      return res.status(403).json({
-        success: false,
-        error: 'You can only access requests from your department'
-      });
-    }
-
-    next();
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   } catch (error) {
     return res.status(500).json({
       success: false,
@@ -237,7 +200,6 @@ const requireSameDepartment = async (req, res, next) => {
   }
 };
 
-<<<<<<< HEAD
 /**
  * Middleware that restricts access to Finance Managers:
  *   - ADMIN
@@ -260,16 +222,10 @@ const requireFinanceManager = (req, res, next) => {
   next();
 };
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 module.exports = {
   authenticateToken,
   requireRole,
   requirePermission,
-<<<<<<< HEAD
   requireSameDepartment,
   requireFinanceManager
-=======
-  requireSameDepartment
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 };

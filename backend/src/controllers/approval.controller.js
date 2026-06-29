@@ -4,12 +4,8 @@
  */
 
 const { validationResult } = require('express-validator');
-<<<<<<< HEAD
 const { ROLES, REQUEST_STATUS } = require('../config/roles');
 const { query } = require('../config/database');
-=======
-const { ROLES } = require('../config/roles');
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 const approvalService = require('../services/approval.service');
 
 class ApprovalController {
@@ -34,19 +30,15 @@ class ApprovalController {
       const approverRole = req.user.role;
       const ipAddress = req.ip;
 
-<<<<<<< HEAD
       // Peek at the request's current status so HOP/Lead can be routed to Finance approval
       // when the request is already at the Finance stage.
       const reqRows = await query('SELECT status FROM requests WHERE id = ?', [requestId]);
       const currentStatus = reqRows[0]?.status;
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       let result;
 
       switch (approverRole) {
         case ROLES.PROGRAM_LEAD:
-<<<<<<< HEAD
           // Finance HOP/Lead: if request is at Finance stage, act as Finance approver
           if (currentStatus === REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
             result = await approvalService.approveAsFinance(
@@ -74,26 +66,12 @@ class ApprovalController {
 
         case ROLES.FINANCE_CLERK:
           result = await approvalService.approveAsFinance(
-=======
-          result = await approvalService.approveAsLead(
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             requestId, approverId, comments, version, ipAddress
           );
           break;
 
-<<<<<<< HEAD
         case ROLES.ADMIN:
           result = await approvalService.approveAsAdmin(
-=======
-        case ROLES.HEAD_OF_PROGRAMS:
-          result = await approvalService.approveAsHOP(
-            requestId, approverId, comments, version, ipAddress
-          );
-          break;
-
-        case ROLES.FINANCE_CLERK:
-          result = await approvalService.approveAsFinance(
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             requestId, approverId, comments, version, ipAddress
           );
           break;

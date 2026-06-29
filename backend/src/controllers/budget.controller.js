@@ -5,15 +5,12 @@
 
 const { validationResult } = require('express-validator');
 const { query, transaction } = require('../config/database');
-<<<<<<< HEAD
 const { ROLES, isFinanceManager } = require('../config/roles');
 
 // Finance managers (AF HOP/Lead or Admin) and Finance Clerks see every budget
 // line across all departments. All other roles are scoped to their own department.
 const canViewAllBudgetLines = (user) =>
   isFinanceManager(user) || user.role === ROLES.FINANCE_CLERK;
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 class BudgetController {
 
@@ -23,18 +20,13 @@ class BudgetController {
    */
   async getBudgetLines(req, res) {
     try {
-<<<<<<< HEAD
       const { departmentId, donorId, fiscalYear, isActive } = req.query;
       const userRole = req.user.role;
       const userDepartmentId = req.user.department_id;
-=======
-      const { departmentId, fiscalYear, isActive } = req.query;
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       
       let whereClause = '1=1';
       const params = [];
 
-<<<<<<< HEAD
       // Department scope: Finance Managers and Finance Clerks see all lines.
       // All other roles (including non-Finance HOPs/Leads) see only their own department.
       if (!canViewAllBudgetLines(req.user)) {
@@ -62,13 +54,6 @@ class BudgetController {
         params.push(projectId);
       }
 
-=======
-      if (departmentId) {
-        whereClause += ' AND bl.department_id = ?';
-        params.push(departmentId);
-      }
-
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       if (fiscalYear) {
         whereClause += ' AND bl.fiscal_year = ?';
         params.push(fiscalYear);
@@ -81,7 +66,6 @@ class BudgetController {
 
       const budgetLines = await query(
         `SELECT bl.*, 
-<<<<<<< HEAD
                 COALESCE(d.department_name, 'N/A') as department_name,
                 COALESCE(d.department_code, 'N/A') as department_code,
                 COALESCE(don.donor_name, 'Unassigned') as donor_name,
@@ -97,15 +81,6 @@ class BudgetController {
          LEFT JOIN projects p ON bl.project_id = p.id
          WHERE ${whereClause}
          ORDER BY don.donor_name, p.project_code, bl.budget_name`,
-=======
-                d.department_name,
-                d.department_code,
-                ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) as utilization_percentage
-         FROM budget_lines bl
-         JOIN departments d ON bl.department_id = d.id
-         WHERE ${whereClause}
-         ORDER BY d.department_name, bl.budget_name`,
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         params
       );
 
@@ -129,7 +104,6 @@ class BudgetController {
   async getBudgetLineById(req, res) {
     try {
       const { budgetLineId } = req.params;
-<<<<<<< HEAD
       const userRole = req.user.role;
       const userDepartmentId = req.user.department_id;
 
@@ -139,15 +113,6 @@ class BudgetController {
                 COALESCE(d.department_code, 'N/A') as department_code
          FROM budget_lines bl
          LEFT JOIN departments d ON bl.department_id = d.id
-=======
-
-      const budgetLines = await query(
-        `SELECT bl.*, 
-                d.department_name,
-                d.department_code
-         FROM budget_lines bl
-         JOIN departments d ON bl.department_id = d.id
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
          WHERE bl.id = ?`,
         [budgetLineId]
       );
@@ -159,7 +124,6 @@ class BudgetController {
         });
       }
 
-<<<<<<< HEAD
       if (!canViewAllBudgetLines(req.user) && Number(budgetLines[0].department_id) !== Number(userDepartmentId)) {
         return res.status(403).json({
           success: false,
@@ -167,18 +131,12 @@ class BudgetController {
         });
       }
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       // Get recent transactions
       const transactions = await query(
         `SELECT bt.*, 
                 u.first_name,
                 u.last_name,
-<<<<<<< HEAD
                 r.request_code
-=======
-                r.request_number
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
          FROM budget_transactions bt
          JOIN users u ON bt.performed_by = u.id
          LEFT JOIN requests r ON bt.request_id = r.id
@@ -218,7 +176,6 @@ class BudgetController {
         });
       }
 
-<<<<<<< HEAD
       const { budgetCode, budgetName, departmentId, donorId, projectId, category, projectCode, fiscalYear, allocatedAmount, description } = req.body;
       const createdBy = req.user.id;
       // project_code stored in category for backward compat; project_id is the proper FK
@@ -291,23 +248,12 @@ class BudgetController {
         const [existing] = await connection.execute(
           'SELECT id FROM budget_lines WHERE budget_code = ?',
           [finalBudgetCode]
-=======
-      const { budgetCode, budgetName, departmentId, fiscalYear, allocatedAmount, description } = req.body;
-      const createdBy = req.user.id;
-
-      const result = await transaction(async (connection) => {
-        // Check for duplicate budget code
-        const [existing] = await connection.execute(
-          'SELECT id FROM budget_lines WHERE budget_code = ?',
-          [budgetCode]
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         );
 
         if (existing.length > 0) {
           throw new Error('Budget code already exists');
         }
 
-<<<<<<< HEAD
         // --- Hierarchy validation: budget line cannot exceed project available budget ---
         if (resolvedProjectId) {
           const [projRows] = await connection.execute(
@@ -337,13 +283,6 @@ class BudgetController {
           `INSERT INTO budget_lines (budget_code, budget_name, donor_id, project_id, department_id, category, fiscal_year, allocated_amount, description, created_by, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
           [finalBudgetCode, budgetName, donorId || null, resolvedProjectId, departmentId || null, resolvedProjectCode, fiscalYear, allocatedAmount, description, createdBy]
-=======
-        // Insert budget line
-        const [insertResult] = await connection.execute(
-          `INSERT INTO budget_lines (budget_code, budget_name, department_id, fiscal_year, allocated_amount, description, created_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [budgetCode, budgetName, departmentId, fiscalYear, allocatedAmount, description, createdBy]
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         );
 
         // Log the initial allocation
@@ -354,7 +293,6 @@ class BudgetController {
           [insertResult.insertId, allocatedAmount, allocatedAmount, createdBy]
         );
 
-<<<<<<< HEAD
         // Update donor total_allocated if donor is set
         if (donorId) {
           await connection.execute(
@@ -363,8 +301,6 @@ class BudgetController {
           );
         }
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         return insertResult.insertId;
       });
 
@@ -411,7 +347,6 @@ class BudgetController {
           throw new Error('Budget line not found');
         }
 
-<<<<<<< HEAD
         const currentBalance = parseFloat(budgetLines[0].allocated_amount) - parseFloat(budgetLines[0].spent_amount);
         const currentAllocated = parseFloat(budgetLines[0].allocated_amount);
         const parsedAmount = parseFloat(amount);
@@ -456,24 +391,10 @@ class BudgetController {
         const transactionType = parsedAmount >= 0 ? 'TOP_UP' : 'DEDUCTION';
         const defaultDesc = parsedAmount >= 0 ? 'Budget top-up' : 'Manual deduction';
 
-=======
-        const currentBalance = parseFloat(budgetLines[0].balance);
-        const currentAllocated = parseFloat(budgetLines[0].allocated_amount);
-        const newBalance = currentBalance + parseFloat(amount);
-        const newAllocated = currentAllocated + parseFloat(amount);
-
-        // Update allocated amount
-        await connection.execute(
-          'UPDATE budget_lines SET allocated_amount = ? WHERE id = ?',
-          [newAllocated, budgetLineId]
-        );
-
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         // Log the transaction
         await connection.execute(
           `INSERT INTO budget_transactions 
            (budget_line_id, transaction_type, amount, balance_before, balance_after, description, performed_by)
-<<<<<<< HEAD
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [budgetLineId, transactionType, Math.abs(parsedAmount), currentBalance, newBalance, description || defaultDesc, performedBy]
         );
@@ -487,12 +408,6 @@ class BudgetController {
           );
         }
 
-=======
-           VALUES (?, 'TOP_UP', ?, ?, ?, ?, ?)`,
-          [budgetLineId, amount, currentBalance, newBalance, description || 'Budget top-up', performedBy]
-        );
-
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         return { currentBalance, newBalance, newAllocated };
       });
 
@@ -525,7 +440,6 @@ class BudgetController {
       }
 
       const { budgetLineId } = req.params;
-<<<<<<< HEAD
       const { budgetCode, budgetName, description, isActive } = req.body;
 
       const result = await query(
@@ -537,17 +451,6 @@ class BudgetController {
              updated_at = NOW()
          WHERE id = ?`,
         [budgetCode ?? null, budgetName ?? null, description ?? null, isActive ?? null, budgetLineId]
-=======
-      const { budgetName, description, isActive } = req.body;
-
-      const result = await query(
-        `UPDATE budget_lines 
-         SET budget_name = COALESCE(?, budget_name),
-             description = COALESCE(?, description),
-             is_active = COALESCE(?, is_active)
-         WHERE id = ?`,
-        [budgetName, description, isActive, budgetLineId]
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       );
 
       if (result.affectedRows === 0) {
@@ -571,13 +474,9 @@ class BudgetController {
   }
 
   /**
-<<<<<<< HEAD
    * Archive (soft-delete) a budget line.
    * Sets is_active = 0. All transaction history, request items, requests, approval logs,
    * and attachments are preserved exactly as-is. FK references remain intact.
-=======
-   * Delete budget line (Finance Clerk only)
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
    * DELETE /api/budgets/:budgetLineId
    */
   async deleteBudgetLine(req, res) {
@@ -597,7 +496,6 @@ class BudgetController {
         });
       }
 
-<<<<<<< HEAD
       // Soft delete: archive the budget line. All history (request_items, budget_transactions,
       // approval_logs, attachments, requests) remains in the database untouched.
       await query(
@@ -608,47 +506,12 @@ class BudgetController {
       res.json({
         success: true,
         message: 'Budget line archived successfully. All transaction history has been preserved.'
-=======
-      const budgetLine = budgetLines[0];
-
-      // Check if budget line has been used (spent_amount > 0)
-      if (parseFloat(budgetLine.spent_amount) > 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Cannot delete budget line that has been used. Consider deactivating it instead.'
-        });
-      }
-
-      // Check if there are any request items linked to this budget line
-      const linkedItems = await query(
-        'SELECT COUNT(*) as count FROM request_items WHERE budget_line_id = ?',
-        [budgetLineId]
-      );
-
-      if (linkedItems[0].count > 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Cannot delete budget line that is linked to requests. Consider deactivating it instead.'
-        });
-      }
-
-      // Safe to delete - no transactions or linked items
-      await query('DELETE FROM budget_lines WHERE id = ?', [budgetLineId]);
-
-      res.json({
-        success: true,
-        message: 'Budget line deleted successfully'
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       });
     } catch (error) {
       console.error('Error deleting budget line:', error);
       res.status(500).json({
         success: false,
-<<<<<<< HEAD
         error: 'Failed to archive budget line'
-=======
-        error: 'Failed to delete budget line'
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       });
     }
   }
@@ -660,7 +523,6 @@ class BudgetController {
   async getBudgetSummary(req, res) {
     try {
       const { fiscalYear } = req.query;
-<<<<<<< HEAD
       const userRole = req.user.role;
       const userDepartmentId = req.user.department_id;
       const yearFilter = fiscalYear ? 'AND bl.fiscal_year = ?' : '';
@@ -673,10 +535,6 @@ class BudgetController {
       if (fiscalYear) {
         params.push(fiscalYear);
       }
-=======
-      const yearFilter = fiscalYear ? 'AND bl.fiscal_year = ?' : '';
-      const params = fiscalYear ? [fiscalYear] : [];
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
       const summary = await query(
         `SELECT
@@ -686,18 +544,11 @@ class BudgetController {
           COUNT(bl.id) as budget_line_count,
           SUM(bl.allocated_amount) as total_allocated,
           SUM(bl.spent_amount) as total_spent,
-<<<<<<< HEAD
           SUM(bl.allocated_amount - bl.spent_amount) as total_balance,
           ROUND(AVG((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100), 2) as avg_utilization
          FROM departments d
          LEFT JOIN budget_lines bl ON d.id = bl.department_id AND bl.is_active = TRUE ${yearFilter}
          ${departmentScope}
-=======
-          SUM(bl.balance) as total_balance,
-          ROUND(AVG((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100), 2) as avg_utilization
-         FROM departments d
-         LEFT JOIN budget_lines bl ON d.id = bl.department_id AND bl.is_active = TRUE ${yearFilter}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
          GROUP BY d.id, d.department_name, d.department_code
          ORDER BY d.department_name`,
         params
@@ -715,7 +566,6 @@ class BudgetController {
       });
     }
   }
-<<<<<<< HEAD
 
   /**
    * Get budget lines by donor ID
@@ -1458,8 +1308,6 @@ class BudgetController {
       });
     }
   }
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 }
 
 module.exports = new BudgetController();

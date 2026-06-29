@@ -7,11 +7,8 @@ import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
-<<<<<<< HEAD
 export { API_BASE_URL };
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,

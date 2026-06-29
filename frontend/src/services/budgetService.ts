@@ -4,18 +4,11 @@
  */
 
 import api from './api';
-<<<<<<< HEAD
 import { BudgetLine, BudgetTransaction, ApiResponse, Request } from '../types';
 
 interface BudgetFilters {
   departmentId?: number;
   donorId?: number;
-=======
-import { BudgetLine, BudgetTransaction, ApiResponse } from '../types';
-
-interface BudgetFilters {
-  departmentId?: number;
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   fiscalYear?: number;
   isActive?: boolean;
 }
@@ -34,19 +27,14 @@ interface BudgetSummary {
 interface CreateBudgetPayload {
   budgetCode: string;
   budgetName: string;
-<<<<<<< HEAD
   departmentId?: number;
   donorId?: number;
   projectCode?: string;
-=======
-  departmentId: number;
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   fiscalYear: number;
   allocatedAmount: number;
   description?: string;
 }
 
-<<<<<<< HEAD
 interface BudgetLineDetails extends BudgetLine {
   donor_id: number;
   donor_name: string;
@@ -78,8 +66,6 @@ interface BudgetLineRequestsResponse {
   };
 }
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 export const budgetService = {
   // Get all budget lines
   getAll: async (filters: BudgetFilters = {}): Promise<ApiResponse<BudgetLine[]>> => {
@@ -93,7 +79,6 @@ export const budgetService = {
     return response.data;
   },
 
-<<<<<<< HEAD
   // Get detailed budget line info with donor and request summary
   getDetails: async (budgetLineId: number): Promise<ApiResponse<BudgetLineDetails>> => {
     const response = await api.get(`/budgets/${budgetLineId}/details`);
@@ -106,8 +91,6 @@ export const budgetService = {
     return response.data;
   },
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   // Create new budget line (Finance only)
   create: async (data: CreateBudgetPayload): Promise<ApiResponse<{ id: number }>> => {
     const response = await api.post('/budgets', data);
@@ -136,7 +119,6 @@ export const budgetService = {
   getSummary: async (fiscalYear?: number): Promise<ApiResponse<BudgetSummary[]>> => {
     const response = await api.get('/budgets/summary', { params: fiscalYear ? { fiscalYear } : {} });
     return response.data;
-<<<<<<< HEAD
   },
 
   // Get financial reports data (variance, donor summary, trends)
@@ -149,7 +131,5 @@ export const budgetService = {
     if (dateTo) params.dateTo = dateTo;
     const response = await api.get('/budgets/reports', { params });
     return response.data;
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   }
 };

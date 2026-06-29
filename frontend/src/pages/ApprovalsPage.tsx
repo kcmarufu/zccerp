@@ -16,10 +16,7 @@ import {
   TableBody,
   TableCell,
   TableContainer,
-<<<<<<< HEAD
   TablePagination,
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   TableHead,
   TableRow,
   Button,
@@ -38,7 +35,6 @@ import {
   Tooltip,
   LinearProgress,
   Badge,
-<<<<<<< HEAD
   Divider,
   InputAdornment,
   MenuItem,
@@ -49,9 +45,6 @@ import {
   ListItemText,
   useTheme,
   useMediaQuery
-=======
-  Divider
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   CheckCircle as ApproveIcon,
@@ -63,7 +56,6 @@ import {
   Schedule as ScheduleIcon,
   Person as PersonIcon,
   Business as BusinessIcon,
-<<<<<<< HEAD
   Description as DescriptionIcon,
   TableChart as ExcelIcon,
   Print as PrintIcon,
@@ -87,17 +79,6 @@ import perDiemService from '../services/perDiemService';
 import { useAuthStore } from '../store/authStore';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
 import { reconciliationService } from '../services/reconciliationService';
-=======
-  Description as DescriptionIcon
-} from '@mui/icons-material';
-import { toast } from 'react-toastify';
-import { format, formatDistanceToNow } from 'date-fns';
-
-import { Request, RequestItem, BudgetImpact, ApprovalPayload } from '../types';
-import { approvalService } from '../services/approvalService';
-import { requestService } from '../services/requestService';
-import { useAuthStore } from '../store/authStore';
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -122,7 +103,6 @@ interface RequestWithReversal extends Request {
 const ApprovalsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-<<<<<<< HEAD
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
@@ -134,10 +114,6 @@ const ApprovalsPage: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(15);
-=======
-  
-  const [tabValue, setTabValue] = useState(0);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const [pendingRequests, setPendingRequests] = useState<Request[]>([]);
   const [approvedRequests, setApprovedRequests] = useState<RequestWithReversal[]>([]);
   const [rejectedRequests, setRejectedRequests] = useState<Request[]>([]);
@@ -149,7 +125,6 @@ const ApprovalsPage: React.FC = () => {
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [budgetImpact, setBudgetImpact] = useState<BudgetImpact[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-<<<<<<< HEAD
   const [dialogAction, setDialogAction] = useState<'approve' | 'reject' | 'reverse' | 'view'>('approve');
   const [comments, setComments] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -170,17 +145,11 @@ const ApprovalsPage: React.FC = () => {
   const [departments, setDepartments] = useState<{ id: number; department_name: string }[]>([]);
   const [projects, setProjects] = useState<{ id: number; project_name: string; project_code: string }[]>([]);
   const [dialogAttachments, setDialogAttachments] = useState<any[]>([]);
-=======
-  const [dialogAction, setDialogAction] = useState<'approve' | 'reject' | 'reverse'>('approve');
-  const [comments, setComments] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   useEffect(() => {
     fetchAllData();
   }, []);
 
-<<<<<<< HEAD
   // Fetch departments and projects for filters
   useEffect(() => {
     import('../services/api').then(({ default: api }) => {
@@ -193,8 +162,6 @@ const ApprovalsPage: React.FC = () => {
     });
   }, []);
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const fetchAllData = async () => {
     setIsLoading(true);
     try {
@@ -264,22 +231,15 @@ const ApprovalsPage: React.FC = () => {
     }
   };
 
-<<<<<<< HEAD
   const handleOpenDialog = async (request: Request, action: 'approve' | 'reject' | 'reverse' | 'view') => {
-=======
-  const handleOpenDialog = async (request: Request, action: 'approve' | 'reject' | 'reverse') => {
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     setSelectedRequest(request);
     setDialogAction(action);
     setComments('');
     setBudgetImpact([]);
     setFullRequestDetails(null);
     setRequestItems([]);
-<<<<<<< HEAD
     setDialogAttachments([]);
     setDialogPerDiemClaim(null);
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     setIsDialogOpen(true);
     setIsLoadingDetails(true);
 
@@ -293,7 +253,6 @@ const ApprovalsPage: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to load request details:', error);
-<<<<<<< HEAD
     }
 
     // Fetch per diem claim if present
@@ -316,13 +275,6 @@ const ApprovalsPage: React.FC = () => {
     setIsLoadingDetails(false);
 
     if (action === 'approve' || action === 'view') {
-=======
-    } finally {
-      setIsLoadingDetails(false);
-    }
-
-    if (action === 'approve') {
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       handleViewBudgetImpact(request);
     }
   };
@@ -357,16 +309,12 @@ const ApprovalsPage: React.FC = () => {
           : await approvalService.reject(selectedRequest.id, payload);
 
         if (response.success) {
-<<<<<<< HEAD
           if (dialogAction === 'approve') {
             setPostApprovalRequest({ id: selectedRequest.id, request_code: selectedRequest.request_code });
             setPostApprovalPDFDialog(true);
           } else {
             toast.success('Request rejected');
           }
-=======
-          toast.success(dialogAction === 'approve' ? 'Request approved' : 'Request rejected');
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           setIsDialogOpen(false);
           fetchAllData();
         }
@@ -385,10 +333,7 @@ const ApprovalsPage: React.FC = () => {
 
   const getStatusColor = (status: string): 'warning' | 'info' | 'success' | 'error' | 'default' => {
     switch (status) {
-<<<<<<< HEAD
       case 'PENDING_ADMIN_APPROVAL': return 'info';
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       case 'PENDING_LEAD_APPROVAL': return 'warning';
       case 'PENDING_HOP_APPROVAL': return 'info';
       case 'PENDING_FINANCE_APPROVAL': return 'success';
@@ -436,7 +381,6 @@ const ApprovalsPage: React.FC = () => {
     return `${hoursRemaining.toFixed(1)}h remaining`;
   };
 
-<<<<<<< HEAD
   // ── Client-side filter helper ────────────────────────────────────────────
   const applyFilters = (reqs: Request[]) => {
     return reqs.filter(r => {
@@ -643,9 +587,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
     };
     // ───────────────────────────────────────────────────────────────────
 
-=======
-  const renderRequestsTable = (requests: Request[], showActions: boolean, type: 'pending' | 'approved' | 'rejected') => {
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     if (requests.length === 0) {
       return (
         <Paper elevation={1} sx={{ p: 4, textAlign: 'center' }}>
@@ -658,7 +599,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
     }
 
     return (
-<<<<<<< HEAD
       <Box>
         {/* Export bar */}
         <Box display="flex" gap={1} mb={1.5} justifyContent="flex-end">
@@ -671,10 +611,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
         </Box>
       <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
         <Table sx={{ minWidth: 750 }}>
-=======
-      <TableContainer component={Paper}>
-        <Table>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <TableHead>
             <TableRow sx={{ backgroundColor: 'grey.100' }}>
               <TableCell sx={{ fontWeight: 'bold' }}>Request #</TableCell>
@@ -692,7 +628,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
             </TableRow>
           </TableHead>
           <TableBody>
-<<<<<<< HEAD
             {filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={type === 'approved' ? 9 : type === 'rejected' ? 9 : 8} align="center" sx={{ py: 4 }}>
@@ -704,16 +639,12 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 </TableCell>
               </TableRow>
             ) : paged.map((request: any) => {
-=======
-            {requests.map((request: any) => {
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               const canReverse = type === 'approved' && canReverseRequest(request);
               const reversalTime = type === 'approved' ? getReversalTimeRemaining(request) : '';
 
               return (
                 <TableRow key={request.id} hover>
                   <TableCell>
-<<<<<<< HEAD
                     <Typography fontWeight="medium">{request.request_code}</Typography>
                   </TableCell>
                   <TableCell>{request.requester_first_name} {request.requester_last_name}</TableCell>
@@ -737,12 +668,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                       </Tooltip>
                     )}
                   </TableCell>
-=======
-                    <Typography fontWeight="medium">{request.request_number}</Typography>
-                  </TableCell>
-                  <TableCell>{request.requester_first_name} {request.requester_last_name}</TableCell>
-                  <TableCell><Chip label={request.department_code} size="small" variant="outlined" /></TableCell>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   <TableCell>
                     <Typography fontWeight="medium">
                       ${Number(request.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -783,7 +708,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                   )}
                   <TableCell align="center">
                     <Tooltip title="View Details">
-<<<<<<< HEAD
                       <IconButton size="small" onClick={() => handleOpenDialog(request, 'view')}>
                         <ViewIcon />
                       </IconButton>
@@ -793,12 +717,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                         <PdfIcon />
                       </IconButton>
                     </Tooltip>
-=======
-                      <IconButton size="small" onClick={() => navigate(`/requests/${request.id}`)}>
-                        <ViewIcon />
-                      </IconButton>
-                    </Tooltip>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     {showActions && (
                       <>
                         <Tooltip title="Approve">
@@ -827,7 +745,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
           </TableBody>
         </Table>
       </TableContainer>
-<<<<<<< HEAD
       <TablePagination
         component="div"
         count={filtered.length}
@@ -838,8 +755,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
         rowsPerPageOptions={[10, 15, 25, 50]}
       />
       </Box>
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     );
   };
 
@@ -897,7 +812,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
 
       {/* Tabs */}
       <Paper elevation={2} sx={{ p: 2 }}>
-<<<<<<< HEAD
         {/* ── Filter Panel ─────────────────────────────────────────── */}
         <Paper elevation={0} variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 2 }}>
           <Stack direction="row" alignItems="center" spacing={1} mb={1.5}>
@@ -974,12 +888,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
           <Tab label={<Badge badgeContent={stats.approved} color="success">Approved</Badge>} />
           <Tab label={<Badge badgeContent={stats.rejected} color="error">Rejected</Badge>} />
           <Tab label={<Badge badgeContent={pendingRequests.length + approvedRequests.length + rejectedRequests.length} color="primary">All Requests</Badge>} />
-=======
-        <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)}>
-          <Tab label={<Badge badgeContent={stats.pending} color="warning">Pending Approvals</Badge>} />
-          <Tab label={<Badge badgeContent={stats.approved} color="success">Approved</Badge>} />
-          <Tab label={<Badge badgeContent={stats.rejected} color="error">Rejected</Badge>} />
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         </Tabs>
 
         <TabPanel value={tabValue} index={0}>
@@ -991,7 +899,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
         <TabPanel value={tabValue} index={2}>
           {renderRequestsTable(rejectedRequests, false, 'rejected')}
         </TabPanel>
-<<<<<<< HEAD
         <TabPanel value={tabValue} index={3}>
           {renderRequestsTable(
             Array.from(
@@ -1009,14 +916,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
       <Dialog open={isDialogOpen} onClose={() => setIsDialogOpen(false)} maxWidth="lg" fullWidth fullScreen={isMobile}>
         <DialogTitle>
           {dialogAction === 'approve' ? 'Approve Request' : dialogAction === 'reject' ? 'Reject Request' : dialogAction === 'reverse' ? 'Reverse Approval' : 'View Request Details'}
-=======
-      </Paper>
-
-      {/* Approval/Rejection/Reversal Dialog */}
-      <Dialog open={isDialogOpen} onClose={() => setIsDialogOpen(false)} maxWidth="lg" fullWidth>
-        <DialogTitle>
-          {dialogAction === 'approve' ? 'Approve Request' : dialogAction === 'reject' ? 'Reject Request' : 'Reverse Approval'}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         </DialogTitle>
         <DialogContent>
           {isLoadingDetails ? (
@@ -1025,7 +924,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
             </Box>
           ) : selectedRequest && (
             <Box>
-<<<<<<< HEAD
               {/* Cross-department routing notice */}
               {selectedRequest.routing_department_id && (
                 <Alert severity="info" icon={<WarningIcon />} sx={{ mb: 2 }}>
@@ -1036,19 +934,13 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 </Alert>
               )}
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               {/* Request Header Info */}
               <Card variant="outlined" sx={{ mb: 2 }}>
                 <CardContent>
                   <Grid container spacing={2}>
                     <Grid item xs={12} sm={4}>
                       <Typography variant="body2" color="text.secondary">Request Number</Typography>
-<<<<<<< HEAD
                       <Typography fontWeight="medium" variant="h6">{selectedRequest.request_code}</Typography>
-=======
-                      <Typography fontWeight="medium" variant="h6">{selectedRequest.request_number}</Typography>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     </Grid>
                     <Grid item xs={6} sm={4}>
                       <Typography variant="body2" color="text.secondary">Status</Typography>
@@ -1098,7 +990,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                           : format(new Date(selectedRequest.created_at), 'MMM d, yyyy HH:mm')}
                       </Typography>
                     </Grid>
-<<<<<<< HEAD
                     {((fullRequestDetails as any)?.donor_name || (selectedRequest as any)?.donor_name) && (
                       <Grid item xs={12} sm={6}>
                         <Typography variant="body2" color="text.secondary">Partner / Donor</Typography>
@@ -1121,13 +1012,10 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                         </Typography>
                       </Grid>
                     )}
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   </Grid>
                 </CardContent>
               </Card>
 
-<<<<<<< HEAD
               {/* Activity Dates (shown when it is an activity request) */}
               {((fullRequestDetails as any)?.is_activity_request || (fullRequestDetails as any)?.activity_start_date || (fullRequestDetails as any)?.activity_end_date ||
                 (selectedRequest as any)?.is_activity_request || (selectedRequest as any)?.activity_start_date || (selectedRequest as any)?.activity_end_date) && (
@@ -1159,13 +1047,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 <CardContent>
                   <Typography variant="subtitle2" color="primary" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <DescriptionIcon fontSize="small" /> Event / Purpose
-=======
-              {/* Justification */}
-              <Card variant="outlined" sx={{ mb: 2 }}>
-                <CardContent>
-                  <Typography variant="subtitle2" color="primary" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <DescriptionIcon fontSize="small" /> Justification
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   </Typography>
                   <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
                     {fullRequestDetails?.justification || selectedRequest.justification || 'No justification provided'}
@@ -1226,7 +1107,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
 
               <Divider sx={{ my: 2 }} />
 
-<<<<<<< HEAD
               {/* Travel & Per Diem Claim (if applicable) */}
               {dialogPerDiemClaim && (
                 <Box sx={{ mb: 2 }}>
@@ -1278,9 +1158,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
               </Card>
 
               {(dialogAction === 'approve' || dialogAction === 'view') && budgetImpact.length > 0 && (
-=======
-              {dialogAction === 'approve' && budgetImpact.length > 0 && (
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 <Box mb={2}>
                   <Typography variant="subtitle1" fontWeight="medium" gutterBottom>Budget Impact</Typography>
                   {budgetImpact.map((impact) => (
@@ -1316,7 +1193,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 <Alert severity="error" sx={{ mb: 2 }}>Cannot approve - insufficient funds in one or more budget lines.</Alert>
               )}
 
-<<<<<<< HEAD
               {dialogAction === 'view' && budgetImpact.some(bi => bi.hasInsufficientFunds) && (
                 <Alert severity="warning" sx={{ mb: 2 }}>Warning: One or more budget lines have insufficient funds.</Alert>
               )}
@@ -1378,15 +1254,12 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 </Card>
               )}
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               {dialogAction === 'reverse' && (
                 <Alert severity="warning" sx={{ mb: 2 }}>
                   You are about to reverse your approval. This will move the request back to the previous stage.
                 </Alert>
               )}
 
-<<<<<<< HEAD
               {dialogAction !== 'view' && (
                 <TextField
                   label={dialogAction === 'approve' ? 'Comments (optional)' : dialogAction === 'reject' ? 'Reason for rejection (required)' : 'Reason for reversal'}
@@ -1399,23 +1272,10 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                   error={dialogAction === 'reject' && !comments}
                 />
               )}
-=======
-              <TextField
-                label={dialogAction === 'approve' ? 'Comments (optional)' : dialogAction === 'reject' ? 'Reason for rejection (required)' : 'Reason for reversal'}
-                multiline
-                rows={3}
-                fullWidth
-                value={comments}
-                onChange={(e) => setComments(e.target.value)}
-                required={dialogAction === 'reject'}
-                error={dialogAction === 'reject' && !comments}
-              />
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             </Box>
           )}
         </DialogContent>
         <DialogActions>
-<<<<<<< HEAD
           <Button onClick={() => setIsDialogOpen(false)} disabled={isSubmitting}>
             {dialogAction === 'view' ? 'Close' : 'Cancel'}
           </Button>
@@ -1462,17 +1322,6 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
             }}
           >
             Download PDF
-=======
-          <Button onClick={() => setIsDialogOpen(false)} disabled={isSubmitting}>Cancel</Button>
-          <Button
-            variant="contained"
-            color={dialogAction === 'approve' ? 'success' : dialogAction === 'reject' ? 'error' : 'warning'}
-            onClick={handleSubmit}
-            disabled={isSubmitting || (dialogAction === 'reject' && !comments) || (dialogAction === 'approve' && budgetImpact.some(bi => bi.hasInsufficientFunds))}
-            startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : (dialogAction === 'approve' ? <ApproveIcon /> : dialogAction === 'reject' ? <RejectIcon /> : <ReverseIcon />)}
-          >
-            {dialogAction === 'approve' ? 'Approve' : dialogAction === 'reject' ? 'Reject' : 'Reverse'}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           </Button>
         </DialogActions>
       </Dialog>

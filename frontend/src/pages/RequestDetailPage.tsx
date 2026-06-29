@@ -33,14 +33,10 @@ import {
   Card,
   CardContent,
   IconButton,
-<<<<<<< HEAD
   Tooltip,
   Collapse,
   useTheme,
   useMediaQuery
-=======
-  Tooltip
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   ArrowBack as BackIcon,
@@ -53,21 +49,16 @@ import {
   PictureAsPdf as PdfIcon,
   TableChart as ExcelIcon,
   Undo as ReverseIcon,
-<<<<<<< HEAD
   AccessTime as TimeIcon,
   Print as PrintIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon
-=======
-  AccessTime as TimeIcon
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/icons-material';
 
 import { useAuthStore } from '../store/authStore';
 import { requestService } from '../services/requestService';
 import { approvalService } from '../services/approvalService';
 import { exportService } from '../services/exportService';
-<<<<<<< HEAD
 import attachmentService, { Attachment } from '../services/attachmentService';
 import perDiemService from '../services/perDiemService';
 import { Request, RequestItem, ApprovalLog, RequestStatus, PerDiemClaim } from '../types';
@@ -77,28 +68,16 @@ import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
   { status: 'PENDING_ADMIN_APPROVAL', label: 'Admin / HR Lead Approval' },
-=======
-import { Request, RequestItem, ApprovalLog, RequestStatus } from '../types';
-
-const APPROVAL_STEPS = [
-  { status: 'PENDING_LEAD_APPROVAL', label: 'Program Lead Review' },
-  { status: 'PENDING_HOP_APPROVAL', label: 'Head of Programs Review' },
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   { status: 'PENDING_FINANCE_APPROVAL', label: 'Finance Clerk Review' },
   { status: 'APPROVED', label: 'Approved' }
 ];
 
 const RequestDetailPage: React.FC = () => {
-<<<<<<< HEAD
   const { id, requestId: routeRequestId } = useParams<{ id: string; requestId: string }>();
   const requestId = id || routeRequestId;
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-=======
-  const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const { user, hasRole, hasPermission } = useAuthStore();
 
   const [request, setRequest] = useState<Request | null>(null);
@@ -116,7 +95,6 @@ const RequestDetailPage: React.FC = () => {
   const [showReverseDialog, setShowReverseDialog] = useState(false);
   const [reverseComment, setReverseComment] = useState('');
   const [reversalInfo, setReversalInfo] = useState<{ canReverse: boolean; hoursRemaining?: string } | null>(null);
-<<<<<<< HEAD
   const [showAllApprovalLogs, setShowAllApprovalLogs] = useState(false);
   const [showApprovalTrail, setShowApprovalTrail] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -149,32 +127,17 @@ const RequestDetailPage: React.FC = () => {
       setError('Failed to download attachment');
     }
   };
-=======
-
-  useEffect(() => {
-    if (id) {
-      fetchRequestDetails();
-    }
-  }, [id]);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   const fetchRequestDetails = async () => {
     try {
       setIsLoading(true);
       setError(null);
-<<<<<<< HEAD
       const response = await requestService.getById(parseInt(requestId!));
-=======
-      const response = await requestService.getById(parseInt(id!));
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
       if (response.success && response.data) {
         // Handle both response structures
         const data = response.data as any;
-<<<<<<< HEAD
         const resolvedRequest = data.request || data;
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         if (data.request) {
           setRequest(data.request);
           setItems(data.items || []);
@@ -185,7 +148,6 @@ const RequestDetailPage: React.FC = () => {
           setApprovalLogs(data.approvalTrail || []);
         }
 
-<<<<<<< HEAD
         // Load per diem claim if present
         if (resolvedRequest.has_per_diem_claim) {
           try {
@@ -200,12 +162,6 @@ const RequestDetailPage: React.FC = () => {
         if (hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK')) {
           try {
             const reversalResponse = await approvalService.canReverseApproval(requestId!);
-=======
-        // Check if reversal is possible for approvers
-        if (hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK')) {
-          try {
-            const reversalResponse = await approvalService.canReverseApproval(id!);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             if (reversalResponse.success && reversalResponse.data) {
               setReversalInfo(reversalResponse.data);
             }
@@ -227,11 +183,7 @@ const RequestDetailPage: React.FC = () => {
   const handleSubmitForApproval = async () => {
     try {
       setIsSubmitting(true);
-<<<<<<< HEAD
       const response = await requestService.submit(requestId!);
-=======
-      const response = await requestService.submit(id!);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       if (response.success) {
         fetchRequestDetails();
       } else {
@@ -247,11 +199,7 @@ const RequestDetailPage: React.FC = () => {
   const handleApprove = async () => {
     try {
       setIsSubmitting(true);
-<<<<<<< HEAD
       const response = await approvalService.approve(requestId!, {
-=======
-      const response = await approvalService.approve(id!, {
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         action: 'APPROVED',
         comments: approveComment,
         version: request?.version || 1
@@ -277,11 +225,7 @@ const RequestDetailPage: React.FC = () => {
     }
     try {
       setIsSubmitting(true);
-<<<<<<< HEAD
       const response = await approvalService.reject(requestId!, {
-=======
-      const response = await approvalService.reject(id!, {
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         action: 'REJECTED',
         comments: rejectComment,
         version: request?.version || 1
@@ -303,11 +247,7 @@ const RequestDetailPage: React.FC = () => {
   const handleDispatch = async () => {
     try {
       setIsSubmitting(true);
-<<<<<<< HEAD
       const response = await approvalService.dispatch(requestId!);
-=======
-      const response = await approvalService.dispatch(id!);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       if (response.success) {
         fetchRequestDetails();
       } else {
@@ -322,19 +262,11 @@ const RequestDetailPage: React.FC = () => {
 
   const handleDownloadPdf = async () => {
     try {
-<<<<<<< HEAD
       const blob = await exportService.downloadDispatchPdf(requestId!);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `dispatch-${request?.request_code}.pdf`;
-=======
-      const blob = await exportService.downloadDispatchPdf(id!);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `dispatch-${request?.request_number}.pdf`;
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -346,19 +278,11 @@ const RequestDetailPage: React.FC = () => {
 
   const handleDownloadExcel = async () => {
     try {
-<<<<<<< HEAD
       const blob = await exportService.downloadDispatchExcel(requestId!);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `dispatch-${request?.request_code}.xlsx`;
-=======
-      const blob = await exportService.downloadDispatchExcel(id!);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `dispatch-${request?.request_number}.xlsx`;
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -376,10 +300,7 @@ const RequestDetailPage: React.FC = () => {
         return 'error';
       case 'DRAFT':
         return 'default';
-<<<<<<< HEAD
       case 'PENDING_ADMIN_APPROVAL':
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       case 'PENDING_LEAD_APPROVAL':
       case 'PENDING_HOP_APPROVAL':
       case 'PENDING_FINANCE_APPROVAL':
@@ -398,7 +319,6 @@ const RequestDetailPage: React.FC = () => {
   const canApprove = () => {
     if (!request || !user) return false;
 
-<<<<<<< HEAD
     // Admin can approve at PENDING_ADMIN_APPROVAL and any other pending stage
     if (hasRole('ADMIN') && [
       'PENDING_ADMIN_APPROVAL',
@@ -424,15 +344,6 @@ const RequestDetailPage: React.FC = () => {
       'PENDING_HOP_APPROVAL',
       'PENDING_FINANCE_APPROVAL'
     ].includes(request.status)) {
-=======
-    // Program Lead can approve PENDING_LEAD_APPROVAL requests from their department
-    if (request.status === 'PENDING_LEAD_APPROVAL' && hasRole('PROGRAM_LEAD')) {
-      return request.department_id === user.department_id;
-    }
-
-    // HOP can approve PENDING_HOP_APPROVAL requests
-    if (request.status === 'PENDING_HOP_APPROVAL' && hasRole('HEAD_OF_PROGRAMS')) {
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       return true;
     }
 
@@ -445,17 +356,12 @@ const RequestDetailPage: React.FC = () => {
   };
 
   const canDispatch = () => {
-<<<<<<< HEAD
     return request?.status === 'APPROVED' && (hasRole('FINANCE_CLERK') || hasRole('ADMIN'));
-=======
-    return request?.status === 'APPROVED' && hasRole('FINANCE_CLERK');
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   };
 
   // Helper function to get approval log for a specific step
   const getApprovalForStep = (stepIndex: number): ApprovalLog | undefined => {
     // Map step index to the role that would approve at that step
-<<<<<<< HEAD
     const roleMap: { [key: number]: string[] } = {
       0: ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN'], // Step 0: Lead, HOP, or Admin
       1: ['FINANCE_CLERK', 'ADMIN']                     // Step 1: Finance or Admin (combined authority)
@@ -467,20 +373,6 @@ const RequestDetailPage: React.FC = () => {
     // Find an approval log where the approver's role matches and action is APPROVED
     return approvalLogs.find(log =>
       expectedRoles.includes(log.approver_role || log.actor_role || '') &&
-=======
-    const roleMap: { [key: number]: string } = {
-      0: 'PROGRAM_LEAD',     // Step 0: Program Lead Review
-      1: 'HEAD_OF_PROGRAMS', // Step 1: Head of Programs Review
-      2: 'FINANCE_CLERK'     // Step 2: Finance Clerk Review
-    };
-
-    const expectedRole = roleMap[stepIndex];
-    if (!expectedRole) return undefined;
-
-    // Find an approval log where the approver's role matches and action is APPROVED
-    return approvalLogs.find(log =>
-      (log.approver_role === expectedRole || log.actor_role === expectedRole) &&
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       (log.action === 'APPROVED' || log.action === 'APPROVE')
     );
   };
@@ -500,7 +392,6 @@ const RequestDetailPage: React.FC = () => {
     return `$${numAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-<<<<<<< HEAD
   // ── HARDCODED BRANDING ────────────────────────────────────────────────────
   const POWERED_BY = 'Powered By Kudakwashe C Marufu' as const;
   const DOC_TITLE  = 'Float Requisition' as const;
@@ -788,8 +679,6 @@ ${buildClaimPage()}
     XLSX.writeFile(wb, `float-requisition-${request.request_code}-${new Date().toISOString().slice(0,10)}.xlsx`);
   };
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   if (isLoading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
@@ -801,11 +690,7 @@ ${buildClaimPage()}
   if (error && !request) {
     return (
       <Box>
-<<<<<<< HEAD
         <Button startIcon={<BackIcon />} onClick={() => navigate('/finance/requests')} sx={{ mb: 2 }}>
-=======
-        <Button startIcon={<BackIcon />} onClick={() => navigate('/requests')} sx={{ mb: 2 }}>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           Back to Requests
         </Button>
         <Alert severity="error">{error}</Alert>
@@ -820,28 +705,18 @@ ${buildClaimPage()}
   return (
     <Box>
       {/* Header */}
-<<<<<<< HEAD
       <Box display="flex" alignItems="center" gap={2} mb={3} flexWrap="wrap">
         <IconButton onClick={() => navigate('/finance/requests')}>
           <BackIcon />
         </IconButton>
         <Typography variant="h5" sx={{ flex: 1 }}>
           {DOC_TITLE} — {request.request_code}
-=======
-      <Box display="flex" alignItems="center" gap={2} mb={3}>
-        <IconButton onClick={() => navigate('/requests')}>
-          <BackIcon />
-        </IconButton>
-        <Typography variant="h5" sx={{ flex: 1 }}>
-          Request {request.request_number}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         </Typography>
         <Chip
           label={request.status.replace(/_/g, ' ')}
           color={getStatusColor(request.status)}
           size="medium"
         />
-<<<<<<< HEAD
         <Tooltip title="Print / Save as PDF">
           <IconButton color="primary" onClick={printFloatRequisitionPDF}>
             <PrintIcon />
@@ -852,8 +727,6 @@ ${buildClaimPage()}
             <ExcelIcon />
           </IconButton>
         </Tooltip>
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       </Box>
 
       {error && (
@@ -876,11 +749,7 @@ ${buildClaimPage()}
                   Request Number
                 </Typography>
                 <Typography variant="body1" fontWeight="medium">
-<<<<<<< HEAD
                   {request.request_code}
-=======
-                  {request.request_number}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 </Typography>
               </Grid>
               <Grid item xs={12} sm={6}>
@@ -896,11 +765,7 @@ ${buildClaimPage()}
                   Created By
                 </Typography>
                 <Typography variant="body1">
-<<<<<<< HEAD
                   {request.requester_first_name} {request.requester_last_name}
-=======
-                  {request.created_by_name}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 </Typography>
               </Grid>
               <Grid item xs={12} sm={6}>
@@ -911,7 +776,6 @@ ${buildClaimPage()}
                   {formatDate(request.created_at)}
                 </Typography>
               </Grid>
-<<<<<<< HEAD
               {(request as any).donor_name && (
                 <Grid item xs={12} sm={6}>
                   <Typography variant="body2" color="text.secondary">Partner / Donor</Typography>
@@ -968,23 +832,6 @@ ${buildClaimPage()}
                 <Grid item xs={12}>
                   <Typography variant="body2" color="text.secondary">
                     Activity Request: <strong>No</strong>
-=======
-              <Grid item xs={12}>
-                <Typography variant="body2" color="text.secondary">
-                  Description
-                </Typography>
-                <Typography variant="body1">
-                  {request.description}
-                </Typography>
-              </Grid>
-              {request.justification && (
-                <Grid item xs={12}>
-                  <Typography variant="body2" color="text.secondary">
-                    Justification
-                  </Typography>
-                  <Typography variant="body1">
-                    {request.justification}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   </Typography>
                 </Grid>
               )}
@@ -1036,7 +883,6 @@ ${buildClaimPage()}
               </Table>
             </TableContainer>
           </Paper>
-<<<<<<< HEAD
 
           {/* Attachments Section */}
           <Paper elevation={2} sx={{ p: 3, mt: 3 }}>
@@ -1106,8 +952,6 @@ ${buildClaimPage()}
               </Table>
             )}
           </Paper>
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         </Grid>
 
         {/* Sidebar */}
@@ -1119,18 +963,12 @@ ${buildClaimPage()}
             </Typography>
             <Divider sx={{ mb: 2 }} />
             <Box display="flex" flexDirection="column" gap={2}>
-<<<<<<< HEAD
               {/* Draft/Rejected owner actions */}
               {['DRAFT', 'REJECTED'].includes(request.status) && request.requester_id === user?.id && (
-=======
-              {/* Draft Actions */}
-              {request.status === 'DRAFT' && request.created_by === user?.id && (
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 <>
                   <Button
                     variant="outlined"
                     startIcon={<EditIcon />}
-<<<<<<< HEAD
                     onClick={() => navigate(`/finance/requests/${requestId}/edit`)}
                     fullWidth
                   >
@@ -1147,22 +985,6 @@ ${buildClaimPage()}
                       Submit for Approval
                     </Button>
                   )}
-=======
-                    onClick={() => navigate(`/requests/${id}/edit`)}
-                    fullWidth
-                  >
-                    Edit Request
-                  </Button>
-                  <Button
-                    variant="contained"
-                    startIcon={<SendIcon />}
-                    onClick={handleSubmitForApproval}
-                    disabled={isSubmitting}
-                    fullWidth
-                  >
-                    Submit for Approval
-                  </Button>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 </>
               )}
 
@@ -1207,11 +1029,7 @@ ${buildClaimPage()}
               )}
 
               {/* Export Actions */}
-<<<<<<< HEAD
               {(request.status === 'APPROVED' || request.status === 'DISPATCHED' || request.status === 'RECONCILED') && (
-=======
-              {request.status === 'APPROVED' && (
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 <>
                   <Divider sx={{ my: 1 }} />
                   <Typography variant="subtitle2" color="text.secondary">
@@ -1220,7 +1038,6 @@ ${buildClaimPage()}
                   <Box display="flex" gap={1}>
                     <Button
                       variant="outlined"
-<<<<<<< HEAD
                       startIcon={<PrintIcon />}
                       onClick={printFloatRequisitionPDF}
                       sx={{ flex: 1 }}
@@ -1232,18 +1049,6 @@ ${buildClaimPage()}
                       color="success"
                       startIcon={<ExcelIcon />}
                       onClick={exportToExcel}
-=======
-                      startIcon={<PdfIcon />}
-                      onClick={handleDownloadPdf}
-                      sx={{ flex: 1 }}
-                    >
-                      PDF
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      startIcon={<ExcelIcon />}
-                      onClick={handleDownloadExcel}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                       sx={{ flex: 1 }}
                     >
                       Excel
@@ -1254,11 +1059,7 @@ ${buildClaimPage()}
 
               {/* No Actions Available */}
               {!canApprove() && !canDispatch() && 
-<<<<<<< HEAD
                request.status !== 'APPROVED' && request.status !== 'DRAFT' && request.status !== 'REJECTED' && (
-=======
-               request.status !== 'APPROVED' && request.status !== 'DRAFT' && (
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 <Typography color="text.secondary" textAlign="center">
                   No actions available
                 </Typography>
@@ -1335,7 +1136,6 @@ ${buildClaimPage()}
           </Paper>
 
           {/* Approval Trail */}
-<<<<<<< HEAD
           <Paper elevation={2} sx={{ p: 0 }}>
             <Box
               display="flex" alignItems="center" justifyContent="space-between"
@@ -1355,27 +1155,13 @@ ${buildClaimPage()}
             <Collapse in={showApprovalTrail}>
             <Divider />
             <Box sx={{ p: 3 }}>
-=======
-          <Paper elevation={2} sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Approval Trail
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mb={2}>
-              Complete history of all actions taken on this request
-            </Typography>
-            <Divider sx={{ mb: 2 }} />
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             {approvalLogs.length === 0 ? (
               <Typography color="text.secondary">
                 No approval actions yet
               </Typography>
             ) : (
               <Box>
-<<<<<<< HEAD
                 {(showAllApprovalLogs ? approvalLogs : approvalLogs.slice(0, 2)).map((log, index) => {
-=======
-                {approvalLogs.map((log, index) => {
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   const getActionColor = (action: string): 'success' | 'error' | 'warning' | 'info' | 'default' => {
                     if (action === 'APPROVED' || action === 'APPROVE') return 'success';
                     if (action === 'REJECTED' || action === 'REJECT') return 'error';
@@ -1439,7 +1225,6 @@ ${buildClaimPage()}
                     </Card>
                   );
                 })}
-<<<<<<< HEAD
                 {approvalLogs.length > 2 && (
                   <Box textAlign="center" mt={1}>
                     <Button
@@ -1467,29 +1252,16 @@ ${buildClaimPage()}
 
       {/* Approve Dialog */}
       <Dialog open={showApproveDialog} onClose={() => setShowApproveDialog(false)} maxWidth="lg" fullWidth fullScreen={isMobile}>
-=======
-              </Box>
-            )}
-          </Paper>
-        </Grid>
-      </Grid>
-
-      {/* Approve Dialog */}
-      <Dialog open={showApproveDialog} onClose={() => setShowApproveDialog(false)} maxWidth="sm" fullWidth>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         <DialogTitle>Approve Request</DialogTitle>
         <DialogContent>
           <Typography gutterBottom>
             Are you sure you want to approve this request?
           </Typography>
-<<<<<<< HEAD
           {perDiemClaim && (
             <Box sx={{ mt: 2 }}>
               <TravelClaimSection mode="readonly" claim={perDiemClaim} />
             </Box>
           )}
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <TextField
             label="Comment (optional)"
             fullWidth
@@ -1516,11 +1288,7 @@ ${buildClaimPage()}
       </Dialog>
 
       {/* Reject Dialog */}
-<<<<<<< HEAD
       <Dialog open={showRejectDialog} onClose={() => setShowRejectDialog(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
-=======
-      <Dialog open={showRejectDialog} onClose={() => setShowRejectDialog(false)} maxWidth="sm" fullWidth>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         <DialogTitle>Reject Request</DialogTitle>
         <DialogContent>
           <Typography gutterBottom>

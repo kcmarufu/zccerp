@@ -29,7 +29,6 @@ import {
   LinearProgress,
   IconButton,
   Tooltip,
-<<<<<<< HEAD
   Alert,
   Menu,
   Checkbox,
@@ -38,16 +37,12 @@ import {
   alpha,
   useTheme,
   InputAdornment
-=======
-  Alert
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   Add as AddIcon,
   Edit as EditIcon,
   TrendingUp as TopUpIcon,
   History as HistoryIcon,
-<<<<<<< HEAD
   Delete as DeleteIcon,
   MoreVert as MoreIcon,
   Visibility as ViewIcon,
@@ -57,14 +52,10 @@ import {
   FilterList as FilterIcon,
   Refresh as RefreshIcon,
   Search as SearchIcon
-=======
-  Delete as DeleteIcon
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { format } from 'date-fns';
 
-<<<<<<< HEAD
 import { BudgetLine, BudgetTransaction, Department, Project } from '../../types';
 import { budgetService } from '../../services/budgetService';
 import donorService, { Donor } from '../../services/donorService';
@@ -86,19 +77,6 @@ const BudgetManagement: React.FC = () => {
     departmentId: '',
     donorId: '',
     fiscalYear: 0
-=======
-import { BudgetLine, BudgetTransaction, Department } from '../../types';
-import { budgetService } from '../../services/budgetService';
-import api from '../../services/api';
-
-const BudgetManagement: React.FC = () => {
-  const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [filters, setFilters] = useState({
-    departmentId: '',
-    fiscalYear: new Date().getFullYear()
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   });
 
   // Dialog states
@@ -106,15 +84,11 @@ const BudgetManagement: React.FC = () => {
   const [isTopUpDialogOpen, setIsTopUpDialogOpen] = useState(false);
   const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-<<<<<<< HEAD
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const [selectedBudget, setSelectedBudget] = useState<BudgetLine | null>(null);
   const [transactions, setTransactions] = useState<BudgetTransaction[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-<<<<<<< HEAD
   // Action menu state
   const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
   const [menuBudget, setMenuBudget] = useState<BudgetLine | null>(null);
@@ -122,18 +96,13 @@ const BudgetManagement: React.FC = () => {
   // Checkbox selection
   const [selectedLines, setSelectedLines] = useState<number[]>([]);
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   // Form states
   const [newBudget, setNewBudget] = useState({
     budgetCode: '',
     budgetName: '',
     departmentId: '',
-<<<<<<< HEAD
     donorId: '',
     projectId: '',
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     fiscalYear: new Date().getFullYear(),
     allocatedAmount: '',
     description: ''
@@ -143,10 +112,7 @@ const BudgetManagement: React.FC = () => {
 
   useEffect(() => {
     fetchDepartments();
-<<<<<<< HEAD
     fetchDonors();
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     fetchBudgetLines();
   }, [filters]);
 
@@ -161,7 +127,6 @@ const BudgetManagement: React.FC = () => {
     }
   };
 
-<<<<<<< HEAD
   const fetchDonors = async () => {
     try {
       const activeDonors = await donorService.getActiveDonors();
@@ -183,19 +148,13 @@ const BudgetManagement: React.FC = () => {
     }
   };
 
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const fetchBudgetLines = async () => {
     try {
       setIsLoading(true);
       const response = await budgetService.getAll({
         departmentId: filters.departmentId ? parseInt(filters.departmentId) : undefined,
-<<<<<<< HEAD
         donorId: filters.donorId ? parseInt(filters.donorId) : undefined,
         fiscalYear: filters.fiscalYear || undefined
-=======
-        fiscalYear: filters.fiscalYear
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       });
       if (response.success && response.data) {
         setBudgetLines(response.data);
@@ -207,7 +166,6 @@ const BudgetManagement: React.FC = () => {
     }
   };
 
-<<<<<<< HEAD
   const handleCreateBudget = async () => {
     if (!newBudget.donorId) { toast.error('Please select a partner'); return; }
     if (!newBudget.projectId) { toast.error('Please select a project'); return; }
@@ -225,20 +183,6 @@ const BudgetManagement: React.FC = () => {
         allocatedAmount: parseFloat(newBudget.allocatedAmount),
         description: newBudget.description || undefined
       } as any);
-=======
-  // Create new budget line
-  const handleCreateBudget = async () => {
-    try {
-      setIsSubmitting(true);
-      const response = await budgetService.create({
-        budgetCode: newBudget.budgetCode,
-        budgetName: newBudget.budgetName,
-        departmentId: parseInt(newBudget.departmentId),
-        fiscalYear: newBudget.fiscalYear,
-        allocatedAmount: parseFloat(newBudget.allocatedAmount),
-        description: newBudget.description || undefined
-      });
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
       if (response.success) {
         toast.success('Budget line created successfully');
@@ -247,19 +191,13 @@ const BudgetManagement: React.FC = () => {
           budgetCode: '',
           budgetName: '',
           departmentId: '',
-<<<<<<< HEAD
           donorId: '',
           projectId: '',
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           fiscalYear: new Date().getFullYear(),
           allocatedAmount: '',
           description: ''
         });
-<<<<<<< HEAD
         setProjects([]);
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         fetchBudgetLines();
       }
     } catch (error: any) {
@@ -349,7 +287,6 @@ const BudgetManagement: React.FC = () => {
     return 'success';
   };
 
-<<<<<<< HEAD
   // Calculate totals - compute balance from allocated - spent to avoid NaN issues
   const totals = budgetLines.reduce(
     (acc, bl) => {
@@ -361,21 +298,11 @@ const BudgetManagement: React.FC = () => {
         balance: acc.balance + (allocated - spent)
       };
     },
-=======
-  // Calculate totals - ensure numeric conversion for values that may come as strings from MySQL
-  const totals = budgetLines.reduce(
-    (acc, bl) => ({
-      allocated: acc.allocated + (Number(bl.allocated_amount) || 0),
-      spent: acc.spent + (Number(bl.spent_amount) || 0),
-      balance: acc.balance + (Number(bl.balance) || 0)
-    }),
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     { allocated: 0, spent: 0, balance: 0 }
   );
 
   return (
     <Box>
-<<<<<<< HEAD
       {/* ── Gradient Header ── */}
       <Paper elevation={0} sx={{ p: 3, mb: 3, background: 'linear-gradient(135deg, #006064 0%, #00363a 100%)', color: 'white', borderRadius: 2 }}>
         <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={2}>
@@ -401,25 +328,6 @@ const BudgetManagement: React.FC = () => {
               Create Budget Line
             </Button>
           </Stack>
-=======
-      <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
-        <Box display="flex" justifyContent="space-between" alignItems="center">
-          <Box>
-            <Typography variant="h5" gutterBottom>
-              Budget Management
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Create, manage, and top-up budget lines for all departments.
-            </Typography>
-          </Box>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => setIsCreateDialogOpen(true)}
-          >
-            Create Budget Line
-          </Button>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         </Box>
       </Paper>
 
@@ -458,20 +366,15 @@ const BudgetManagement: React.FC = () => {
       </Grid>
 
       {/* Filters */}
-<<<<<<< HEAD
       <Paper elevation={0} sx={{ p: 2, mb: 3, borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
         <Stack direction="row" alignItems="center" spacing={1} mb={1.5}>
           <FilterIcon fontSize="small" color="action" />
           <Typography variant="body2" fontWeight={600} color="text.secondary">Filters</Typography>
         </Stack>
-=======
-      <Paper elevation={1} sx={{ p: 2, mb: 3 }}>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         <Grid container spacing={2} alignItems="center">
           <Grid item xs={12} sm={4}>
             <TextField
               select
-<<<<<<< HEAD
               label="Partner"
               size="small"
               fullWidth
@@ -492,8 +395,6 @@ const BudgetManagement: React.FC = () => {
           <Grid item xs={12} sm={4}>
             <TextField
               select
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               label="Department"
               size="small"
               fullWidth
@@ -508,17 +409,12 @@ const BudgetManagement: React.FC = () => {
               ))}
             </TextField>
           </Grid>
-<<<<<<< HEAD
           <Grid item xs={12} sm={3}>
-=======
-          <Grid item xs={12} sm={4}>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             <TextField
               type="number"
               label="Fiscal Year"
               size="small"
               fullWidth
-<<<<<<< HEAD
               value={filters.fiscalYear || ''}
               onChange={(e) => setFilters({ ...filters, fiscalYear: e.target.value ? parseInt(e.target.value) : 0 })}
             />
@@ -532,13 +428,6 @@ const BudgetManagement: React.FC = () => {
             <Button size="small" onClick={() => setSelectedLines([])}>Clear Selection</Button>
           </Box>
         )}
-=======
-              value={filters.fiscalYear}
-              onChange={(e) => setFilters({ ...filters, fiscalYear: parseInt(e.target.value) })}
-            />
-          </Grid>
-        </Grid>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       </Paper>
 
       {/* Budget Lines Table */}
@@ -547,7 +436,6 @@ const BudgetManagement: React.FC = () => {
           <CircularProgress />
         </Box>
       ) : (
-<<<<<<< HEAD
         <Paper elevation={2} sx={{ borderRadius: 2 }}>
           <TableContainer>
           <Table size="small">
@@ -571,36 +459,17 @@ const BudgetManagement: React.FC = () => {
                 <TableCell sx={{ color: 'white', fontWeight: 700 }} align="right">Balance</TableCell>
                 <TableCell sx={{ color: 'white', fontWeight: 700 }}>Utilization</TableCell>
                 <TableCell sx={{ color: 'white', fontWeight: 700 }} align="center">Actions</TableCell>
-=======
-        <TableContainer component={Paper}>
-          <Table>
-            <TableHead>
-              <TableRow sx={{ backgroundColor: 'grey.100' }}>
-                <TableCell sx={{ fontWeight: 'bold' }}>Code</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>Name</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>Department</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>Allocated</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>Spent</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>Balance</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>Utilization</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }} align="center">Actions</TableCell>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               </TableRow>
             </TableHead>
             <TableBody>
               {budgetLines.length === 0 ? (
                 <TableRow>
-<<<<<<< HEAD
                   <TableCell colSpan={11} align="center" sx={{ py: 5 }}>
                     <BudgetIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
-=======
-                  <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     <Typography color="text.secondary">No budget lines found</Typography>
                   </TableCell>
                 </TableRow>
               ) : (
-<<<<<<< HEAD
                 budgetLines.map((budget) => {
                   const isSelected = selectedLines.includes(budget.id);
                   return (
@@ -635,15 +504,6 @@ const BudgetManagement: React.FC = () => {
                       <Chip label={budget.project_code || budget.category || 'UNASSIGNED'} size="small" variant="outlined" />
                     </TableCell>
                     <TableCell>
-=======
-                budgetLines.map((budget) => (
-                  <TableRow key={budget.id} hover>
-                    <TableCell>
-                      <Typography fontWeight="medium">{budget.budget_code}</Typography>
-                    </TableCell>
-                    <TableCell>{budget.budget_name}</TableCell>
-                    <TableCell>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                       <Chip label={budget.department_code} size="small" variant="outlined" />
                     </TableCell>
                     <TableCell>
@@ -655,15 +515,9 @@ const BudgetManagement: React.FC = () => {
                     <TableCell>
                       <Typography
                         fontWeight="medium"
-<<<<<<< HEAD
                         color={(Number(budget.allocated_amount) - Number(budget.spent_amount)) < 1000 ? 'error' : 'success.main'}
                       >
                         ${(Number(budget.allocated_amount || 0) - Number(budget.spent_amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-=======
-                        color={Number(budget.balance || 0) < 1000 ? 'error' : 'success.main'}
-                      >
-                        ${Number(budget.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                       </Typography>
                     </TableCell>
                     <TableCell>
@@ -679,7 +533,6 @@ const BudgetManagement: React.FC = () => {
                         </Typography>
                       </Box>
                     </TableCell>
-<<<<<<< HEAD
                     <TableCell align="center" onClick={(e) => e.stopPropagation()}>
                       <Tooltip title="View Details">
                         <IconButton
@@ -701,14 +554,6 @@ const BudgetManagement: React.FC = () => {
                             e.stopPropagation();
                             handleOpenTopUp(budget);
                           }}
-=======
-                    <TableCell align="center">
-                      <Tooltip title="Top Up">
-                        <IconButton
-                          size="small"
-                          color="primary"
-                          onClick={() => handleOpenTopUp(budget)}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         >
                           <TopUpIcon />
                         </IconButton>
@@ -716,19 +561,14 @@ const BudgetManagement: React.FC = () => {
                       <Tooltip title="View History">
                         <IconButton
                           size="small"
-<<<<<<< HEAD
                           onClick={(e) => {
                             e.stopPropagation();
                             handleViewHistory(budget);
                           }}
-=======
-                          onClick={() => handleViewHistory(budget)}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         >
                           <HistoryIcon />
                         </IconButton>
                       </Tooltip>
-<<<<<<< HEAD
                       <Tooltip title="More Actions">
                         <IconButton
                           size="small"
@@ -739,20 +579,10 @@ const BudgetManagement: React.FC = () => {
                           }}
                         >
                           <MoreIcon />
-=======
-                      <Tooltip title="Delete Budget Line">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => handleOpenDelete(budget)}
-                        >
-                          <DeleteIcon />
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         </IconButton>
                       </Tooltip>
                     </TableCell>
                   </TableRow>
-<<<<<<< HEAD
                   );
                 })
               )}
@@ -823,15 +653,6 @@ const BudgetManagement: React.FC = () => {
         }}
       />
 
-=======
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       {/* Create Budget Dialog */}
       <Dialog 
         open={isCreateDialogOpen} 
@@ -842,7 +663,6 @@ const BudgetManagement: React.FC = () => {
         <DialogTitle>Create New Budget Line</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
-<<<<<<< HEAD
             {/* Step 1: Select Donor */}
             <Grid item xs={12}>
               <TextField
@@ -902,15 +722,6 @@ const BudgetManagement: React.FC = () => {
                 onChange={(e) => setNewBudget({ ...newBudget, budgetCode: e.target.value })}
                 disabled={!newBudget.projectId}
                 placeholder="e.g., WASH-EDU-0001"
-=======
-            <Grid item xs={12} sm={6}>
-              <TextField
-                label="Budget Code"
-                fullWidth
-                value={newBudget.budgetCode}
-                onChange={(e) => setNewBudget({ ...newBudget, budgetCode: e.target.value })}
-                placeholder="e.g., IT-2026-HW"
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -920,34 +731,22 @@ const BudgetManagement: React.FC = () => {
                 fullWidth
                 value={newBudget.fiscalYear}
                 onChange={(e) => setNewBudget({ ...newBudget, fiscalYear: parseInt(e.target.value) })}
-<<<<<<< HEAD
                 disabled={!newBudget.projectId}
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               />
             </Grid>
             <Grid item xs={12}>
               <TextField
-<<<<<<< HEAD
                 label="Budget Name *"
                 fullWidth
                 value={newBudget.budgetName}
                 onChange={(e) => setNewBudget({ ...newBudget, budgetName: e.target.value })}
                 disabled={!newBudget.projectId}
                 placeholder="e.g., Water & Sanitation Activities"
-=======
-                label="Budget Name"
-                fullWidth
-                value={newBudget.budgetName}
-                onChange={(e) => setNewBudget({ ...newBudget, budgetName: e.target.value })}
-                placeholder="e.g., IT Hardware Budget"
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               />
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
                 select
-<<<<<<< HEAD
                 label="Department (Optional)"
                 fullWidth
                 value={newBudget.departmentId}
@@ -955,13 +754,6 @@ const BudgetManagement: React.FC = () => {
                 disabled={!newBudget.projectId}
               >
                 <MenuItem value="">No Department</MenuItem>
-=======
-                label="Department"
-                fullWidth
-                value={newBudget.departmentId}
-                onChange={(e) => setNewBudget({ ...newBudget, departmentId: e.target.value })}
-              >
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 {departments.map(dept => (
                   <MenuItem key={dept.id} value={dept.id}>
                     {dept.department_name}
@@ -971,19 +763,12 @@ const BudgetManagement: React.FC = () => {
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
-<<<<<<< HEAD
                 label="Allocated Amount *"
-=======
-                label="Allocated Amount"
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 type="number"
                 fullWidth
                 value={newBudget.allocatedAmount}
                 onChange={(e) => setNewBudget({ ...newBudget, allocatedAmount: e.target.value })}
-<<<<<<< HEAD
                 disabled={!newBudget.projectId}
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 InputProps={{ startAdornment: '$' }}
               />
             </Grid>
@@ -995,10 +780,7 @@ const BudgetManagement: React.FC = () => {
                 rows={2}
                 value={newBudget.description}
                 onChange={(e) => setNewBudget({ ...newBudget, description: e.target.value })}
-<<<<<<< HEAD
                 disabled={!newBudget.projectId}
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               />
             </Grid>
           </Grid>
@@ -1008,60 +790,38 @@ const BudgetManagement: React.FC = () => {
           <Button
             variant="contained"
             onClick={handleCreateBudget}
-<<<<<<< HEAD
             disabled={isSubmitting || !newBudget.donorId || !newBudget.projectId || !newBudget.budgetName || !newBudget.allocatedAmount}
-=======
-            disabled={isSubmitting || !newBudget.budgetCode || !newBudget.budgetName || !newBudget.departmentId || !newBudget.allocatedAmount}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           >
             {isSubmitting ? <CircularProgress size={24} /> : 'Create'}
           </Button>
         </DialogActions>
       </Dialog>
 
-<<<<<<< HEAD
       {/* Top Up / Deduct Dialog */}
-=======
-      {/* Top Up Dialog */}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       <Dialog 
         open={isTopUpDialogOpen} 
         onClose={() => setIsTopUpDialogOpen(false)}
         maxWidth="sm"
         fullWidth
       >
-<<<<<<< HEAD
         <DialogTitle>Adjust Budget: {selectedBudget?.budget_code}</DialogTitle>
-=======
-        <DialogTitle>Top Up Budget: {selectedBudget?.budget_code}</DialogTitle>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         <DialogContent>
           {selectedBudget && (
             <Box sx={{ mt: 1 }}>
               <Alert severity="info" sx={{ mb: 2 }}>
-<<<<<<< HEAD
                 Current Allocated: <strong>${Number(selectedBudget.allocated_amount || 0).toLocaleString()}</strong>
                 {' | '}Spent: <strong>${Number(selectedBudget.spent_amount || 0).toLocaleString()}</strong>
                 {' | '}Balance: <strong>${Number(selectedBudget.balance || 0).toLocaleString()}</strong>
               </Alert>
               <TextField
                 label="Amount (positive to add, negative to deduct)"
-=======
-                Current Balance: <strong>${Number(selectedBudget.balance || 0).toLocaleString()}</strong>
-              </Alert>
-              <TextField
-                label="Top Up Amount"
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 type="number"
                 fullWidth
                 value={topUpAmount}
                 onChange={(e) => setTopUpAmount(e.target.value)}
                 InputProps={{ startAdornment: '$' }}
                 sx={{ mb: 2 }}
-<<<<<<< HEAD
                 helperText="Enter a positive number to top up or a negative number to deduct"
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               />
               <TextField
                 label="Description (Optional)"
@@ -1070,18 +830,11 @@ const BudgetManagement: React.FC = () => {
                 rows={2}
                 value={topUpDescription}
                 onChange={(e) => setTopUpDescription(e.target.value)}
-<<<<<<< HEAD
                 placeholder="e.g., Q2 budget allocation or Budget reduction"
               />
               {topUpAmount && parseFloat(topUpAmount) !== 0 && (
                 <Alert severity={parseFloat(topUpAmount) > 0 ? 'success' : 'warning'} sx={{ mt: 2 }}>
                   {parseFloat(topUpAmount) > 0 ? 'Top Up' : 'Deduction'}: <strong>${Math.abs(parseFloat(topUpAmount || '0')).toLocaleString()}</strong><br />
-=======
-                placeholder="e.g., Q2 budget allocation"
-              />
-              {topUpAmount && (
-                <Alert severity="success" sx={{ mt: 2 }}>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   New Balance: <strong>${(Number(selectedBudget.balance || 0) + parseFloat(topUpAmount || '0')).toLocaleString()}</strong>
                 </Alert>
               )}
@@ -1092,19 +845,11 @@ const BudgetManagement: React.FC = () => {
           <Button onClick={() => setIsTopUpDialogOpen(false)}>Cancel</Button>
           <Button
             variant="contained"
-<<<<<<< HEAD
             color={topUpAmount && parseFloat(topUpAmount) < 0 ? 'warning' : 'primary'}
             onClick={handleTopUp}
             disabled={isSubmitting || !topUpAmount || parseFloat(topUpAmount) === 0}
           >
             {isSubmitting ? <CircularProgress size={24} /> : (topUpAmount && parseFloat(topUpAmount) < 0 ? 'Deduct' : 'Top Up')}
-=======
-            color="primary"
-            onClick={handleTopUp}
-            disabled={isSubmitting || !topUpAmount || parseFloat(topUpAmount) <= 0}
-          >
-            {isSubmitting ? <CircularProgress size={24} /> : 'Top Up'}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           </Button>
         </DialogActions>
       </Dialog>
@@ -1158,7 +903,6 @@ const BudgetManagement: React.FC = () => {
           </TableContainer>
         </DialogContent>
         <DialogActions>
-<<<<<<< HEAD
           <Button
             variant="outlined"
             color="error"
@@ -1228,8 +972,6 @@ tbody tr:nth-child(even) td{background:#f7f7f7;}
           >
             Export Excel
           </Button>
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           <Button onClick={() => setIsHistoryDialogOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
@@ -1271,14 +1013,8 @@ tbody tr:nth-child(even) td{background:#f7f7f7;}
                 </CardContent>
               </Card>
               {Number(selectedBudget.spent_amount) > 0 && (
-<<<<<<< HEAD
                 <Alert severity="warning" sx={{ mt: 2 }}>
                   This budget line has <strong>${Number(selectedBudget.spent_amount).toLocaleString()}</strong> spent against it. Deleting it will permanently remove all associated transaction records.
-=======
-                <Alert severity="error" sx={{ mt: 2 }}>
-                  This budget line has been used (${Number(selectedBudget.spent_amount).toLocaleString()} spent).
-                  It cannot be deleted. Consider deactivating it instead.
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 </Alert>
               )}
             </Box>
@@ -1290,11 +1026,7 @@ tbody tr:nth-child(even) td{background:#f7f7f7;}
             variant="contained"
             color="error"
             onClick={handleDelete}
-<<<<<<< HEAD
             disabled={isSubmitting}
-=======
-            disabled={isSubmitting || Boolean(selectedBudget && Number(selectedBudget.spent_amount) > 0)}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : <DeleteIcon />}
           >
             Delete

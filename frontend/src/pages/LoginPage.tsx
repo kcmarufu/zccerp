@@ -1,9 +1,5 @@
 /**
-<<<<<<< HEAD
  * Login Page Component — Modern Design
-=======
- * Login Page Component
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
  */
 
 import React, { useState } from 'react';
@@ -17,23 +13,15 @@ import {
   CircularProgress,
   Alert,
   InputAdornment,
-<<<<<<< HEAD
   IconButton,
   Divider,
-=======
-  IconButton
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   Visibility,
   VisibilityOff,
-<<<<<<< HEAD
   AccountBalance as LogoIcon,
   Lock as LockIcon,
   Email as EmailIcon,
-=======
-  AccountBalance as LogoIcon
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 
@@ -46,28 +34,16 @@ const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
-<<<<<<< HEAD
-=======
-
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const from = (location.state as any)?.from?.pathname || '/dashboard';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-<<<<<<< HEAD
-=======
-
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     try {
       await login(email, password);
       navigate(from, { replace: true });
     } catch (err: any) {
-<<<<<<< HEAD
       setError(err.response?.data?.error || 'Invalid credentials. Please try again.');
-=======
-      setError(err.response?.data?.error || 'Login failed. Please try again.');
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     }
   };
 
@@ -78,7 +54,6 @@ const LoginPage: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-<<<<<<< HEAD
         background: 'linear-gradient(160deg, #004D40 0%, #006064 45%, #00695C 100%)',
         py: 4,
         px: 2,
@@ -272,107 +247,6 @@ const LoginPage: React.FC = () => {
           ERP Connect v1.0 &nbsp;·&nbsp; {new Date().getFullYear()}
         </Typography>
       </Box>
-=======
-        backgroundColor: 'grey.100',
-        py: 4
-      }}
-    >
-      <Paper
-        elevation={3}
-        sx={{
-          p: 4,
-          width: '100%',
-          maxWidth: 400
-        }}
-      >
-        {/* Logo */}
-        <Box display="flex" flexDirection="column" alignItems="center" mb={4}>
-          <LogoIcon sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-          <Typography variant="h5" fontWeight="bold" color="primary">
-            Float Request Management System
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Procurement Module
-          </Typography>
-        </Box>
-
-        {/* Error Alert */}
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-          </Alert>
-        )}
-
-        {/* Login Form */}
-        <form onSubmit={handleSubmit}>
-          <TextField
-            label="Email Address"
-            type="email"
-            fullWidth
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            margin="normal"
-            required
-            autoComplete="email"
-            autoFocus
-          />
-          <TextField
-            label="Password"
-            type={showPassword ? 'text' : 'password'}
-            fullWidth
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            margin="normal"
-            required
-            autoComplete="current-password"
-            InputProps={{
-              endAdornment: (
-                <InputAdornment position="end">
-                  <IconButton
-                    onClick={() => setShowPassword(!showPassword)}
-                    edge="end"
-                  >
-                    {showPassword ? <VisibilityOff /> : <Visibility />}
-                  </IconButton>
-                </InputAdornment>
-              )
-            }}
-          />
-          <Button
-            type="submit"
-            variant="contained"
-            fullWidth
-            size="large"
-            disabled={isLoading}
-            sx={{ mt: 3, mb: 2 }}
-          >
-            {isLoading ? <CircularProgress size={24} color="inherit" /> : 'Sign In'}
-          </Button>
-        </form>
-
-        {/* Demo Credentials */}
-        <Box sx={{ mt: 3, p: 2, backgroundColor: 'grey.50', borderRadius: 1 }}>
-          <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-            Demo Accounts:
-          </Typography>
-          <Typography variant="caption" display="block">
-            User: john.doe@company.com
-          </Typography>
-          <Typography variant="caption" display="block">
-            Lead: jane.smith@company.com
-          </Typography>
-          <Typography variant="caption" display="block">
-            HOP: bob.wilson@company.com
-          </Typography>
-          <Typography variant="caption" display="block">
-            Finance: alice.finance@company.com
-          </Typography>
-          <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-            Password: password123
-          </Typography>
-        </Box>
-      </Paper>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     </Box>
   );
 };

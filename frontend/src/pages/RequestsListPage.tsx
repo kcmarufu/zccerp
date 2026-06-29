@@ -1,17 +1,9 @@
 /**
-<<<<<<< HEAD
  * Float Requisition List Page
  * Displays all requisitions with filtering, bulk export (PDF/Excel), and checkbox selection
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-=======
- * Requests List Page Component
- * Displays all requests with filtering, sorting, and pagination
- */
-
-import React, { useState, useEffect } from 'react';
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -34,23 +26,18 @@ import {
   MenuItem,
   CircularProgress,
   IconButton,
-<<<<<<< HEAD
   Tooltip,
   Checkbox,
   Stack,
   Divider,
   alpha,
   useTheme
-=======
-  Tooltip
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   Add as AddIcon,
   Search as SearchIcon,
   Visibility as ViewIcon,
   Edit as EditIcon,
-<<<<<<< HEAD
   FilterList as FilterIcon,
   TableChart as ExcelIcon,
   Print as PrintIcon,
@@ -60,16 +47,11 @@ import {
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
-=======
-  FilterList as FilterIcon
-} from '@mui/icons-material';
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
 import { useAuthStore } from '../store/authStore';
 import { requestService } from '../services/requestService';
 import { Request, RequestStatus } from '../types';
 
-<<<<<<< HEAD
 // ── HARDCODED BRANDING ─────────────────────────────────────────────────────
 const POWERED_BY = 'Powered By Kudakwashe C Marufu' as const;
 const DOC_TITLE  = 'Float Requisition' as const;
@@ -79,34 +61,21 @@ const REQUEST_STATUSES: { value: RequestStatus | ''; label: string }[] = [
   { value: '', label: 'All Statuses' },
   { value: 'DRAFT', label: 'Draft' },
   { value: 'PENDING_ADMIN_APPROVAL', label: 'Pending Admin' },
-=======
-const REQUEST_STATUSES: { value: RequestStatus | ''; label: string }[] = [
-  { value: '', label: 'All Statuses' },
-  { value: 'DRAFT', label: 'Draft' },
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   { value: 'PENDING_LEAD_APPROVAL', label: 'Pending Lead' },
   { value: 'PENDING_HOP_APPROVAL', label: 'Pending HOP' },
   { value: 'PENDING_FINANCE_APPROVAL', label: 'Pending Finance' },
   { value: 'APPROVED', label: 'Approved' },
-<<<<<<< HEAD
   { value: 'DISPATCHED', label: 'Dispatched' },
   { value: 'PENDING_RECONCILIATION', label: 'Pending Reconciliation' },
   { value: 'RECONCILED', label: 'Reconciled' },
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   { value: 'REJECTED', label: 'Rejected' },
   { value: 'CANCELLED', label: 'Cancelled' }
 ];
 
 const RequestsListPage: React.FC = () => {
-<<<<<<< HEAD
   const theme = useTheme();
   const navigate = useNavigate();
   const { hasPermission, user } = useAuthStore();
-=======
-  const navigate = useNavigate();
-  const { hasPermission } = useAuthStore();
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   const [requests, setRequests] = useState<Request[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -115,23 +84,16 @@ const RequestsListPage: React.FC = () => {
 
   // Pagination
   const [page, setPage] = useState(0);
-<<<<<<< HEAD
   const [rowsPerPage, setRowsPerPage] = useState(25);
-=======
-  const [rowsPerPage, setRowsPerPage] = useState(10);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<RequestStatus | ''>('');
-<<<<<<< HEAD
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
   // Selection
   const [selected, setSelected] = useState<number[]>([]);
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   useEffect(() => {
     fetchRequests();
@@ -165,7 +127,6 @@ const RequestsListPage: React.FC = () => {
       });
 
       if (response.success && response.data) {
-<<<<<<< HEAD
         let data: Request[] = response.data.requests || [];
         // Client-side date filter, preserve newest-first order
         if (dateFrom) data = data.filter(r => new Date(r.created_at) >= new Date(dateFrom));
@@ -174,10 +135,6 @@ const RequestsListPage: React.FC = () => {
         setRequests(data);
         setTotalCount(response.data.pagination?.total ?? data.length);
         setSelected([]);
-=======
-        setRequests(response.data.requests);
-        setTotalCount(response.data.pagination.total);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       }
     } catch (error) {
       console.error('Failed to fetch requests:', error);
@@ -186,7 +143,6 @@ const RequestsListPage: React.FC = () => {
     }
   };
 
-<<<<<<< HEAD
   const handleSearch = () => { setPage(0); fetchRequests(); };
   const handleKeyPress = (e: React.KeyboardEvent) => { if (e.key === 'Enter') handleSearch(); };
   const clearFilters = () => { setSearchTerm(''); setStatusFilter(''); setDateFrom(''); setDateTo(''); setPage(0); };
@@ -299,52 +255,10 @@ const RequestsListPage: React.FC = () => {
 </body></html>`;
     const w = window.open('', '_blank', 'width=960,height=720');
     if (w) { w.document.write(html); w.document.close(); setTimeout(() => { w.focus(); w.print(); }, 500); }
-=======
-  const handleSearch = () => {
-    setPage(0);
-    fetchRequests();
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleSearch();
-    }
-  };
-
-  const getStatusColor = (status: RequestStatus): 'success' | 'warning' | 'error' | 'info' | 'default' => {
-    switch (status) {
-      case 'APPROVED':
-        return 'success';
-      case 'REJECTED':
-        return 'error';
-      case 'DRAFT':
-        return 'default';
-      case 'PENDING_LEAD_APPROVAL':
-      case 'PENDING_HOP_APPROVAL':
-      case 'PENDING_FINANCE_APPROVAL':
-        return 'warning';
-      default:
-        return 'info';
-    }
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const formatCurrency = (amount: number | string) => {
-    const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
-    return `$${numAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   };
 
   return (
     <Box>
-<<<<<<< HEAD
       {/* ── Header ── */}
       <Paper elevation={0} sx={{ p: 3, mb: 3, background: `linear-gradient(135deg, #006064 0%, #00363a 100%)`, color: 'white', borderRadius: 2 }}>
         <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={2}>
@@ -427,83 +341,10 @@ const RequestsListPage: React.FC = () => {
                 <TableCell sx={{ color: 'white', fontWeight: 700 }}>Status</TableCell>
                 <TableCell sx={{ color: 'white', fontWeight: 700 }}>Date</TableCell>
                 <TableCell sx={{ color: 'white', fontWeight: 700 }} align="center">Actions</TableCell>
-=======
-      {/* Header */}
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h5">Purchase Requests</Typography>
-        {hasPermission('create_request') && (
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => navigate('/requests/create')}
-          >
-            New Request
-          </Button>
-        )}
-      </Box>
-
-      {/* Filters */}
-      <Paper elevation={2} sx={{ p: 2, mb: 3 }}>
-        <Box display="flex" gap={2} flexWrap="wrap" alignItems="center">
-          <TextField
-            size="small"
-            placeholder="Search by number, description..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            onKeyPress={handleKeyPress}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon />
-                </InputAdornment>
-              )
-            }}
-            sx={{ minWidth: 300 }}
-          />
-
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel>Status</InputLabel>
-            <Select
-              value={statusFilter}
-              label="Status"
-              onChange={(e) => {
-                setStatusFilter(e.target.value as RequestStatus | '');
-                setPage(0);
-              }}
-            >
-              {REQUEST_STATUSES.map((status) => (
-                <MenuItem key={status.value || 'all'} value={status.value}>
-                  {status.label}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <Button variant="outlined" onClick={handleSearch} startIcon={<FilterIcon />}>
-            Apply Filters
-          </Button>
-        </Box>
-      </Paper>
-
-      {/* Table */}
-      <Paper elevation={2}>
-        <TableContainer>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>Request Number</TableCell>
-                <TableCell>Department</TableCell>
-                <TableCell>Description</TableCell>
-                <TableCell align="right">Total Amount</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Created</TableCell>
-                <TableCell align="center">Actions</TableCell>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               </TableRow>
             </TableHead>
             <TableBody>
               {isLoading ? (
-<<<<<<< HEAD
                 <TableRow><TableCell colSpan={9} align="center" sx={{ py: 5 }}><CircularProgress /></TableCell></TableRow>
               ) : requests.length === 0 ? (
                 <TableRow><TableCell colSpan={9} align="center" sx={{ py: 5 }}><RequisitionIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} /><Typography color="text.secondary">No requisitions found</Typography></TableCell></TableRow>
@@ -539,76 +380,6 @@ const RequestsListPage: React.FC = () => {
                           <Tooltip title="Edit"><IconButton size="small" onClick={e => { e.stopPropagation(); navigate(`/finance/requests/${request.id}/edit`); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
                         )}
                       </Stack>
-=======
-                <TableRow>
-                  <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
-                    <CircularProgress />
-                  </TableCell>
-                </TableRow>
-              ) : requests.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
-                    <Typography color="text.secondary">
-                      No requests found
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                requests.map((request) => (
-                  <TableRow
-                    key={request.id}
-                    hover
-                    sx={{ cursor: 'pointer' }}
-                    onClick={() => navigate(`/requests/${request.id}`)}
-                  >
-                    <TableCell>
-                      <Typography fontWeight="medium">
-                        {request.request_number}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>{request.department_name}</TableCell>
-                    <TableCell>
-                      <Typography noWrap sx={{ maxWidth: 200 }}>
-                        {request.justification || request.description || '-'}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="right">
-                      {formatCurrency(request.total_amount)}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={request.status.replace(/_/g, ' ')}
-                        size="small"
-                        color={getStatusColor(request.status)}
-                      />
-                    </TableCell>
-                    <TableCell>{formatDate(request.created_at)}</TableCell>
-                    <TableCell align="center">
-                      <Tooltip title="View Details">
-                        <IconButton
-                          size="small"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/requests/${request.id}`);
-                          }}
-                        >
-                          <ViewIcon />
-                        </IconButton>
-                      </Tooltip>
-                      {request.status === 'DRAFT' && hasPermission('create_request') && (
-                        <Tooltip title="Edit">
-                          <IconButton
-                            size="small"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate(`/requests/${request.id}/edit`);
-                            }}
-                          >
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                      )}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     </TableCell>
                   </TableRow>
                 ))
@@ -616,7 +387,6 @@ const RequestsListPage: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
-<<<<<<< HEAD
         <Divider />
         <Box display="flex" alignItems="center" justifyContent="space-between" px={2} py={0.5}>
           <Typography variant="caption" color="text.secondary">
@@ -633,20 +403,6 @@ const RequestsListPage: React.FC = () => {
             sx={{ border: 0 }}
           />
         </Box>
-=======
-        <TablePagination
-          component="div"
-          count={totalCount}
-          page={page}
-          onPageChange={(_, newPage) => setPage(newPage)}
-          rowsPerPage={rowsPerPage}
-          onRowsPerPageChange={(e) => {
-            setRowsPerPage(parseInt(e.target.value, 10));
-            setPage(0);
-          }}
-          rowsPerPageOptions={[5, 10, 25, 50]}
-        />
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       </Paper>
     </Box>
   );

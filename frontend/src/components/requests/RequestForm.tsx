@@ -4,11 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-<<<<<<< HEAD
 import { useNavigate, useParams } from 'react-router-dom';
-=======
-import { useNavigate } from 'react-router-dom';
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import {
   Box,
@@ -37,12 +33,8 @@ import {
   ListItem,
   ListItemIcon,
   ListItemText,
-<<<<<<< HEAD
   ListItemSecondaryAction,
   Autocomplete
-=======
-  ListItemSecondaryAction
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -51,19 +43,14 @@ import {
   Send as SendIcon,
   CloudUpload as UploadIcon,
   AttachFile as FileIcon,
-<<<<<<< HEAD
   Close as CloseIcon,
   FlightTakeoff as TripIcon,
   Warning as WarningIcon,
   Event as ActivityIcon
-=======
-  Close as CloseIcon
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { v4 as uuidv4 } from 'uuid';
 
-<<<<<<< HEAD
 import {
   BudgetLine, RequestFormData, RequestFormItem, Currency, RequestCategory, Project,
   PerDiemClaimFormData, PerDiemRates
@@ -76,33 +63,17 @@ import attachmentService from '../../services/attachmentService';
 import perDiemService from '../../services/perDiemService';
 import { reconciliationService } from '../../services/reconciliationService';
 import TravelClaimSection from './TravelClaimSection';
-=======
-import { BudgetLine, Priority, RequestFormData, RequestFormItem, Currency } from '../../types';
-import { requestService } from '../../services/requestService';
-import { budgetService } from '../../services/budgetService';
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 import { useAuthStore } from '../../store/authStore';
 
 const generateId = () => {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 };
 
-<<<<<<< HEAD
-=======
-const PRIORITY_OPTIONS: { value: Priority; label: string; color: 'default' | 'info' | 'warning' | 'error' }[] = [
-  { value: 'LOW', label: 'Low', color: 'default' },
-  { value: 'MEDIUM', label: 'Medium', color: 'info' },
-  { value: 'HIGH', label: 'High', color: 'warning' },
-  { value: 'URGENT', label: 'Urgent', color: 'error' }
-];
-
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 const CURRENCY_OPTIONS: { value: Currency; label: string; symbol: string }[] = [
   { value: 'ZIG', label: 'ZIG (Zimbabwe Gold)', symbol: 'ZiG' },
   { value: 'USD', label: 'USD (US Dollar)', symbol: '$' }
 ];
 
-<<<<<<< HEAD
 const CATEGORY_OPTIONS: { value: RequestCategory; label: string; description: string; defaultUnit: string }[] = [
   // Core float categories
   { value: 'PROCUREMENT',         label: 'Procurement / Items',            description: 'Purchase of goods, supplies or equipment',                     defaultUnit: 'EACH'     },
@@ -147,18 +118,10 @@ const defaultItem: RequestFormItem = {
   totalCost: 0,
   budgetLineId: '',
   notes: ''
-=======
-const defaultItem: RequestFormItem = {
-  id: '',
-  itemDescription: '',
-  totalCost: 0,
-  budgetLineId: ''
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 };
 
 const RequestForm: React.FC = () => {
   const navigate = useNavigate();
-<<<<<<< HEAD
   const { requestId } = useParams<{ requestId: string }>();
   const { user } = useAuthStore();
   const isEditMode = Boolean(requestId);
@@ -169,15 +132,10 @@ const RequestForm: React.FC = () => {
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
   const [loadingBudgetLines, setLoadingBudgetLines] = useState(false);
-=======
-  const { user } = useAuthStore();
-  const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
-<<<<<<< HEAD
   const [existingStatus, setExistingStatus] = useState<string | null>(null);
   const [crossDeptWarning, setCrossDeptWarning] = useState<string | null>(null);
   const [overdueBlocked, setOverdueBlocked] = useState(false);
@@ -198,44 +156,28 @@ const RequestForm: React.FC = () => {
     trip_items: [],
     cost_distribution: [],
   });
-=======
-  const fileInputRef = useRef<HTMLInputElement>(null);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
 
   const {
     control,
     handleSubmit,
     watch,
-<<<<<<< HEAD
     reset,
     setValue,
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     formState: { errors }
   } = useForm<RequestFormData>({
     defaultValues: {
       justification: '',
-<<<<<<< HEAD
       currency: 'USD',
       isAdminRequest: false,
       isActivityRequest: false,
       activityStartDate: '',
       activityEndDate: '',
-=======
-      priority: 'MEDIUM',
-      currency: 'USD',
-      isAdminRequest: false,
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       items: [{ ...defaultItem, id: uuidv4() || generateId() }],
       supportingDocuments: []
     }
   });
 
-<<<<<<< HEAD
   const { fields, append, remove, replace } = useFieldArray({
-=======
-  const { fields, append, remove } = useFieldArray({
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     control,
     name: 'items'
   });
@@ -243,7 +185,6 @@ const RequestForm: React.FC = () => {
   const watchedItems = watch('items');
   const watchedCurrency = watch('currency');
   const watchedIsAdminRequest = watch('isAdminRequest');
-<<<<<<< HEAD
   const watchedIsActivityRequest = watch('isActivityRequest');
 
   // Fetch active donors + per diem rates on mount
@@ -431,51 +372,24 @@ const RequestForm: React.FC = () => {
       } catch (error) {
         toast.error('Failed to load request for editing');
         navigate('/finance/requests');
-=======
-
-  useEffect(() => {
-    const fetchBudgetLines = async () => {
-      if (!user?.department_id) return;
-      try {
-        setIsLoading(true);
-        const response = await budgetService.getAll({ departmentId: user.department_id, isActive: true });
-        if (response.success && response.data) {
-          setBudgetLines(response.data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch budget lines:', error);
-        toast.error('Failed to load budget lines');
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
       } finally {
         setIsLoading(false);
       }
     };
-<<<<<<< HEAD
 
     loadRequest();
   }, [isEditMode, requestId, reset, replace, navigate, user?.id]);
 
   const calculateGrandTotal = useCallback(() => {
     return watchedItems.reduce((sum, item) => sum + ((item?.quantity || 1) * (item?.unitPrice || 0)), 0);
-=======
-    fetchBudgetLines();
-  }, [user?.department_id]);
-
-  const calculateGrandTotal = useCallback(() => {
-    return watchedItems.reduce((sum, item) => sum + (item?.totalCost || 0), 0);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   }, [watchedItems]);
 
   const exceedsBudget = (item: RequestFormItem) => {
     if (!item.budgetLineId) return false;
     const budgetLine = budgetLines.find(bl => bl.id === item.budgetLineId);
     if (!budgetLine) return false;
-<<<<<<< HEAD
     const itemTotal = (item.quantity || 1) * (item.unitPrice || 0);
     return itemTotal > budgetLine.balance;
-=======
-    return (item.totalCost || 0) > budgetLine.balance;
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   };
 
   const getBudgetBalance = (budgetLineId: number | '') => {
@@ -489,16 +403,12 @@ const RequestForm: React.FC = () => {
   };
 
   const handleAddItem = () => {
-<<<<<<< HEAD
     append({ 
       ...defaultItem, 
       id: uuidv4() || generateId(),
       category: 'PROCUREMENT',
       unitOfMeasure: 'EACH'
     });
-=======
-    append({ ...defaultItem, id: uuidv4() || generateId() });
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
   };
 
   const handleRemoveItem = (index: number) => {
@@ -521,13 +431,8 @@ const RequestForm: React.FC = () => {
           toast.warning(`${file.name} is not a supported file type`);
           return false;
         }
-<<<<<<< HEAD
         if (file.size > 8 * 1024 * 1024) {
           toast.warning(`${file.name} is too large (max 8MB)`);
-=======
-        if (file.size > 10 * 1024 * 1024) {
-          toast.warning(`${file.name} is too large (max 10MB)`);
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           return false;
         }
         return true;
@@ -549,7 +454,6 @@ const RequestForm: React.FC = () => {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
-<<<<<<< HEAD
   // ── Shared per-diem save helper ───────────────────────────────────────────
   const savePerDiemIfNeeded = async (resolvedRequestId: number) => {
     if (hasPerDiemClaim) {
@@ -615,36 +519,12 @@ const RequestForm: React.FC = () => {
       }
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to save request');
-=======
-  const handleSaveDraft = async (data: RequestFormData) => {
-    try {
-      setIsSaving(true);
-      const payload = {
-        justification: data.justification,
-        priority: data.priority,
-        items: data.items.map(item => ({
-          itemDescription: item.itemDescription,
-          quantity: 1,
-          unitOfMeasure: 'EACH',
-          unitPrice: item.totalCost,
-          budgetLineId: item.budgetLineId as number
-        }))
-      };
-      const response = await requestService.create(payload);
-      if (response.success) {
-        toast.success(`Draft saved: ${response.data?.requestNumber}`);
-        navigate('/requests');
-      }
-    } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Failed to save draft');
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleSaveAndSubmit = async (data: RequestFormData) => {
-<<<<<<< HEAD
     if (!selectedDonorId) { toast.error('Please select a partner'); return; }
     if (!selectedProject) { toast.error('Please select a project'); return; }
     if (data.isActivityRequest) {
@@ -691,35 +571,6 @@ const RequestForm: React.FC = () => {
             toast.success(`Request ${createResponse.data.requestCode} submitted (${approvalRoute})`);
             navigate('/finance/requests');
           }
-=======
-    const hasOverage = data.items.some(item => exceedsBudget(item));
-    if (hasOverage) {
-      toast.error('Cannot submit: One or more items exceed budget balance');
-      return;
-    }
-    try {
-      setIsSubmitting(true);
-      const payload = {
-        justification: data.justification,
-        priority: data.priority,
-        items: data.items.map(item => ({
-          itemDescription: item.itemDescription,
-          quantity: 1,
-          unitOfMeasure: 'EACH',
-          unitPrice: item.totalCost,
-          budgetLineId: item.budgetLineId as number
-        }))
-      };
-      const createResponse = await requestService.create(payload);
-      if (createResponse.success && createResponse.data) {
-        const submitResponse = await requestService.submit(createResponse.data.requestId);
-        if (submitResponse.success) {
-          const approvalRoute = data.isAdminRequest 
-            ? 'Admin -> Finance' 
-            : 'Program Lead -> Head of Programs -> Finance';
-          toast.success(`Request ${createResponse.data.requestNumber} submitted (${approvalRoute})`);
-          navigate('/requests');
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         }
       }
     } catch (error: any) {
@@ -739,7 +590,6 @@ const RequestForm: React.FC = () => {
 
   return (
     <Box>
-<<<<<<< HEAD
       {overdueBlocked && (
         <Alert severity="error" sx={{ mb: 2 }} icon={<WarningIcon />}>
           <Typography variant="subtitle2" fontWeight={700}>
@@ -760,21 +610,12 @@ const RequestForm: React.FC = () => {
           {isEditMode
             ? 'Update the existing request details and optionally resubmit for approval.'
             : 'Submit a new float request with supporting documents. Select currency and routing options.'}
-=======
-      <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h5" gutterBottom>
-          Create Float Request
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Submit a new float request with supporting documents. Select currency and routing options.
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         </Typography>
       </Paper>
 
       <form>
         <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
           <Typography variant="h6" gutterBottom>Request Details</Typography>
-<<<<<<< HEAD
           <Grid container spacing={3}>            {/* Partner Selection — locked when Admin request is active */}
             <Grid item xs={12} md={6}>
               <Autocomplete
@@ -841,9 +682,6 @@ const RequestForm: React.FC = () => {
               </Grid>
             )}
 
-=======
-          <Grid container spacing={3}>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             <Grid item xs={12} md={4}>
               <Controller
                 name="currency"
@@ -865,26 +703,7 @@ const RequestForm: React.FC = () => {
                 )}
               />
             </Grid>
-<<<<<<< HEAD
             <Grid item xs={12} md={6}>
-=======
-            <Grid item xs={12} md={4}>
-              <Controller
-                name="priority"
-                control={control}
-                render={({ field }) => (
-                  <TextField {...field} select label="Priority" fullWidth>
-                    {PRIORITY_OPTIONS.map(option => (
-                      <MenuItem key={option.value} value={option.value}>
-                        <Chip label={option.label} color={option.color} size="small" sx={{ mr: 1 }} />
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                )}
-              />
-            </Grid>
-            <Grid item xs={12} md={4}>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               <Controller
                 name="isAdminRequest"
                 control={control}
@@ -909,7 +728,6 @@ const RequestForm: React.FC = () => {
                 )}
               />
             </Grid>
-<<<<<<< HEAD
 
             {/* Activity Request toggle */}
             <Grid item xs={12} md={6}>
@@ -988,38 +806,23 @@ const RequestForm: React.FC = () => {
                 </Grid>
               </>
             )}
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             <Grid item xs={12}>
               <Controller
                 name="justification"
                 control={control}
                 rules={{ 
-<<<<<<< HEAD
                   required: 'Purpose of Float is required',
                   minLength: { value: 20, message: 'Purpose of Float must be at least 20 characters' }
-=======
-                  required: 'Justification is required',
-                  minLength: { value: 20, message: 'Justification must be at least 20 characters' }
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 }}
                 render={({ field }) => (
                   <TextField
                     {...field}
-<<<<<<< HEAD
                     label="Purpose of Float"
-=======
-                    label="Justification / Purpose"
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     multiline
                     rows={3}
                     fullWidth
                     error={!!errors.justification}
-<<<<<<< HEAD
                     helperText={errors.justification?.message || 'Describe the activity and purpose for this float'}
-=======
-                    helperText={errors.justification?.message || 'Explain the purpose and necessity'}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   />
                 )}
               />
@@ -1027,7 +830,6 @@ const RequestForm: React.FC = () => {
           </Grid>
           {watchedIsAdminRequest && (
             <Alert severity="info" sx={{ mt: 2 }}>
-<<<<<<< HEAD
               <strong>Admin Request:</strong> Partner and project are pre-set to <strong>Administration (Internal)</strong>.
               Simply pick the budget line (Maintenance, Softwares, or Rentals) for each item.
               Approval route: <strong>Admin → HR Lead / HOP → Finance</strong>.
@@ -1048,16 +850,12 @@ const RequestForm: React.FC = () => {
           {!selectedDonorId && (
             <Alert severity="info" sx={{ mt: 2 }}>
               Select a <strong>Partner</strong> and <strong>Project</strong> to proceed with the request.
-=======
-              <strong>Admin Request:</strong> This request will route to Admin Approver first, then Finance.
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             </Alert>
           )}
         </Paper>
 
         <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-<<<<<<< HEAD
             <Box>
               <Typography variant="h6">
                 Request Items ({watchedCurrency})
@@ -1098,48 +896,26 @@ const RequestForm: React.FC = () => {
                   <TableCell sx={{ fontWeight: 'bold', minWidth: 130, px: 1.5 }}>Total ({getCurrencySymbol()})</TableCell>
                   <TableCell sx={{ fontWeight: 'bold', minWidth: 180, px: 1.5 }}>Budget Line *</TableCell>
                   <TableCell sx={{ fontWeight: 'bold', width: 50, px: 1 }}></TableCell>
-=======
-            <Typography variant="h6">Request Items ({watchedCurrency})</Typography>
-            <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddItem}>Add Item</Button>
-          </Box>
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow sx={{ backgroundColor: 'grey.100' }}>
-                  <TableCell sx={{ fontWeight: 'bold', width: '5%' }}>#</TableCell>
-                  <TableCell sx={{ fontWeight: 'bold', width: '45%' }}>Description *</TableCell>
-                  <TableCell sx={{ fontWeight: 'bold', width: '20%' }}>Total Cost ({getCurrencySymbol()}) *</TableCell>
-                  <TableCell sx={{ fontWeight: 'bold', width: '25%' }}>Budget Line *</TableCell>
-                  <TableCell sx={{ fontWeight: 'bold', width: '5%' }}></TableCell>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                 </TableRow>
               </TableHead>
               <TableBody>
                 {fields.map((field, index) => {
                   const item = watchedItems[index];
                   const balance = getBudgetBalance(item?.budgetLineId || '');
-<<<<<<< HEAD
                   const itemTotal = (item?.quantity || 1) * (item?.unitPrice || 0);
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                   const isOverBudget = item ? exceedsBudget(item) : false;
                   return (
                     <TableRow 
                       key={field.id}
                       sx={{ 
                         backgroundColor: isOverBudget ? 'error.light' : 'inherit',
-<<<<<<< HEAD
                         '&:hover': { backgroundColor: isOverBudget ? 'error.light' : 'grey.50' },
                         '& td': { px: 1.5, py: 1.5 }
-=======
-                        '&:hover': { backgroundColor: isOverBudget ? 'error.light' : 'grey.50' }
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                       }}
                     >
                       <TableCell>{index + 1}</TableCell>
                       <TableCell>
                         <Controller
-<<<<<<< HEAD
                           name={`items.${index}.category`}
                           control={control}
                           rules={{ required: 'Required' }}
@@ -1166,29 +942,22 @@ const RequestForm: React.FC = () => {
                       </TableCell>
                       <TableCell>
                         <Controller
-=======
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                           name={`items.${index}.itemDescription`}
                           control={control}
                           rules={{ required: 'Required' }}
                           render={({ field }) => (
-<<<<<<< HEAD
                             <TextField {...field} size="small" fullWidth 
                               placeholder={item?.category === 'TRANSPORT' ? 'e.g. Fuel for field visit to Gweru' : 
                                           item?.category === 'ACCOMMODATION' ? 'e.g. Hotel accommodation - Bulawayo' : 
                                           item?.category === 'REIMBURSEMENT' ? 'e.g. Reimbursement for workshop refreshments' :
                                           item?.category === 'PER_DIEM' ? 'e.g. Per diem for 3-day field trip' :
                                           'Item description'}
-=======
-                            <TextField {...field} size="small" fullWidth placeholder="Item description"
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                               error={!!errors.items?.[index]?.itemDescription} />
                           )}
                         />
                       </TableCell>
                       <TableCell>
                         <Controller
-<<<<<<< HEAD
                           name={`items.${index}.quantity`}
                           control={control}
                           rules={{ required: 'Required', min: { value: 0.01, message: 'Min 0.01' } }}
@@ -1227,9 +996,6 @@ const RequestForm: React.FC = () => {
                       <TableCell>
                         <Controller
                           name={`items.${index}.unitPrice`}
-=======
-                          name={`items.${index}.totalCost`}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                           control={control}
                           rules={{ required: 'Required', min: { value: 0.01, message: 'Min 0.01' } }}
                           render={({ field }) => (
@@ -1239,11 +1005,7 @@ const RequestForm: React.FC = () => {
                               size="small"
                               fullWidth
                               inputProps={{ min: 0, step: 0.01 }}
-<<<<<<< HEAD
                               error={!!errors.items?.[index]?.unitPrice || isOverBudget}
-=======
-                              error={!!errors.items?.[index]?.totalCost || isOverBudget}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                               onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
                               InputProps={{
                                 startAdornment: <Typography variant="body2" sx={{ mr: 0.5 }}>{getCurrencySymbol()}</Typography>
@@ -1251,7 +1013,6 @@ const RequestForm: React.FC = () => {
                             />
                           )}
                         />
-<<<<<<< HEAD
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2" fontWeight={600} sx={{ py: 1 }}>
@@ -1260,11 +1021,6 @@ const RequestForm: React.FC = () => {
                         {isOverBudget && (
                           <Typography variant="caption" color="error">
                             Exceeds budget (Bal: {getCurrencySymbol()}{balance?.toLocaleString()})
-=======
-                        {isOverBudget && (
-                          <Typography variant="caption" color="error">
-                            Exceeds budget (Balance: {getCurrencySymbol()}{balance?.toLocaleString()})
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                           </Typography>
                         )}
                       </TableCell>
@@ -1273,7 +1029,6 @@ const RequestForm: React.FC = () => {
                           name={`items.${index}.budgetLineId`}
                           control={control}
                           rules={{ required: 'Required' }}
-<<<<<<< HEAD
                           render={({ field }) => {
                             const selectedBL = budgetLines.find(bl => bl.id === field.value) || null;
                             return (
@@ -1319,23 +1074,6 @@ const RequestForm: React.FC = () => {
                               />
                             );
                           }}
-=======
-                          render={({ field }) => (
-                            <TextField {...field} select size="small" fullWidth error={!!errors.items?.[index]?.budgetLineId}>
-                              <MenuItem value=""><em>Select budget line</em></MenuItem>
-                              {budgetLines.map(bl => (
-                                <MenuItem key={bl.id} value={bl.id} disabled={bl.balance <= 0}>
-                                  <Box>
-                                    <Typography variant="body2">{bl.budget_code}</Typography>
-                                    <Typography variant="caption" color="text.secondary">
-                                      Balance: {getCurrencySymbol()}{bl.balance.toLocaleString()}
-                                    </Typography>
-                                  </Box>
-                                </MenuItem>
-                              ))}
-                            </TextField>
-                          )}
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                         />
                       </TableCell>
                       <TableCell>
@@ -1347,11 +1085,7 @@ const RequestForm: React.FC = () => {
                   );
                 })}
                 <TableRow sx={{ backgroundColor: 'primary.light' }}>
-<<<<<<< HEAD
                   <TableCell colSpan={6} align="right">
-=======
-                  <TableCell colSpan={2} align="right">
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
                     <Typography variant="subtitle1" fontWeight="bold">Grand Total:</Typography>
                   </TableCell>
                   <TableCell colSpan={3}>
@@ -1371,15 +1105,9 @@ const RequestForm: React.FC = () => {
         </Paper>
 
         <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
-<<<<<<< HEAD
           <Typography variant="h6" gutterBottom>Quotations & Supporting Documents</Typography>
           <Typography variant="body2" color="text.secondary" mb={2}>
             Upload quotations and supporting documents (PDF, Word, Excel, Images). Max 8MB per file.
-=======
-          <Typography variant="h6" gutterBottom>Supporting Documents</Typography>
-          <Typography variant="body2" color="text.secondary" mb={2}>
-            Upload supporting documents (PDF, Word, Excel, Images). Max 10MB per file.
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
           </Typography>
           <input
             type="file"
@@ -1409,16 +1137,11 @@ const RequestForm: React.FC = () => {
           )}
           {uploadedFiles.length === 0 && (
             <Alert severity="info" icon={<FileIcon />}>
-<<<<<<< HEAD
               No documents uploaded yet. Quotations are strongly recommended for procurement requests.
-=======
-              No documents uploaded yet. Supporting documents are optional but recommended.
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
             </Alert>
           )}
         </Paper>
 
-<<<<<<< HEAD
         {/* ── Travel & Per Diem Claim Toggle ───────────────────────────────── */}
         <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
           <Box display="flex" alignItems="center" gap={2}>
@@ -1466,12 +1189,6 @@ const RequestForm: React.FC = () => {
         <Paper elevation={2} sx={{ p: 3 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center">
             <Button variant="outlined" onClick={() => navigate('/finance/requests')}>Cancel</Button>
-=======
-        <Paper elevation={2} sx={{ p: 3 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center">
-            <Button variant="outlined" onClick={() => navigate('/requests')}>Cancel</Button>
-            <Box>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               <Button
                 variant="outlined"
                 startIcon={isSaving ? <CircularProgress size={20} /> : <SaveIcon />}
@@ -1479,31 +1196,18 @@ const RequestForm: React.FC = () => {
                 disabled={isSaving || isSubmitting}
                 sx={{ mr: 2 }}
               >
-<<<<<<< HEAD
                 {isEditMode ? 'Save Changes' : 'Save as Draft'}
-=======
-                Save as Draft
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
               </Button>
               <Button
                 variant="contained"
                 color="primary"
                 startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
                 onClick={handleSubmit(handleSaveAndSubmit)}
-<<<<<<< HEAD
                 disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item)) || (overdueBlocked && !isEditMode)}
               >
                 {isEditMode ? (existingStatus === 'REJECTED' ? 'Save & Resubmit' : 'Save & Submit') : 'Save & Submit for Approval'}
               </Button>
             </Box>
-=======
-                disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item))}
-              >
-                Save & Submit for Approval
-              </Button>
-            </Box>
-          </Box>
->>>>>>> d4c8bc76b49626037845f6abf644ee02f76d0b87
         </Paper>
       </form>
     </Box>
