@@ -54,7 +54,6 @@ const PERMISSIONS = {
 
 const ROLE_PERMISSIONS = {
   [ROLES.ADMIN]: [
-    // Full system access - all permissions
     PERMISSIONS.CREATE_REQUEST,
     PERMISSIONS.VIEW_OWN_REQUESTS,
     PERMISSIONS.VIEW_DEPARTMENT_REQUESTS,
@@ -101,6 +100,7 @@ const ROLE_PERMISSIONS = {
     PERMISSIONS.REJECT_REQUEST,
     PERMISSIONS.VIEW_BUDGET_LINES,
     PERMISSIONS.VIEW_REPORTS,
+    PERMISSIONS.EXPORT_DATA,
     PERMISSIONS.CREATE_PURCHASE_REQUEST,
     PERMISSIONS.VIEW_PURCHASE_REQUESTS,
     PERMISSIONS.APPROVE_PURCHASE_REQUEST
@@ -113,19 +113,18 @@ const ROLE_PERMISSIONS = {
     PERMISSIONS.REJECT_REQUEST,
     PERMISSIONS.VIEW_BUDGET_LINES,
     PERMISSIONS.VIEW_REPORTS,
+    PERMISSIONS.EXPORT_DATA,
     PERMISSIONS.CREATE_PURCHASE_REQUEST,
     PERMISSIONS.VIEW_PURCHASE_REQUESTS,
     PERMISSIONS.APPROVE_PURCHASE_REQUEST
   ],
   
   [ROLES.FINANCE_CLERK]: [
-    // Finance clerks can also act as requesters (Float & Procurement)
     PERMISSIONS.CREATE_REQUEST,
     PERMISSIONS.VIEW_OWN_REQUESTS,
     PERMISSIONS.EDIT_REQUEST,
     PERMISSIONS.DELETE_REQUEST,
     PERMISSIONS.SUBMIT_REQUEST,
-    // Approver capabilities
     PERMISSIONS.VIEW_ALL_REQUESTS,
     PERMISSIONS.APPROVE_AS_FINANCE,
     PERMISSIONS.REJECT_REQUEST,
@@ -158,8 +157,6 @@ const ROLE_PERMISSIONS = {
   ]
 };
 
-// Request status workflow
-// Updated: Admin requests follow Admin -> Lead/HOP -> Finance flow
 const REQUEST_STATUS = {
   DRAFT: 'DRAFT',
   PENDING_ADMIN_APPROVAL: 'PENDING_ADMIN_APPROVAL',
@@ -176,9 +173,6 @@ const REQUEST_STATUS = {
   CANCELLED: 'CANCELLED'
 };
 
-// Valid status transitions
-// Admin requests: DRAFT -> PENDING_ADMIN_APPROVAL -> PENDING_FINANCE_APPROVAL
-// (Admin OR HR Lead/HOP approves the single PENDING_ADMIN_APPROVAL stage)
 const STATUS_TRANSITIONS = {
   [REQUEST_STATUS.DRAFT]: [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.CANCELLED],
   [REQUEST_STATUS.PENDING_ADMIN_APPROVAL]: [REQUEST_STATUS.PENDING_FINANCE_APPROVAL, REQUEST_STATUS.REJECTED],
@@ -195,20 +189,9 @@ const STATUS_TRANSITIONS = {
   [REQUEST_STATUS.CANCELLED]: []
 };
 
-// Finance department code — used for finance-manager access checks
 const FINANCE_DEPT_CODE = 'FOS';
-
-// Admin/HR department code — used for partner (donor/project) management access checks
 const ADMIN_HR_DEPT_CODE = 'AHR';
 
-/**
- * Determine whether a user is a "Finance Manager":
- *   - ADMIN always qualifies
- *   - HEAD_OF_PROGRAMS or PROGRAM_LEAD who belong to the Finance (FOS) department
- * Finance Managers are the only users who may create/edit/delete
- * budget lines, donors, and projects, and see all departments' data.
- * HOPs/Leads from HSD, CPJS, AHR etc. are scoped to their own department.
- */
 const isFinanceManager = (user) => {
   if (!user) return false;
   if (user.role === ROLES.ADMIN) return true;
@@ -216,13 +199,6 @@ const isFinanceManager = (user) => {
     user.department_code === FINANCE_DEPT_CODE;
 };
 
-/**
- * Determine whether a user is an "Admin/HR Manager":
- *   - ADMIN always qualifies
- *   - HEAD_OF_PROGRAMS or PROGRAM_LEAD who belong to the Admin/HR (AHR) department
- * Admin/HR Managers may create/edit donors (partners) and projects,
- * in addition to Finance Managers.
- */
 const isAdminHrManager = (user) => {
   if (!user) return false;
   if (user.role === ROLES.ADMIN) return true;
@@ -230,25 +206,22 @@ const isAdminHrManager = (user) => {
     user.department_code === ADMIN_HR_DEPT_CODE;
 };
 
-// Check if user has permission
 const hasPermission = (role, permission) => {
   const permissions = ROLE_PERMISSIONS[role];
   return permissions && permissions.includes(permission);
 };
 
-// Check if status transition is valid
 const isValidTransition = (currentStatus, newStatus) => {
   const validTransitions = STATUS_TRANSITIONS[currentStatus];
   return validTransitions && validTransitions.includes(newStatus);
 };
 
-// Get required role(s) for approval based on current status
 const getRequiredApprovalRole = (currentStatus) => {
   switch (currentStatus) {
     case REQUEST_STATUS.PENDING_ADMIN_APPROVAL:
       return [ROLES.ADMIN, ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
     case REQUEST_STATUS.PENDING_LEAD_APPROVAL:
-      return [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS]; // Either can approve
+      return [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
     case REQUEST_STATUS.PENDING_HOP_APPROVAL:
       return [ROLES.HEAD_OF_PROGRAMS];
     case REQUEST_STATUS.PENDING_FINANCE_APPROVAL:
@@ -258,7 +231,6 @@ const getRequiredApprovalRole = (currentStatus) => {
   }
 };
 
-// Get next status after approval
 const getNextApprovalStatus = (currentStatus) => {
   switch (currentStatus) {
     case REQUEST_STATUS.DRAFT:
@@ -266,7 +238,7 @@ const getNextApprovalStatus = (currentStatus) => {
     case REQUEST_STATUS.PENDING_ADMIN_APPROVAL:
       return REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
     case REQUEST_STATUS.PENDING_LEAD_APPROVAL:
-      return REQUEST_STATUS.PENDING_FINANCE_APPROVAL; // Skip HOP - goes directly to Finance
+      return REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
     case REQUEST_STATUS.PENDING_HOP_APPROVAL:
       return REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
     case REQUEST_STATUS.PENDING_FINANCE_APPROVAL:
