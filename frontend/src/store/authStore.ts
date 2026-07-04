@@ -17,6 +17,8 @@ interface AuthStore extends AuthState {
   hasPermission: (permission: string) => boolean;
   /** True for ADMIN, or for HEAD_OF_PROGRAMS/PROGRAM_LEAD in the Finance (AF) dept */
   isFinanceManager: () => boolean;
+  /** True for ADMIN, or for HEAD_OF_PROGRAMS/PROGRAM_LEAD in the Admin/HR (AHR) dept */
+  isAdminHrManager: () => boolean;
 }
 
 // Role-based permissions mapping
@@ -208,6 +210,15 @@ export const useAuthStore = create<AuthStore>()(
         // Only Finance dept (FOS) HOPs/Leads see all data across departments
         return ['HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'].includes(user.role) &&
           user.department_code === 'FOS';
+      },
+
+      isAdminHrManager: () => {
+        const { user } = get();
+        if (!user) return false;
+        if (user.role === 'ADMIN') return true;
+        // Admin/HR dept (AHR) HOPs/Leads can manage partners (donors) and projects
+        return ['HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'].includes(user.role) &&
+          user.department_code === 'AHR';
       }
     }),
     {

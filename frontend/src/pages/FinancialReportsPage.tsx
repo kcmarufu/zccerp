@@ -36,6 +36,7 @@ import {
 } from 'recharts';
 import { budgetService } from '../services/budgetService';
 import { toast } from 'react-toastify';
+import { useAuthStore } from '../store/authStore';
 
 const COLORS = ['#1976d2', '#388e3c', '#f57c00', '#d32f2f', '#7b1fa2', '#0097a7', '#5d4037', '#455a64', '#c2185b', '#00796b'];
 const VARIANCE_COLORS: Record<string, string> = {
@@ -88,6 +89,8 @@ const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }:
 };
 
 const FinancialReportsPage: React.FC = () => {
+  const { hasRole } = useAuthStore();
+  const isGeneralUser = hasRole('GENERAL_USER');
   const [tabIndex, setTabIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [fiscalYear, setFiscalYear] = useState(new Date().getFullYear());
@@ -445,6 +448,7 @@ const FinancialReportsPage: React.FC = () => {
         </Box>
       </Box>
 
+      {!isGeneralUser && (<>
       {/* Summary Cards */}
       <Grid container spacing={2} mb={3} alignItems="stretch">
         <Grid item xs={12} sm={6} md={3} sx={{ display: 'flex' }}>
@@ -566,10 +570,11 @@ const FinancialReportsPage: React.FC = () => {
           </Paper>
         </Grid>
       </Grid>
+      </>)}
 
       {/* Tabs */}
       <Paper sx={{ mb: 3, borderRadius: 2, overflow: 'hidden' }}>
-        <Tabs
+        {!isGeneralUser && <Tabs
           value={tabIndex}
           onChange={(_, v) => setTabIndex(v)}
           variant="scrollable"
@@ -587,7 +592,7 @@ const FinancialReportsPage: React.FC = () => {
           <Tab icon={<PieChartIcon />} iconPosition="start" label="Project Summary" />
           <Tab icon={<PieChartIcon />} iconPosition="start" label="Department Analysis" />
           <Tab icon={<TrendingUpIcon />} iconPosition="start" label="Spending Trends" />
-        </Tabs>
+        </Tabs>}
 
         <Box sx={{ p: 3 }}>
           {/* TAB 0: Budget Variance */}

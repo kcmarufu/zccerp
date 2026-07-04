@@ -391,7 +391,7 @@ const ApprovalsPage: React.FC = () => {
         (r as any).requester_last_name?.toLowerCase().includes(searchLc) ||
         r.department_name?.toLowerCase().includes(searchLc)
       )) return false;
-      if (filterDept && String((r as any).department_id) !== filterDept) return false;
+      if (filterDept && String((r as any).department_id) !== filterDept && String((r as any).routing_department_id) !== filterDept) return false;
       if (filterProject && String((r as any).project_id) !== filterProject) return false;
       if (filterPriority && r.priority !== filterPriority) return false;
       if (filterStatus && r.status !== filterStatus) return false;

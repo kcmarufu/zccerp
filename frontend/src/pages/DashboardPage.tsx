@@ -96,6 +96,8 @@ const DashboardPage: React.FC = () => {
     fetchDashboardData();
   }, []);
 
+  const isProcurementOnly = hasRole('PROCUREMENT_OFFICER', 'PROCUREMENT_COMMITTEE');
+
   const fetchDashboardData = async () => {
     try {
       const isApprover = hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK');
@@ -478,7 +480,7 @@ const DashboardPage: React.FC = () => {
 
       {/* KPI Cards */}
       {/* Reconciliation Analysis Cards */}
-      {(hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') || myReconStats.total > 0) && (
+      {!isProcurementOnly && (hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') || myReconStats.total > 0) && (
         <Grid container spacing={2} sx={{ mb: 3 }}>
           {/* General user: My Reconciliations summary */}
           {!hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && (
@@ -562,7 +564,7 @@ const DashboardPage: React.FC = () => {
       )}
 
       {/* KPI Cards */}
-      <Grid container spacing={2.5} sx={{ mb: 3 }}>
+      {!isProcurementOnly && <Grid container spacing={2.5} sx={{ mb: 3 }}>
         {hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && (
           <Grid item xs={12} sm={6} md={3}>
             <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}`, cursor: 'pointer', '&:hover': { borderColor: theme.palette.warning.main, boxShadow: `0 0 0 1px ${theme.palette.warning.main}` } }} onClick={() => navigate('/finance/approvals')}>
@@ -625,7 +627,7 @@ const DashboardPage: React.FC = () => {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        {!hasRole('GENERAL_USER') && <Grid item xs={12} sm={6} md={3}>
           <Card elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
             <CardContent sx={{ p: 2.5 }}>
               <Box display="flex" justifyContent="space-between" alignItems="flex-start">
@@ -654,8 +656,8 @@ const DashboardPage: React.FC = () => {
               </Box>
             </CardContent>
           </Card>
-        </Grid>
-      </Grid>
+        </Grid>}
+      </Grid>}
 
       {/* Procurement KPI Cards */}
       <Typography variant="subtitle2" color="text.secondary" fontWeight={600} textTransform="uppercase" letterSpacing={1} sx={{ mb: 1.5 }}>
@@ -797,8 +799,8 @@ const DashboardPage: React.FC = () => {
         ))}
       </Grid>
 
-      {/* Bottom Row */}
-      <Grid container spacing={2}>
+      {/* Bottom Row — hidden for procurement-only users */}
+      {!isProcurementOnly && <Grid container spacing={2}>
         {/* Request Status Chart */}
         <Grid item xs={12} md={4}>
           <Paper elevation={0} sx={{ p: 2, border: `1px solid ${theme.palette.divider}` }}>
@@ -941,7 +943,7 @@ const DashboardPage: React.FC = () => {
             </Box>
           </Paper>
         </Grid>
-      </Grid>
+      </Grid>}
     </Box>
   );
 };

@@ -642,8 +642,8 @@ const ProjectDetailPanel: React.FC<ProjectDetailPanelProps> = ({ project, onClos
 
 const ProjectManagementPage: React.FC = () => {
   const theme = useTheme();
-  const { hasRole, isFinanceManager } = useAuthStore();
-  const canManage = isFinanceManager();
+  const { hasRole, isFinanceManager, isAdminHrManager } = useAuthStore();
+  const canManage = isFinanceManager() || isAdminHrManager();
 
   const [projects, setProjects]     = useState<Project[]>([]);
   const [loading, setLoading]       = useState(true);

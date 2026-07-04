@@ -87,6 +87,8 @@ interface NavSubItem {
   roles?: UserRole[];
   permission?: string;
   badge?: number;
+  /** If provided, item only shows when this returns true */
+  condition?: () => boolean;
 }
 
 interface NavSection {
@@ -105,7 +107,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout, hasRole, hasPermission } = useAuthStore();
+  const { user, logout, hasRole, hasPermission, isFinanceManager } = useAuthStore();
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
@@ -215,7 +217,8 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           path: '/finance/dispatch',
           label: 'Dispatch Desk',
           icon: <DispatchIcon />,
-          roles: ['FINANCE_CLERK', 'ADMIN'] as UserRole[]
+          // Only Finance HOP/Lead (FOS dept), Finance Clerk, and Admin see this
+          condition: () => hasRole('FINANCE_CLERK', 'ADMIN') || isFinanceManager()
         },
         {
           path: '/finance/budgets',
@@ -502,6 +505,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     .map(section => ({
       ...section,
       items: section.items.filter(item => {
+        if (item.condition && !item.condition()) return false;
         if (item.roles && !hasRole(...item.roles)) return false;
         if (item.permission && !hasPermission(item.permission)) return false;
         return true;

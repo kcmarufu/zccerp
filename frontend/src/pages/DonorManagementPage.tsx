@@ -78,9 +78,9 @@ const CURRENCIES = [
 const DonorManagementPage: React.FC = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const { hasRole, isFinanceManager } = useAuthStore();
-  // Only Finance Managers (Finance HOP/Lead or Admin) can create/edit/delete
-  const canEdit = isFinanceManager();
+  const { hasRole, isFinanceManager, isAdminHrManager } = useAuthStore();
+  // Finance Managers (Finance HOP/Lead or Admin) and Admin/HR Managers (AHR HOP/Lead) can create/edit/delete
+  const canEdit = isFinanceManager() || isAdminHrManager();
 
   const [donors, setDonors] = useState<Donor[]>([]);
   const [isLoading, setIsLoading] = useState(false);

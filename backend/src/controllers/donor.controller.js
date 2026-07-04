@@ -1,12 +1,13 @@
 const { query, transaction } = require('../config/database');
-const { ROLES, isFinanceManager } = require('../config/roles');
+const { ROLES, isFinanceManager, isAdminHrManager } = require('../config/roles');
 
-// Non-Finance-Manager HOPs/LEADs only see donors that have at least one
-// budget line in their own department. Finance Managers and Finance Clerks
+// Non-Finance-Manager and Non-AdminHR HOPs/LEADs only see donors that have at least one
+// budget line in their own department. Finance Managers, Admin/HR Managers, and Finance Clerks
 // see all donors (global view). General users also see all for dropdown usage.
 const needsDonorDeptFilter = (user) =>
   [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role) &&
-  !isFinanceManager(user);
+  !isFinanceManager(user) &&
+  !isAdminHrManager(user);
 
 /**
  * Get all donors
@@ -40,6 +41,8 @@ exports.getAllDonors = async (req, res) => {
     
     const donors = await query(
       `SELECT d.*,
+              COALESCE((SELECT SUM(bl.spent_amount) FROM budget_lines bl WHERE bl.donor_id = d.id), 0) AS total_spent,
+              COALESCE((SELECT SUM(bl.allocated_amount) FROM budget_lines bl WHERE bl.donor_id = d.id), 0) AS total_allocated,
               u.first_name as creator_first_name,
               u.last_name as creator_last_name,
               u.email as creator_email,

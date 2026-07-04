@@ -376,7 +376,7 @@ const RequestsListPage: React.FC = () => {
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center">
                         <Tooltip title="View"><IconButton size="small" color="primary" onClick={e => { e.stopPropagation(); navigate(`/finance/requests/${request.id}`); }}><ViewIcon fontSize="small" /></IconButton></Tooltip>
-                        {['DRAFT', 'REJECTED'].includes(request.status) && request.requester_id === user?.id && hasPermission('create_request') && (
+                        {['DRAFT', 'REJECTED', 'PENDING_LEAD_APPROVAL', 'PENDING_ADMIN_APPROVAL', 'PENDING_HOP_APPROVAL'].includes(request.status) && request.requester_id === user?.id && hasPermission('create_request') && (
                           <Tooltip title="Edit"><IconButton size="small" onClick={e => { e.stopPropagation(); navigate(`/finance/requests/${request.id}/edit`); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
                         )}
                       </Stack>

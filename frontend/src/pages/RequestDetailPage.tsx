@@ -67,7 +67,7 @@ import { buildTravelClaimPageHTML } from '../utils/pdfUtils';
 import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
-  { status: 'PENDING_ADMIN_APPROVAL', label: 'Admin / HR Lead Approval' },
+  { status: 'PENDING_LEAD_APPROVAL', label: 'Departmental Approval (Lead / HOP)' },
   { status: 'PENDING_FINANCE_APPROVAL', label: 'Finance Clerk Review' },
   { status: 'APPROVED', label: 'Approved' }
 ];
@@ -312,8 +312,18 @@ const RequestDetailPage: React.FC = () => {
 
   const getActiveStep = () => {
     if (!request) return 0;
-    const index = APPROVAL_STEPS.findIndex(s => s.status === request.status);
-    return index >= 0 ? index : 0;
+    const statusToStep: Record<string, number> = {
+      'PENDING_ADMIN_APPROVAL': 0,
+      'PENDING_LEAD_APPROVAL': 0,
+      'PENDING_HOP_APPROVAL': 0,
+      'PENDING_FINANCE_APPROVAL': 1,
+      'APPROVED': 2,
+      'DISPATCHED': 2,
+      'RECON_PENDING_LEAD': 2,
+      'RECON_PENDING_FINANCE': 2,
+      'RECONCILED': 2
+    };
+    return statusToStep[request.status] ?? 0;
   };
 
   const canApprove = () => {
@@ -899,24 +909,38 @@ ${buildClaimPage()}
                 No attachments uploaded for this request
               </Typography>
             ) : (
-              <Table size="small">
+              <Table size="small" sx={{ tableLayout: 'fixed' }}>
                 <TableHead>
                   <TableRow>
-                    <TableCell>File</TableCell>
-                    <TableCell>Type</TableCell>
-                    <TableCell>Uploaded By</TableCell>
-                    <TableCell>Date</TableCell>
-                    <TableCell align="center">Download</TableCell>
+                    <TableCell sx={{ width: '40%' }}>File</TableCell>
+                    <TableCell sx={{ width: '14%' }}>Type</TableCell>
+                    <TableCell sx={{ width: '18%' }}>Uploaded By</TableCell>
+                    <TableCell sx={{ width: '18%' }}>Date</TableCell>
+                    <TableCell align="center" sx={{ width: '10%' }}>Download</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {attachments.map((att) => (
                     <TableRow key={att.id}>
-                      <TableCell>
-                        <Box display="flex" alignItems="center" gap={1}>
-                          <Typography variant="body2">
-                            {attachmentService.getFileIcon(att.file_type)} {att.original_name}
-                          </Typography>
+                      <TableCell sx={{ maxWidth: 0 }}>
+                        <Box display="flex" alignItems="center" gap={0.5} sx={{ overflow: 'hidden' }}>
+                          <Box sx={{ flexShrink: 0 }}>
+                            {attachmentService.getFileIcon(att.file_type)}
+                          </Box>
+                          <Tooltip title={att.original_name} placement="top-start">
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                display: 'block',
+                                cursor: 'default'
+                              }}
+                            >
+                              {att.original_name}
+                            </Typography>
+                          </Tooltip>
                         </Box>
                         <Typography variant="caption" color="text.secondary">
                           {attachmentService.formatFileSize(att.file_size)}
@@ -926,7 +950,7 @@ ${buildClaimPage()}
                         <Chip label={att.attachment_type} size="small" variant="outlined" />
                       </TableCell>
                       <TableCell>
-                        <Typography variant="body2">
+                        <Typography variant="body2" noWrap>
                           {att.first_name} {att.last_name}
                         </Typography>
                       </TableCell>
@@ -964,7 +988,7 @@ ${buildClaimPage()}
             <Divider sx={{ mb: 2 }} />
             <Box display="flex" flexDirection="column" gap={2}>
               {/* Draft/Rejected owner actions */}
-              {['DRAFT', 'REJECTED'].includes(request.status) && request.requester_id === user?.id && (
+              {['DRAFT', 'REJECTED', 'PENDING_LEAD_APPROVAL', 'PENDING_ADMIN_APPROVAL', 'PENDING_HOP_APPROVAL'].includes(request.status) && request.requester_id === user?.id && (
                 <>
                   <Button
                     variant="outlined"

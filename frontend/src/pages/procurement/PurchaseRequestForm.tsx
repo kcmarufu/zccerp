@@ -324,10 +324,10 @@ const PurchaseRequestForm: React.FC = () => {
     return <Box display="flex" justifyContent="center" mt={4}><CircularProgress /></Box>;
   }
 
-  if (isEdit && existingRequest && !['DRAFT', 'REJECTED'].includes(existingRequest.status)) {
+  if (isEdit && existingRequest && !['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(existingRequest.status)) {
     return (
       <Alert severity="warning" sx={{ m: 2 }}>
-        This request is in <strong>{existingRequest.status?.replace(/_/g, ' ')}</strong> status and cannot be edited.
+        This request is in <strong>{existingRequest.status?.replace(/_/g, ' ')}</strong> status and can no longer be edited — the Procurement Committee has already approved it.
         <Button sx={{ ml: 2 }} size="small" onClick={() => navigate(`/procurement/requests/${id}`)}>
           View Request
         </Button>

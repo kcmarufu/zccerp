@@ -399,9 +399,19 @@ class RequestController {
           throw new Error('You can only edit your own requests');
         }
 
-        const canEditStatuses = [REQUEST_STATUS.DRAFT, REQUEST_STATUS.REJECTED];
+        // Editable while still awaiting the first (department-level) approval stage,
+        // as well as the pre-existing DRAFT/REJECTED cases. Once a department approver
+        // (Lead/HOP/Admin) has acted, the request moves to PENDING_FINANCE_APPROVAL and
+        // is locked from further edits.
+        const canEditStatuses = [
+          REQUEST_STATUS.DRAFT,
+          REQUEST_STATUS.REJECTED,
+          REQUEST_STATUS.PENDING_LEAD_APPROVAL,
+          REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+          REQUEST_STATUS.PENDING_HOP_APPROVAL
+        ];
         if (!canEditStatuses.includes(requests[0].status)) {
-          throw new Error('Can only edit requests in DRAFT or REJECTED status');
+          throw new Error('Can only edit requests that have not yet been approved at the department level');
         }
 
         const previousStatus = requests[0].status;
@@ -434,6 +444,17 @@ class RequestController {
                item.unitPrice, item.budgetLineId, item.notes || null]
             );
           }
+
+          // Recalculate total_amount from the updated items — previously this was
+          // left stale after an edit, so edited/resubmitted requests kept showing
+          // the pre-edit total everywhere (lists, PDFs, reconciliation).
+          const totalAmount = items.reduce((sum, item) => {
+            return sum + (item.quantity || 1) * (item.unitPrice || 0);
+          }, 0);
+          await connection.execute(
+            'UPDATE requests SET total_amount = ? WHERE id = ?',
+            [totalAmount, requestId]
+          );
         }
 
         if (previousStatus === REQUEST_STATUS.REJECTED) {

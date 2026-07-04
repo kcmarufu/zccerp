@@ -5,7 +5,7 @@
 
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/database');
-const { hasPermission, isFinanceManager, ROLES } = require('../config/roles');
+const { hasPermission, isFinanceManager, isAdminHrManager, ROLES } = require('../config/roles');
 
 /**
  * Verify JWT token and attach user to request
@@ -222,10 +222,35 @@ const requireFinanceManager = (req, res, next) => {
   next();
 };
 
+/**
+ * Middleware that restricts access to donor (partner) and project management:
+ *   - ADMIN
+ *   - FINANCE_CLERK
+ *   - HEAD_OF_PROGRAMS or PROGRAM_LEAD in the Admin/HR (AHR) department
+ * Used to protect write operations on donors and projects.
+ */
+const requirePartnerManager = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    });
+  }
+  const allowedByRole = [ROLES.ADMIN, ROLES.FINANCE_CLERK].includes(req.user.role);
+  if (!allowedByRole && !isAdminHrManager(req.user)) {
+    return res.status(403).json({
+      success: false,
+      error: 'Only Admin, Finance, or Admin/HR HOP/Lead can perform this action'
+    });
+  }
+  next();
+};
+
 module.exports = {
   authenticateToken,
   requireRole,
   requirePermission,
   requireSameDepartment,
-  requireFinanceManager
+  requireFinanceManager,
+  requirePartnerManager
 };

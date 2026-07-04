@@ -153,7 +153,7 @@ const App: React.FC = () => {
                       <Route path="/finance/requests/:requestId" element={<RequestDetailPage />} />
                       <Route path="/finance/approvals" element={<ProtectedRoute allowedRoles={APPROVER_ROLES}><ApprovalsPage /></ProtectedRoute>} />
                       <Route path="/finance/reconciliation" element={<ReconciliationPage />} />
-                      <Route path="/finance/dispatch" element={<ProtectedRoute allowedRoles={['FINANCE_CLERK', 'ADMIN']}><DispatchDesk /></ProtectedRoute>} />
+                      <Route path="/finance/dispatch" element={<ProtectedRoute allowedRoles={['FINANCE_CLERK', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'] as UserRole[]}><DispatchDesk /></ProtectedRoute>} />
                       <Route path="/finance/budgets" element={<ProtectedRoute requiredPermission="view_budget_lines"><BudgetListPage /></ProtectedRoute>} />
                       <Route path="/finance/budgets/manage" element={<ProtectedRoute allowedRoles={FINANCE_MANAGERS}><BudgetManagement /></ProtectedRoute>} />
                       <Route path="/finance/donors" element={<ProtectedRoute allowedRoles={ALL_FINANCE_ROLES}><DonorManagementPage /></ProtectedRoute>} />
@@ -177,7 +177,7 @@ const App: React.FC = () => {
                       <Route path="/procurement/requests/:id" element={<PurchaseRequestDetail />} />
                       <Route path="/procurement/requests/:id/edit" element={<PurchaseRequestForm />} />
                       <Route path="/procurement/approvals" element={<ProcurementApprovalsPage />} />
-                      <Route path="/procurement/vendors" element={<ProtectedRoute allowedRoles={['PROCUREMENT_OFFICER', 'ADMIN'] as UserRole[]}><VendorDatabase /></ProtectedRoute>} />
+                      <Route path="/procurement/vendors" element={<ProtectedRoute allowedRoles={['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'] as UserRole[]}><VendorDatabase /></ProtectedRoute>} />
 
                       <Route path="/grants" element={<ComingSoonPage module="Grants & Partners" />} />
                       <Route path="/grants/*" element={<ComingSoonPage module="Grants & Partners" />} />

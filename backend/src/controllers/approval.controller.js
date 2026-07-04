@@ -29,9 +29,9 @@ class ApprovalController {
       const approverId = req.user.id;
       const approverRole = req.user.role;
       const ipAddress = req.ip;
+      const isFinanceManager = req.user.department_code === 'FOS' || req.user.role === ROLES.ADMIN;
 
-      // Peek at the request's current status so HOP/Lead can be routed to Finance approval
-      // when the request is already at the Finance stage.
+      // Peek at the request's current status
       const reqRows = await query('SELECT status FROM requests WHERE id = ?', [requestId]);
       const currentStatus = reqRows[0]?.status;
 
@@ -39,8 +39,14 @@ class ApprovalController {
 
       switch (approverRole) {
         case ROLES.PROGRAM_LEAD:
-          // Finance HOP/Lead: if request is at Finance stage, act as Finance approver
+          // Only Finance Lead can approve at Finance stage; other Leads approve at Dept stage only
           if (currentStatus === REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
+            if (!isFinanceManager) {
+              return res.status(403).json({
+                success: false,
+                error: 'Only Finance HOP/Lead can approve requests at the Finance stage'
+              });
+            }
             result = await approvalService.approveAsFinance(
               requestId, approverId, comments, version, ipAddress
             );
@@ -52,8 +58,14 @@ class ApprovalController {
           break;
 
         case ROLES.HEAD_OF_PROGRAMS:
-          // Finance HOP/Lead: if request is at Finance stage, act as Finance approver
+          // Only Finance HOP can approve at Finance stage; other HOPs approve at Dept stage only
           if (currentStatus === REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
+            if (!isFinanceManager) {
+              return res.status(403).json({
+                success: false,
+                error: 'Only Finance HOP/Lead can approve requests at the Finance stage'
+              });
+            }
             result = await approvalService.approveAsFinance(
               requestId, approverId, comments, version, ipAddress
             );
@@ -161,12 +173,13 @@ class ApprovalController {
       const userRole = req.user.role;
       const userId = req.user.id;
       const userDepartmentId = req.user.department_id;
+      const isFinanceManager = req.user.department_code === 'FOS' || req.user.role === ROLES.ADMIN;
 
       const requests = await approvalService.getPendingApprovals(
         userRole, 
         userId, 
         userDepartmentId,
-        { departmentId }
+        { departmentId, isFinanceManager, departmentCode: req.user.department_code }
       );
 
       res.json({
@@ -294,12 +307,13 @@ class ApprovalController {
       const userRole = req.user.role;
       const userId = req.user.id;
       const userDepartmentId = req.user.department_id;
+      const isFinanceManager = req.user.department_code === 'FOS' || req.user.role === ROLES.ADMIN;
 
       const requests = await approvalService.getApprovalHistory(
         userRole,
         userId,
         userDepartmentId,
-        { departmentId }
+        { departmentId, isFinanceManager, departmentCode: req.user.department_code }
       );
 
       res.json({
@@ -324,11 +338,12 @@ class ApprovalController {
       const { departmentId } = req.query;
       const userRole = req.user.role;
       const userDepartmentId = req.user.department_id;
+      const isFinanceManager = req.user.department_code === 'FOS' || req.user.role === ROLES.ADMIN;
 
       const requests = await approvalService.getApprovedRequests(
         userRole,
         userDepartmentId,
-        { departmentId }
+        { departmentId, isFinanceManager, departmentCode: req.user.department_code }
       );
 
       res.json({
@@ -353,11 +368,12 @@ class ApprovalController {
       const { departmentId } = req.query;
       const userRole = req.user.role;
       const userDepartmentId = req.user.department_id;
+      const isFinanceManager = req.user.department_code === 'FOS' || req.user.role === ROLES.ADMIN;
 
       const requests = await approvalService.getRejectedRequests(
         userRole,
         userDepartmentId,
-        { departmentId }
+        { departmentId, isFinanceManager, departmentCode: req.user.department_code }
       );
 
       res.json({
@@ -382,11 +398,14 @@ class ApprovalController {
       const userRole = req.user.role;
       const userId = req.user.id;
       const userDepartmentId = req.user.department_id;
+      const isFinanceManager = req.user.department_code === 'FOS' || req.user.role === ROLES.ADMIN;
 
       const stats = await approvalService.getApproverStats(
         userRole,
         userId,
-        userDepartmentId
+        userDepartmentId,
+        isFinanceManager,
+        req.user.department_code
       );
 
       res.json({

@@ -1235,7 +1235,7 @@ ${buildDigitalStamp('')}
                 <Typography variant="body2" color="text.secondary">
                   {(() => {
                     const f = pendingLeadReviews.filter(r => {
-                      if (leadDeptFilter && String(r.department_id) !== leadDeptFilter) return false;
+                      if (leadDeptFilter && String(r.department_id) !== leadDeptFilter && String(r.routing_department_id) !== leadDeptFilter) return false;
                       if (leadProjectFilter && String(r.project_id) !== leadProjectFilter) return false;
                       return true;
                     });
@@ -1270,7 +1270,7 @@ ${buildDigitalStamp('')}
                 <TableBody>
                   {pendingLeadReviews
                     .filter(r => {
-                      if (leadDeptFilter && String(r.department_id) !== leadDeptFilter) return false;
+                      if (leadDeptFilter && String(r.department_id) !== leadDeptFilter && String(r.routing_department_id) !== leadDeptFilter) return false;
                       if (leadProjectFilter && String(r.project_id) !== leadProjectFilter) return false;
                       return true;
                     })
@@ -1412,8 +1412,8 @@ ${buildDigitalStamp('')}
                         const s = reconSearchFilter.toLowerCase();
                         if (!(r.request_code?.toLowerCase().includes(s) || `${r.requester_first_name} ${r.requester_last_name}`.toLowerCase().includes(s))) return false;
                       }
-                      if (reconDeptFilter === '__MY_DEPT__' && r.department_id !== (user as any)?.department_id) return false;
-                      if (reconDeptFilter && reconDeptFilter !== '__MY_DEPT__' && String(r.department_id) !== reconDeptFilter) return false;
+                      if (reconDeptFilter === '__MY_DEPT__' && r.department_id !== (user as any)?.department_id && r.routing_department_id !== (user as any)?.department_id) return false;
+                      if (reconDeptFilter && reconDeptFilter !== '__MY_DEPT__' && String(r.department_id) !== reconDeptFilter && String(r.routing_department_id) !== reconDeptFilter) return false;
                       if (reconProjectFilter && String(r.project_id) !== reconProjectFilter) return false;
                       return true;
                     });
@@ -1452,8 +1452,8 @@ ${buildDigitalStamp('')}
                         const s = reconSearchFilter.toLowerCase();
                         if (!(r.request_code?.toLowerCase().includes(s) || `${r.requester_first_name} ${r.requester_last_name}`.toLowerCase().includes(s))) return false;
                       }
-                      if (reconDeptFilter === '__MY_DEPT__' && r.department_id !== (user as any)?.department_id) return false;
-                      if (reconDeptFilter && reconDeptFilter !== '__MY_DEPT__' && String(r.department_id) !== reconDeptFilter) return false;
+                      if (reconDeptFilter === '__MY_DEPT__' && r.department_id !== (user as any)?.department_id && r.routing_department_id !== (user as any)?.department_id) return false;
+                      if (reconDeptFilter && reconDeptFilter !== '__MY_DEPT__' && String(r.department_id) !== reconDeptFilter && String(r.routing_department_id) !== reconDeptFilter) return false;
                       if (reconProjectFilter && String(r.project_id) !== reconProjectFilter) return false;
                       return true;
                     })
@@ -1568,7 +1568,7 @@ ${buildDigitalStamp('')}
                   const s = historySearchFilter.toLowerCase();
                   if (!(rec.request_code?.toLowerCase().includes(s) || `${rec.requester_first_name} ${rec.requester_last_name}`.toLowerCase().includes(s))) return false;
                 }
-                if (historyDeptFilter && String(rec.department_id) !== historyDeptFilter) return false;
+                if (historyDeptFilter && String(rec.department_id) !== historyDeptFilter && String(rec.routing_department_id) !== historyDeptFilter) return false;
                 if (historyProjectFilter && String(rec.project_id) !== historyProjectFilter) return false;
                 if (historyStatusFilter) {
                   if (REQ_STATUSES.includes(historyStatusFilter)) {
@@ -2050,6 +2050,7 @@ ${buildDigitalStamp('')}
                       <TableHead>
                         <TableRow>
                           <TableCell>Description</TableCell>
+                          <TableCell>Budget Line</TableCell>
                           <TableCell align="right">Budgeted</TableCell>
                           <TableCell align="right">Actual</TableCell>
                           <TableCell align="right">Variance</TableCell>
@@ -2064,6 +2065,11 @@ ${buildDigitalStamp('')}
                               {item.request_item_id == null && (
                                 <Chip label="Extra" size="small" color="warning" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
                               )}
+                            </TableCell>
+                            <TableCell>
+                              {item.budget_code ? (
+                                <Chip label={`${item.budget_code}${item.budget_name ? ` — ${item.budget_name}` : ''}`} size="small" variant="outlined" sx={{ fontSize: '0.7rem' }} />
+                              ) : '—'}
                             </TableCell>
                             <TableCell align="right">${Number(item.budgeted_amount || 0).toLocaleString()}</TableCell>
                             <TableCell align="right">${Number(item.actual_amount || 0).toLocaleString()}</TableCell>

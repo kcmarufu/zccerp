@@ -5,12 +5,12 @@
 
 const { validationResult } = require('express-validator');
 const { query, transaction } = require('../config/database');
-const { ROLES, isFinanceManager } = require('../config/roles');
+const { ROLES, isFinanceManager, isAdminHrManager } = require('../config/roles');
 
-// Finance managers (AF HOP/Lead or Admin) and Finance Clerks see every budget
-// line across all departments. All other roles are scoped to their own department.
+// Finance managers (FOS HOP/Lead or Admin), Finance Clerks, and Admin/HR managers
+// see every budget line across all departments. All other roles are scoped to their own department.
 const canViewAllBudgetLines = (user) =>
-  isFinanceManager(user) || user.role === ROLES.FINANCE_CLERK;
+  isFinanceManager(user) || user.role === ROLES.FINANCE_CLERK || isAdminHrManager(user);
 
 class BudgetController {
 

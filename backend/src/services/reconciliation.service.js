@@ -849,7 +849,7 @@ class ReconciliationService {
        LEFT JOIN departments rd ON r.routing_department_id = rd.id
        JOIN reconciliations rec ON rec.request_id = r.id AND rec.status = 'SUBMITTED'
        WHERE r.status = ? ${departmentFilter}
-       ORDER BY rec.created_at ASC`,
+       ORDER BY rec.created_at DESC`,
       params
     );
   }
@@ -939,14 +939,18 @@ class ReconciliationService {
 
     const reconciliation = reconciliations[0];
 
-    // Get reconciliation items
+    // Get reconciliation items with budget line details
     const items = await query(
       `SELECT ri.*, 
               rqi.item_description as original_description,
               rqi.quantity as original_quantity,
-              rqi.unit_price as original_unit_price
+              rqi.unit_price as original_unit_price,
+              COALESCE(bl1.budget_code, bl2.budget_code) as budget_code,
+              COALESCE(bl1.budget_name, bl2.budget_name) as budget_name
        FROM reconciliation_items ri
        LEFT JOIN request_items rqi ON ri.request_item_id = rqi.id
+       LEFT JOIN budget_lines bl1 ON rqi.budget_line_id = bl1.id
+       LEFT JOIN budget_lines bl2 ON ri.budget_line_id = bl2.id
        WHERE ri.reconciliation_id = ?
        ORDER BY ri.id`,
       [reconciliation.id]
@@ -987,11 +991,9 @@ class ReconciliationService {
    * Get all requests pending reconciliation review (for Finance)
    */
   async getPendingReconciliations(role) {
-    // Finance, Admin and HOP see ALL pending stages so they can approve directly
-    const privilegedRoles = [ROLES.FINANCE_CLERK, ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS];
-    const statuses = privilegedRoles.includes(role)
-      ? [REQUEST_STATUS.RECON_PENDING_LEAD, REQUEST_STATUS.RECON_PENDING_FINANCE]
-      : [REQUEST_STATUS.RECON_PENDING_FINANCE];
+    // Finance pending tab only shows RECON_PENDING_FINANCE items.
+    // Lead/HOP sees RECON_PENDING_LEAD items in the separate Lead tab.
+    const statuses = [REQUEST_STATUS.RECON_PENDING_FINANCE];
     const placeholders = statuses.map(() => '?').join(', ');
 
     return await query(
@@ -1011,7 +1013,7 @@ class ReconciliationService {
        JOIN departments d ON r.department_id = d.id
        JOIN reconciliations rec ON rec.request_id = r.id AND rec.status = 'SUBMITTED'
        WHERE r.status IN (${placeholders})
-       ORDER BY rec.created_at ASC`,
+       ORDER BY rec.created_at DESC`,
       statuses
     );
   }
@@ -1040,7 +1042,20 @@ class ReconciliationService {
   /**
    * Get reconciliation history (all reconciliations including in-progress)
    */
-  async getReconciliationHistory() {
+  async getReconciliationHistory(role, departmentId, departmentCode) {
+    // Finance Lead/HOP (FOS dept) and system Admins see all history.
+    // Everyone else only sees reconciliations for their own department.
+    const isFOS = departmentCode === 'FOS';
+    const seeAll = role === ROLES.ADMIN ||
+      (isFOS && (role === ROLES.PROGRAM_LEAD || role === ROLES.HEAD_OF_PROGRAMS));
+
+    let deptFilter = '';
+    const params = [];
+    if (!seeAll && departmentId) {
+      deptFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      params.push(departmentId, departmentId);
+    }
+
     return await query(
       `SELECT r.*,
               u.first_name as requester_first_name,
@@ -1065,9 +1080,11 @@ class ReconciliationService {
          LIMIT 1
        )
        LEFT JOIN users fr ON rec.finance_reviewer_id = fr.id
-       WHERE r.status IN ('DISPATCHED','RECON_PENDING_LEAD','RECON_PENDING_FINANCE','RECONCILED')
-          OR rec.status IN ('APPROVED','REJECTED','SUBMITTED')
-       ORDER BY COALESCE(rec.created_at, r.updated_at) DESC`
+       WHERE (r.status IN ('DISPATCHED','RECON_PENDING_LEAD','RECON_PENDING_FINANCE','RECONCILED')
+          OR rec.status IN ('APPROVED','REJECTED','SUBMITTED'))
+       ${deptFilter}
+       ORDER BY COALESCE(rec.created_at, r.updated_at) DESC`,
+      params
     );
   }
   /**

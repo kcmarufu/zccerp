@@ -198,6 +198,9 @@ const STATUS_TRANSITIONS = {
 // Finance department code — used for finance-manager access checks
 const FINANCE_DEPT_CODE = 'FOS';
 
+// Admin/HR department code — used for partner (donor/project) management access checks
+const ADMIN_HR_DEPT_CODE = 'AHR';
+
 /**
  * Determine whether a user is a "Finance Manager":
  *   - ADMIN always qualifies
@@ -211,6 +214,20 @@ const isFinanceManager = (user) => {
   if (user.role === ROLES.ADMIN) return true;
   return [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role) &&
     user.department_code === FINANCE_DEPT_CODE;
+};
+
+/**
+ * Determine whether a user is an "Admin/HR Manager":
+ *   - ADMIN always qualifies
+ *   - HEAD_OF_PROGRAMS or PROGRAM_LEAD who belong to the Admin/HR (AHR) department
+ * Admin/HR Managers may create/edit donors (partners) and projects,
+ * in addition to Finance Managers.
+ */
+const isAdminHrManager = (user) => {
+  if (!user) return false;
+  if (user.role === ROLES.ADMIN) return true;
+  return [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role) &&
+    user.department_code === ADMIN_HR_DEPT_CODE;
 };
 
 // Check if user has permission
@@ -266,8 +283,10 @@ module.exports = {
   REQUEST_STATUS,
   STATUS_TRANSITIONS,
   FINANCE_DEPT_CODE,
+  ADMIN_HR_DEPT_CODE,
   hasPermission,
   isFinanceManager,
+  isAdminHrManager,
   isValidTransition,
   getRequiredApprovalRole,
   getNextApprovalStatus

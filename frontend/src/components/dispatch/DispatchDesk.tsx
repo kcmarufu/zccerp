@@ -144,7 +144,7 @@ const DispatchDesk: React.FC = () => {
         // Apply department filter
         if (filters.departmentId) {
           filteredRequests = filteredRequests.filter(
-            r => r.department_id === parseInt(filters.departmentId)
+            r => r.department_id === parseInt(filters.departmentId) || r.routing_department_id === parseInt(filters.departmentId)
           );
         }
 

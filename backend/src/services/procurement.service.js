@@ -245,7 +245,11 @@ class ProcurementService {
   async updatePurchaseRequest(requestId, data, user) {
     const existing = await this.getPurchaseRequestById(requestId);
     if (!existing) throw new Error('Request not found');
-    if (!['DRAFT', 'REJECTED'].includes(existing.status)) throw new Error('Only DRAFT or REJECTED requests can be edited');
+    // Editable until the Procurement Committee unanimously approves (which moves status
+    // to PENDING_FINAL_FINANCE). Everything before that stage is still open to amendment.
+    if (!['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(existing.status)) {
+      throw new Error('Requests can only be edited before the Procurement Committee has approved');
+    }
     if (existing.requester_id !== user.id && user.role !== ROLES.ADMIN) {
       throw new Error('You can only edit your own requests');
     }
@@ -787,8 +791,8 @@ class ProcurementService {
     if (quot.created_by !== user.id && user.role !== ROLES.ADMIN) {
       throw new Error('You can only edit your own quotations');
     }
-    if (quot.request_status !== 'PENDING_PROCUREMENT') {
-      throw new Error('Quotations can only be edited when request is in procurement stage');
+    if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(quot.request_status)) {
+      throw new Error('Quotations can only be edited while the request is in the procurement or committee-review stage');
     }
     await query(
       `UPDATE proc_quotations SET

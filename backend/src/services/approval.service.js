@@ -201,9 +201,11 @@ class ApprovalService {
       const [requests] = await connection.execute(
         `SELECT r.*, u.department_id as approver_dept,
                 u.first_name as approver_first, u.last_name as approver_last,
-                don.donor_type as donor_type
+                don.donor_type as donor_type,
+                dept.department_code as approver_dept_code
          FROM requests r
          JOIN users u ON u.id = ?
+         JOIN departments dept ON dept.id = u.department_id
          LEFT JOIN donors don ON don.id = r.donor_id
          WHERE r.id = ? FOR UPDATE`,
         [approverId, requestId]
@@ -226,11 +228,16 @@ class ApprovalService {
         throw new Error('Request has been modified. Please refresh and try again.');
       }
 
-      // Department check: skip for Admin-donor requests — any Lead can approve.
-      // For cross-dept requests, check against routing_department_id (the project-owner's dept).
+      // Department check:
+      // - PENDING_ADMIN_APPROVAL (Admin-donor requests): only AHR Lead can approve, not Finance Lead
+      // - Other requests: Lead must match the effective department
       const isAdminDonorRequest = request.donor_type === 'ADMIN';
       const effectiveDeptId = Number(request.routing_department_id || request.department_id);
-      if (!isAdminDonorRequest && effectiveDeptId !== Number(request.approver_dept)) {
+      if (isAdminDonorRequest && request.status === REQUEST_STATUS.PENDING_ADMIN_APPROVAL) {
+        if (request.approver_dept_code !== 'AHR') {
+          throw new Error('Only the Admin/HR Program Lead can approve Admin department requests');
+        }
+      } else if (!isAdminDonorRequest && effectiveDeptId !== Number(request.approver_dept)) {
         throw new Error('You can only approve requests from your department (or the project-owning department for cross-department requests)');
       }
 
@@ -276,9 +283,11 @@ class ApprovalService {
       // Lock and fetch request
       const [requests] = await connection.execute(
         `SELECT r.*, u.department_id as approver_dept,
-                u.first_name as approver_first, u.last_name as approver_last
+                u.first_name as approver_first, u.last_name as approver_last,
+                dept.department_code as approver_dept_code
          FROM requests r
          JOIN users u ON u.id = ?
+         JOIN departments dept ON dept.id = u.department_id
          WHERE r.id = ? FOR UPDATE`,
         [approverId, requestId]
       );
@@ -300,9 +309,18 @@ class ApprovalService {
         throw new Error('Request has been modified. Please refresh and try again.');
       }
 
-      // Cross-dept routing: if routing_department_id is set, HOP must belong to that department.
-      if (request.routing_department_id && Number(request.routing_department_id) !== Number(request.approver_dept)) {
-        throw new Error('This cross-department request must be approved by the HOP of the project-owning department');
+      // Department check:
+      // - PENDING_ADMIN_APPROVAL: only AHR HOP can approve (blocks Finance HOP from approving FOS requests at admin stage)
+      // - Other stages: HOP must be in the request's effective department
+      if (request.status === REQUEST_STATUS.PENDING_ADMIN_APPROVAL) {
+        if (request.approver_dept_code !== 'AHR') {
+          throw new Error('Only the Admin/HR Head of Programs can approve Admin department requests');
+        }
+      } else {
+        const effectiveDeptId = Number(request.routing_department_id || request.department_id);
+        if (effectiveDeptId !== Number(request.approver_dept)) {
+          throw new Error('You can only approve departmental-stage requests from your own department');
+        }
       }
 
       // Updated: HOP approval goes directly to Finance
@@ -578,28 +596,66 @@ class ApprovalService {
     let statusFilter;
     let departmentFilter = '';
     let useInClause = false;
+    const deptCode = filters.departmentCode || '';
 
     switch (role) {
       case ROLES.PROGRAM_LEAD:
-        // Lead sees:
-        //   - Own-dept requests at PENDING_LEAD/ADMIN stages (with department routing)
-        //   - ALL requests at PENDING_FINANCE_APPROVAL (Finance Lead authority)
-        statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
         useInClause = true;
-        departmentFilter = `AND (
-          r.status = '${REQUEST_STATUS.PENDING_FINANCE_APPROVAL}'
-          OR (r.routing_department_id IS NULL AND r.department_id = ?)
-          OR r.routing_department_id = ?
-          OR EXISTS (
-            SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'
-          )
-        )`;
+        if (filters.isFinanceManager) {
+          // Finance Lead (FOS): Finance stage from any dept + own FOS dept stage
+          // PENDING_ADMIN_APPROVAL is AHR's domain — Finance Lead must not see or action those
+          statusFilter = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
+          departmentFilter = `AND (
+            r.status = '${REQUEST_STATUS.PENDING_FINANCE_APPROVAL}'
+            OR (r.routing_department_id IS NULL AND r.department_id = ?)
+            OR r.routing_department_id = ?
+          )`;
+        } else if (deptCode === 'AHR') {
+          // Admin/HR Lead: own dept + Admin-type donor requests pending admin approval
+          statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
+          departmentFilter = `AND (
+            (r.routing_department_id IS NULL AND r.department_id = ?)
+            OR r.routing_department_id = ?
+            OR (r.status = '${REQUEST_STATUS.PENDING_ADMIN_APPROVAL}' AND EXISTS (
+              SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'
+            ))
+          )`;
+        } else {
+          // CPJS/HSD Lead: own dept requests only
+          statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
+          departmentFilter = `AND (
+            (r.routing_department_id IS NULL AND r.department_id = ?)
+            OR r.routing_department_id = ?
+          )`;
+        }
         break;
+
       case ROLES.HEAD_OF_PROGRAMS:
-        // HOP oversees all departments — sees all pending approvals including Finance stage
-        statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
         useInClause = true;
+        if (filters.isFinanceManager) {
+          // Finance HOP (FOS): all pending stages except PENDING_ADMIN_APPROVAL (AHR's domain)
+          statusFilter = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
+          departmentFilter = '';
+        } else if (deptCode === 'AHR') {
+          // Admin/HR HOP: own dept + Admin-type donor requests
+          statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
+          departmentFilter = `AND (
+            (r.routing_department_id IS NULL AND r.department_id = ?)
+            OR r.routing_department_id = ?
+            OR (r.status = '${REQUEST_STATUS.PENDING_ADMIN_APPROVAL}' AND EXISTS (
+              SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'
+            ))
+          )`;
+        } else {
+          // CPJS/HSD HOP: own dept only, no Finance stage
+          statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
+          departmentFilter = `AND (
+            (r.routing_department_id IS NULL AND r.department_id = ?)
+            OR r.routing_department_id = ?
+          )`;
+        }
         break;
+
       case ROLES.FINANCE_CLERK:
         statusFilter = REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
         // Finance sees all requests at Finance stage
@@ -630,7 +686,10 @@ class ApprovalService {
       params.push(statusFilter);
     }
     
-    if (role === ROLES.PROGRAM_LEAD) {
+    // Push dept params for roles that have a dept filter with ? placeholders
+    if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(role) && departmentFilter.includes('?')) {
+      // Count placeholders needed — currently all filters above use exactly 2 dept ? params
+      // except the AHR filter which has 2 dept ? params (the EXISTS subquery has its own closure)
       params.push(departmentId, departmentId);
     }
     if (filters.departmentId && ![ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(role)) {
@@ -916,10 +975,13 @@ class ApprovalService {
     let departmentFilter = '';
     const params = [userId];
 
-    // Program Lead sees history only for their own department; HOP sees all.
-    if (role === ROLES.PROGRAM_LEAD) {
-      departmentFilter = 'AND r.department_id = ?';
-      params.push(departmentId);
+    // Finance HOP/Lead sees all history; non-Finance HOP and Leads see own dept only.
+    if (role === ROLES.PROGRAM_LEAD && !filters.isFinanceManager) {
+      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      params.push(departmentId, departmentId);
+    } else if (role === ROLES.HEAD_OF_PROGRAMS && !filters.isFinanceManager) {
+      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      params.push(departmentId, departmentId);
     } else if (filters.departmentId) {
       departmentFilter = 'AND r.department_id = ?';
       params.push(filters.departmentId);
@@ -962,10 +1024,13 @@ class ApprovalService {
     let departmentFilter = '';
     const params = [];
 
-    // Program Lead sees approved requests from their own department; HOP and Finance see all.
-    if (role === ROLES.PROGRAM_LEAD) {
-      departmentFilter = 'AND r.department_id = ?';
-      params.push(departmentId);
+    // Finance HOP/Lead and Admin see all; non-Finance HOP and Leads see own dept.
+    if (role === ROLES.PROGRAM_LEAD && !filters.isFinanceManager) {
+      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      params.push(departmentId, departmentId);
+    } else if (role === ROLES.HEAD_OF_PROGRAMS && !filters.isFinanceManager) {
+      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      params.push(departmentId, departmentId);
     } else if (filters.departmentId) {
       departmentFilter = 'AND r.department_id = ?';
       params.push(filters.departmentId);
@@ -1002,10 +1067,13 @@ class ApprovalService {
     let departmentFilter = '';
     const params = [];
 
-    // Program Lead and HOP see rejected requests from their department.
-    if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(role)) {
-      departmentFilter = 'AND r.department_id = ?';
-      params.push(departmentId);
+    // Finance HOP/Lead and Admin see all rejected; AHR sees own dept + Admin donor; CPJS/HSD see own dept.
+    if (role === ROLES.PROGRAM_LEAD && !filters.isFinanceManager) {
+      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      params.push(departmentId, departmentId);
+    } else if (role === ROLES.HEAD_OF_PROGRAMS && !filters.isFinanceManager) {
+      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      params.push(departmentId, departmentId);
     } else if (filters.departmentId) {
       departmentFilter = 'AND r.department_id = ?';
       params.push(filters.departmentId);
@@ -1042,7 +1110,7 @@ class ApprovalService {
   /**
    * Get dashboard statistics for an approver
    */
-  async getApproverStats(role, userId, departmentId) {
+  async getApproverStats(role, userId, departmentId, isFinanceManager = false, departmentCode = '') {
     let pendingStatus;
     let departmentFilter = '';
     const baseParams = [];
@@ -1050,17 +1118,43 @@ class ApprovalService {
 
     switch (role) {
       case ROLES.PROGRAM_LEAD:
-        // Lead sees own-dept requests + Finance stage requests (Finance Lead authority)
-        pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
         useInClause = true;
-        departmentFilter = `AND (r.status = '${REQUEST_STATUS.PENDING_FINANCE_APPROVAL}' OR r.department_id = ? OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
+        if (isFinanceManager) {
+          // Finance Lead: Finance stage (any dept) + own FOS dept
+          // PENDING_ADMIN_APPROVAL excluded — AHR domain only
+          pendingStatus = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
+          departmentFilter = `AND (r.status = '${REQUEST_STATUS.PENDING_FINANCE_APPROVAL}' OR r.department_id = ? OR r.routing_department_id = ?)`;
+        } else if (departmentCode === 'AHR') {
+          // Admin/HR Lead: own dept + Admin donor requests
+          pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
+          departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ? OR (r.status = '${REQUEST_STATUS.PENDING_ADMIN_APPROVAL}' AND EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')))`;
+        } else {
+          // CPJS/HSD Lead: own dept only
+          pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
+          departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ?)`;
+        }
         baseParams.push(departmentId, departmentId);
         break;
+
       case ROLES.HEAD_OF_PROGRAMS:
-        // HOP oversees all departments — sees all pending approvals including Finance stage
-        pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
         useInClause = true;
+        if (isFinanceManager) {
+          // Finance HOP: all pending except PENDING_ADMIN_APPROVAL (AHR domain), no dept filter
+          pendingStatus = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
+          departmentFilter = '';
+        } else if (departmentCode === 'AHR') {
+          // Admin/HR HOP: own dept + Admin donor requests
+          pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
+          departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ? OR (r.status = '${REQUEST_STATUS.PENDING_ADMIN_APPROVAL}' AND EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')))`;
+          baseParams.push(departmentId, departmentId);
+        } else {
+          // CPJS/HSD HOP: own dept only, no Finance stage
+          pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
+          departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ?)`;
+          baseParams.push(departmentId, departmentId);
+        }
         break;
+
       case ROLES.FINANCE_CLERK:
         pendingStatus = REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
         // Finance sees all requests
@@ -1098,7 +1192,7 @@ class ApprovalService {
     // Get approved count
     const approvedParams = [...baseParams];
     const approvedResult = await query(
-      `SELECT COUNT(DISTINCT r.id) as count FROM requests r WHERE r.status IN ('APPROVED', 'DISPATCHED', 'RECONCILED') ${departmentFilter}`,
+      `SELECT COUNT(DISTINCT r.id) as count FROM requests r WHERE r.status IN ('APPROVED', 'DISPATCHED', 'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE', 'RECONCILED') ${departmentFilter}`,
       approvedParams
     );
 

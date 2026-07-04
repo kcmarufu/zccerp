@@ -189,7 +189,8 @@ class ReconciliationController {
    */
   async getReconciliationHistory(req, res) {
     try {
-      const history = await reconciliationService.getReconciliationHistory();
+      const { role, department_id: departmentId, department_code: departmentCode } = req.user;
+      const history = await reconciliationService.getReconciliationHistory(role, departmentId, departmentCode);
 
       res.json({
         success: true,

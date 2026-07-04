@@ -5,7 +5,7 @@
  */
 
 const { query, transaction } = require('../config/database');
-const { ROLES, isFinanceManager } = require('../config/roles');
+const { ROLES, isFinanceManager, isAdminHrManager } = require('../config/roles');
 
 /**
  * Helper: auto-generate a project sequence code under a donor
@@ -35,11 +35,16 @@ exports.getAllProjects = async (req, res) => {
     let where = '1=1';
     const params = [];
 
-    // Non-Finance HOPs/Leads: only show projects owned by their department.
+    // Non-Finance/Non-AdminHR HOPs/Leads: only show projects owned by their department.
+    // Also include unassigned projects (department_id IS NULL) and Admin-donor
+    // projects, mirroring the equivalent donor-list filter — otherwise projects
+    // without a department (or under the Admin partner) are invisible to them.
+    // Finance managers and Admin/HR managers see ALL projects.
     const needsScope = [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(req.user.role)
-      && !isFinanceManager(req.user);
+      && !isFinanceManager(req.user)
+      && !isAdminHrManager(req.user);
     if (needsScope) {
-      where += ' AND p.department_id = ?';
+      where += " AND (p.department_id = ? OR p.department_id IS NULL OR d.donor_type = 'ADMIN')";
       params.push(req.user.department_id);
     }
 
@@ -96,11 +101,14 @@ exports.getProjectsByDonor = async (req, res) => {
     let where = 'p.donor_id = ?';
     const params = [parseInt(donorId)];
 
-    // Non-Finance HOPs/Leads: only show projects owned by their department
+    // Non-Finance/Non-AdminHR HOPs/Leads: only show projects owned by their department
+    // (plus unassigned/Admin-donor projects — see getAllProjects for rationale)
+    // Finance managers and Admin/HR managers see ALL projects.
     const needsScope = [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(req.user.role)
-      && !isFinanceManager(req.user);
+      && !isFinanceManager(req.user)
+      && !isAdminHrManager(req.user);
     if (needsScope) {
-      where += ' AND p.department_id = ?';
+      where += " AND (p.department_id = ? OR p.department_id IS NULL OR d.donor_type = 'ADMIN')";
       params.push(req.user.department_id);
     }
 

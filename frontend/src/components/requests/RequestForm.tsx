@@ -315,8 +315,8 @@ const RequestForm: React.FC = () => {
           notes: item.notes || ''
         }));
 
-        if (!['DRAFT', 'REJECTED'].includes(request.status)) {
-          toast.error('Only draft or rejected requests can be edited');
+        if (!['DRAFT', 'REJECTED', 'PENDING_LEAD_APPROVAL', 'PENDING_ADMIN_APPROVAL', 'PENDING_HOP_APPROVAL'].includes(request.status)) {
+          toast.error('This request can no longer be edited — it has already been approved at the department level');
           navigate(`/finance/requests/${requestId}`);
           return;
         }
@@ -608,7 +608,9 @@ const RequestForm: React.FC = () => {
         </Typography>
         <Typography variant="body2" color="text.secondary">
           {isEditMode
-            ? 'Update the existing request details and optionally resubmit for approval.'
+            ? (existingStatus && existingStatus !== 'DRAFT' && existingStatus !== 'REJECTED'
+                ? 'This request is still awaiting department-level approval — your changes will be saved in place and reviewed as-is, no resubmission needed.'
+                : 'Update the existing request details and optionally resubmit for approval.')
             : 'Submit a new float request with supporting documents. Select currency and routing options.'}
         </Typography>
       </Paper>
@@ -1198,15 +1200,17 @@ const RequestForm: React.FC = () => {
               >
                 {isEditMode ? 'Save Changes' : 'Save as Draft'}
               </Button>
-              <Button
-                variant="contained"
-                color="primary"
-                startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
-                onClick={handleSubmit(handleSaveAndSubmit)}
-                disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item)) || (overdueBlocked && !isEditMode)}
-              >
-                {isEditMode ? (existingStatus === 'REJECTED' ? 'Save & Resubmit' : 'Save & Submit') : 'Save & Submit for Approval'}
-              </Button>
+              {(!isEditMode || existingStatus === 'DRAFT' || existingStatus === 'REJECTED') && (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
+                  onClick={handleSubmit(handleSaveAndSubmit)}
+                  disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item)) || (overdueBlocked && !isEditMode)}
+                >
+                  {isEditMode ? (existingStatus === 'REJECTED' ? 'Save & Resubmit' : 'Save & Submit') : 'Save & Submit for Approval'}
+                </Button>
+              )}
             </Box>
         </Paper>
       </form>
