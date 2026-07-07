@@ -53,7 +53,7 @@ import { Request, Department } from '../../types';
 import { requestService } from '../../services/requestService';
 import { reconciliationService } from '../../services/reconciliationService';
 import api from '../../services/api';
-import { downloadHTMLAsPDF, buildTravelClaimPageHTML, buildDigitalStamp } from '../../utils/pdfUtils';
+import { downloadHTMLAsPDF, buildTravelClaimPageHTML, buildDigitalStamp, formatApprovalRole } from '../../utils/pdfUtils';
 import perDiemService from '../../services/perDiemService';
 
 const DispatchDesk: React.FC = () => {
@@ -224,7 +224,7 @@ const DispatchDesk: React.FC = () => {
         <tr>
           <td class="act-${t.action}">${t.action}</td>
           <td>${t.approver_first_name || t.actor_name || ''} ${t.approver_last_name || ''}</td>
-          <td>${(t.approver_role || t.actor_role || '').replace(/_/g, ' ')}</td>
+          <td>${formatApprovalRole(t.approver_role || t.actor_role || '', t.approver_dept_code)}</td>
           <td>${t.comments || t.comment || '—'}</td>
           <td>${t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy HH:mm') : '—'}</td>
         </tr>`).join('');
@@ -282,7 +282,7 @@ const DispatchDesk: React.FC = () => {
 ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By</th><th>Role</th><th>Comments</th><th>Date</th></tr></thead><tbody>${trailRows}</tbody></table>`:''}
 <div class="sig-block">
   <div class="sig-col"><div class="sig-line">Requester: ${req.requester_first_name||''} ${req.requester_last_name||''}</div></div>
-  <div class="sig-col"><div class="sig-line">Programme Lead / HOP</div></div>
+  <div class="sig-col"><div class="sig-line">${trail.length > 0 && ['FOS','AHR'].includes((trail.find((t:any)=>['PROGRAM_LEAD','HEAD_OF_PROGRAMS'].includes(t.approver_role||t.actor_role||'') && t.action==='APPROVED') as any)?.approver_dept_code) ? 'Department Lead / Head of Dept' : 'Programme Lead / HOP'}</div></div>
   <div class="sig-col"><div class="sig-line">Finance Clerk</div></div>
 </div>
 <div class="page-footer">
@@ -342,7 +342,7 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code, POWERE
       const trailHeaders = ['Action', 'By', 'Role', 'Comments', 'Date'];
       const trailRows2 = trail.map((t: any) => [
         t.action, `${t.approver_first_name || t.actor_name || ''} ${t.approver_last_name || ''}`.trim(),
-        (t.approver_role || t.actor_role || '').replace(/_/g, ' '),
+        formatApprovalRole(t.approver_role || t.actor_role || '', t.approver_dept_code),
         t.comments || t.comment || '', t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy HH:mm') : ''
       ]);
       const ws3 = XLSX.utils.aoa_to_sheet([trailHeaders, ...trailRows2]);

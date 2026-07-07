@@ -178,9 +178,10 @@ export const useAuthStore = create<AuthStore>()(
 
         try {
           const response = await api.post('/auth/refresh', { refreshToken });
-          const { accessToken } = response.data.data;
+          const { accessToken, user: freshUser } = response.data.data;
           
-          set({ accessToken });
+          // Update user object when the server returns it (e.g. after a role change by admin)
+          set({ accessToken, ...(freshUser ? { user: freshUser } : {}) });
           api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
         } catch (error) {
           get().logout();

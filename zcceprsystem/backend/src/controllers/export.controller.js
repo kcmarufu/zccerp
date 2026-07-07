@@ -9,6 +9,25 @@ const { query } = require('../config/database');
 const approvalService = require('../services/approval.service');
 const notificationService = require('../services/notification.service');
 
+/**
+ * Returns the display title for an approver role, adjusted per department.
+ * FOS (Finance) and AHR (Admin/HR) use department-neutral titles.
+ */
+function formatApprovalRole(role, deptCode) {
+  const supportDepts = ['FOS', 'AHR'];
+  if (supportDepts.includes(deptCode || '')) {
+    if (role === 'PROGRAM_LEAD')     return 'Department Lead';
+    if (role === 'HEAD_OF_PROGRAMS') return 'Head of Department';
+  }
+  switch (role) {
+    case 'PROGRAM_LEAD':     return 'Program Lead';
+    case 'HEAD_OF_PROGRAMS': return 'Head of Programs';
+    case 'FINANCE_CLERK':    return 'Finance Clerk';
+    case 'ADMIN':            return 'Administrator';
+    default: return (role || '').replace(/_/g, ' ');
+  }
+}
+
 class ExportController {
 
   /**
@@ -182,7 +201,7 @@ class ExportController {
           doc.font('Helvetica-Bold').fillColor(actionColor).text(a.action, 55, y + 4, { width: 60 });
           doc.font('Helvetica').fillColor('#1a1a1a');
           doc.text(`${a.approver_first_name} ${a.approver_last_name}`, 120, y + 4, { width: 135 });
-          doc.text((a.approver_role || '').replace(/_/g, ' '), 260, y + 4, { width: 105 });
+          doc.text(formatApprovalRole(a.approver_role || '', a.approver_dept_code), 260, y + 4, { width: 105 });
           doc.text(a.comments || '—', 370, y + 4, { width: 95 });
           doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
           y += 18;
@@ -402,7 +421,7 @@ class ExportController {
           doc.font('Helvetica-Bold').fillColor(actionColor).text(a.action, 55, y + 4, { width: 60 });
           doc.font('Helvetica').fillColor('#1a1a1a');
           doc.text(`${a.approver_first_name} ${a.approver_last_name}`, 120, y + 4, { width: 135 });
-          doc.text((a.approver_role || '').replace(/_/g, ' '), 260, y + 4, { width: 105 });
+          doc.text(formatApprovalRole(a.approver_role || '', a.approver_dept_code), 260, y + 4, { width: 105 });
           doc.text(a.comments || '—', 370, y + 4, { width: 95 });
           doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
           y += 18;

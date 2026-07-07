@@ -63,7 +63,7 @@ import attachmentService, { Attachment } from '../services/attachmentService';
 import perDiemService from '../services/perDiemService';
 import { Request, RequestItem, ApprovalLog, RequestStatus, PerDiemClaim } from '../types';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
-import { buildTravelClaimPageHTML } from '../utils/pdfUtils';
+import { buildTravelClaimPageHTML, formatApprovalRole } from '../utils/pdfUtils';
 import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
@@ -542,7 +542,7 @@ ${approvalLogs.length > 0 ? `
 <table>
   <thead><tr><th>Date &amp; Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Status Change</th><th>Comments</th></tr></thead>
   <tbody>
-    ${approvalLogs.map(log => `<tr><td>${new Date(log.created_at).toLocaleString('en-GB')}</td><td>${log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}</td><td>${(log.actor_role || log.approver_role || '').replace(/_/g, ' ')}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '—'}</td><td>${log.comment || log.comments || '—'}</td></tr>`).join('')}
+    ${approvalLogs.map(log => `<tr><td>${new Date(log.created_at).toLocaleString('en-GB')}</td><td>${log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}</td><td>${formatApprovalRole(log.actor_role || log.approver_role || '', (log as any).approver_dept_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '—'}</td><td>${log.comment || log.comments || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
 
@@ -553,7 +553,7 @@ ${approvalLogs.length > 0 ? `
     <div class="sig-date">Signature: ___________________</div>
   </div>
   <div class="sig-item">
-    <div class="sig-label">Program Lead / HOP</div>
+    <div class="sig-label">${(() => { const ll = approvalLogs.find(l => ['PROGRAM_LEAD','HEAD_OF_PROGRAMS'].includes(l.actor_role || l.approver_role || '') && l.action === 'APPROVED'); const dc = (ll as any)?.approver_dept_code; return ['FOS','AHR'].includes(dc) ? 'Department Lead / Head of Dept' : 'Program Lead / HOP'; })()}</div>
     <div class="sig-name">${approvalLogs.find(l => ['PROGRAM_LEAD','HEAD_OF_PROGRAMS'].includes(l.actor_role || l.approver_role || '') && l.action === 'APPROVED') ? (approvalLogs.find(l => ['PROGRAM_LEAD','HEAD_OF_PROGRAMS'].includes(l.actor_role || l.approver_role || '') && l.action === 'APPROVED')!.actor_name || 'Approved') : '___________________'}</div>
     <div class="sig-date">Signature: ___________________</div>
   </div>
@@ -621,7 +621,7 @@ ${buildClaimPage()}
       const tRows = approvalLogs.map(log => [
         new Date(log.created_at).toLocaleString('en-GB'),
         log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim(),
-        (log.actor_role || log.approver_role || '').replace(/_/g, ' '),
+        formatApprovalRole(log.actor_role || log.approver_role || '', (log as any).approver_dept_code),
         log.action,
         log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '',
         log.comment || log.comments || ''

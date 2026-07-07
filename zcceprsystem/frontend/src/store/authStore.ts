@@ -17,6 +17,8 @@ interface AuthStore extends AuthState {
   hasPermission: (permission: string) => boolean;
   /** True for ADMIN, or for HEAD_OF_PROGRAMS/PROGRAM_LEAD in the Finance (AF) dept */
   isFinanceManager: () => boolean;
+  /** True for ADMIN, or for HEAD_OF_PROGRAMS/PROGRAM_LEAD in the Admin/HR (AHR) dept */
+  isAdminHrManager: () => boolean;
 }
 
 // Role-based permissions mapping
@@ -175,9 +177,10 @@ export const useAuthStore = create<AuthStore>()(
 
         try {
           const response = await api.post('/auth/refresh', { refreshToken });
-          const { accessToken } = response.data.data;
+          const { accessToken, user: freshUser } = response.data.data;
           
-          set({ accessToken });
+          // Update user object when the server returns it (e.g. after a role change by admin)
+          set({ accessToken, ...(freshUser ? { user: freshUser } : {}) });
           api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
         } catch (error) {
           get().logout();
@@ -206,6 +209,15 @@ export const useAuthStore = create<AuthStore>()(
         if (user.role === 'ADMIN') return true;
         return ['HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'].includes(user.role)
           && user.department_code === 'AF';
+      },
+
+      isAdminHrManager: () => {
+        const { user } = get();
+        if (!user) return false;
+        if (user.role === 'ADMIN') return true;
+        // Admin/HR dept (AHR) HOPs/Leads can manage partners (donors) and projects
+        return ['HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'].includes(user.role)
+          && user.department_code === 'AHR';
       }
     }),
     {

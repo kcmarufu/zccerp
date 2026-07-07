@@ -69,7 +69,7 @@ import {
 import * as XLSX from 'xlsx';
 import { toast } from 'react-toastify';
 import { format, formatDistanceToNow } from 'date-fns';
-import { downloadHTMLAsPDF, buildDigitalStamp, buildTravelClaimPageHTML } from '../utils/pdfUtils';
+import { downloadHTMLAsPDF, buildDigitalStamp, buildTravelClaimPageHTML, formatApprovalRole } from '../utils/pdfUtils';
 
 import { Request, RequestItem, BudgetImpact, ApprovalPayload, PerDiemClaim } from '../types';
 import { approvalService } from '../services/approvalService';
@@ -433,7 +433,7 @@ const ApprovalsPage: React.FC = () => {
         <tr>
           <td class="act-${t.action}">${t.action}</td>
           <td>${t.approver_first_name || t.actor_name || ''} ${t.approver_last_name || ''}</td>
-          <td>${(t.approver_role || t.actor_role || '').replace(/_/g,' ')}</td>
+          <td>${formatApprovalRole(t.approver_role || t.actor_role || '', t.approver_dept_code)}</td>
           <td>${t.comments || t.comment || '—'}</td>
           <td>${t.created_at ? format(new Date(t.created_at),'dd MMM yyyy HH:mm') : '—'}</td>
         </tr>`).join('');
@@ -492,7 +492,7 @@ const ApprovalsPage: React.FC = () => {
 ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By</th><th>Role</th><th>Comments</th><th>Date</th></tr></thead><tbody>${trailRows}</tbody></table>`:''}
 <div class="sig-block">
   <div class="sig-col"><div class="sig-line">Requester: ${req.requester_first_name||''} ${req.requester_last_name||''}</div></div>
-  <div class="sig-col"><div class="sig-line">Programme Lead / HOP</div></div>
+  <div class="sig-col"><div class="sig-line">${trail.length > 0 && ['FOS','AHR'].includes((trail.find((t:any)=>['PROGRAM_LEAD','HEAD_OF_PROGRAMS'].includes(t.approver_role||t.actor_role||'') && t.action==='APPROVED') as any)?.approver_dept_code) ? 'Department Lead / Head of Dept' : 'Programme Lead / HOP'}</div></div>
   <div class="sig-col"><div class="sig-line">Finance Clerk</div></div>
 </div>
 <div class="page-footer">

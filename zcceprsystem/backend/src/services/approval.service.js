@@ -672,9 +672,11 @@ class ApprovalService {
         u.email as approver_email,
         CONCAT(u.first_name, ' ', u.last_name) as actor_name,
         al.approver_role as actor_role,
-        al.comments as comment
+        al.comments as comment,
+        d.department_code as approver_dept_code
        FROM approval_logs al
        JOIN users u ON al.approver_id = u.id
+       LEFT JOIN departments d ON u.department_id = d.id
        WHERE al.request_id = ?
        ORDER BY al.created_at ASC`,
       [requestId]

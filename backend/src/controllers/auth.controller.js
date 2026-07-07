@@ -122,11 +122,12 @@ class AuthController {
 
       const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
 
-      // Fetch fresh user data
+      // Fetch fresh user data (including department for role-permission checks)
       const users = await query(
-        `SELECT u.*, r.role_name
+        `SELECT u.*, r.role_name, d.department_name, d.department_code
          FROM users u
          JOIN roles r ON u.role_id = r.id
+         LEFT JOIN departments d ON u.department_id = d.id
          WHERE u.id = ? AND u.is_active = TRUE`,
         [decoded.userId]
       );
@@ -151,9 +152,15 @@ class AuthController {
         { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
       );
 
+      // Return fresh user data so the frontend can update the session store
+      // without requiring a full logout/login after a role change.
+      const { password_hash, failed_login_attempts, locked_until, ...userData } = user;
       res.json({
         success: true,
-        data: { accessToken }
+        data: {
+          accessToken,
+          user: { ...userData, role: user.role_name }
+        }
       });
     } catch (error) {
       if (error.name === 'TokenExpiredError') {

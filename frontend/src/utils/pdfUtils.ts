@@ -151,6 +151,29 @@ export const buildDigitalStamp = (_status?: string): string => {
   return '';
 };
 
+/**
+ * Returns the human-readable role title for the approval trail.
+ * FOS (Finance) and AHR (Admin/HR) use department-neutral titles:
+ *   PROGRAM_LEAD      → "Department Lead"
+ *   HEAD_OF_PROGRAMS  → "Head of Department"
+ * All other departments keep the programme-oriented titles.
+ */
+export const formatApprovalRole = (role: string, deptCode?: string): string => {
+  const supportDepts = ['FOS', 'AHR'];
+  if (supportDepts.includes(deptCode || '')) {
+    if (role === 'PROGRAM_LEAD')     return 'Department Lead';
+    if (role === 'HEAD_OF_PROGRAMS') return 'Head of Department';
+  }
+  switch (role) {
+    case 'PROGRAM_LEAD':     return 'Program Lead';
+    case 'HEAD_OF_PROGRAMS': return 'Head of Programs';
+    case 'FINANCE_CLERK':    return 'Finance Clerk';
+    case 'ADMIN':            return 'Administrator';
+    case 'GENERAL_USER':     return 'General User';
+    default: return (role || '').replace(/_/g, ' ');
+  }
+};
+
 export const downloadHTMLAsPDF = (htmlString: string, filename: string): void => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlString, 'text/html');
