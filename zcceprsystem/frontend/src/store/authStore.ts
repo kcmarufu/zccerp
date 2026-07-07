@@ -12,6 +12,10 @@ interface AuthStore extends AuthState {
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   refreshAccessToken: () => Promise<void>;
+  /** Fetch the latest user profile from the server and update the store.
+   *  Called on app startup so that admin role changes take effect immediately
+   *  without requiring the affected user to log out and back in. */
+  syncUser: () => Promise<void>;
   setLoading: (loading: boolean) => void;
   hasRole: (...roles: UserRole[]) => boolean;
   hasPermission: (permission: string) => boolean;
@@ -188,6 +192,19 @@ export const useAuthStore = create<AuthStore>()(
         }
       },
 
+      syncUser: async () => {
+        const { accessToken, isAuthenticated } = get();
+        if (!accessToken || !isAuthenticated) return;
+        try {
+          const response = await api.get('/auth/me');
+          if (response.data?.success && response.data.data) {
+            set({ user: response.data.data });
+          }
+        } catch {
+          // Silently ignore — network issues shouldn't break the app
+        }
+      },
+
       setLoading: (loading: boolean) => set({ isLoading: loading }),
 
       hasRole: (...roles: UserRole[]) => {
@@ -233,11 +250,15 @@ export const useAuthStore = create<AuthStore>()(
   )
 );
 
-// Initialize API headers on store rehydration
+// Initialize API headers on store rehydration and sync fresh user data from server.
+// This ensures any role/department changes made by an admin take effect immediately
+// on the next page load — without requiring the affected user to log out.
 const initializeAuth = () => {
   const state = useAuthStore.getState();
   if (state.accessToken) {
     api.defaults.headers.common['Authorization'] = `Bearer ${state.accessToken}`;
+    // Fire-and-forget: refresh user profile so stale sessionStorage is replaced
+    useAuthStore.getState().syncUser();
   }
 };
 
