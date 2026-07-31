@@ -4,7 +4,7 @@
  */
 
 const { validationResult } = require('express-validator');
-const { ROLES, REQUEST_STATUS } = require('../config/roles');
+const { ROLES, REQUEST_STATUS, isFinanceManager } = require('../config/roles');
 const { query } = require('../config/database');
 const approvalService = require('../services/approval.service');
 
@@ -48,7 +48,7 @@ class ApprovalController {
               });
             }
             result = await approvalService.approveAsFinance(
-              requestId, approverId, comments, version, ipAddress
+              requestId, approverId, comments, version, ipAddress, approverRole
             );
           } else {
             result = await approvalService.approveAsLead(
@@ -67,7 +67,7 @@ class ApprovalController {
               });
             }
             result = await approvalService.approveAsFinance(
-              requestId, approverId, comments, version, ipAddress
+              requestId, approverId, comments, version, ipAddress, approverRole
             );
           } else {
             result = await approvalService.approveAsHOP(
@@ -78,7 +78,7 @@ class ApprovalController {
 
         case ROLES.FINANCE_CLERK:
           result = await approvalService.approveAsFinance(
-            requestId, approverId, comments, version, ipAddress
+            requestId, approverId, comments, version, ipAddress, approverRole
           );
           break;
 
@@ -156,6 +156,41 @@ class ApprovalController {
       });
     } catch (error) {
       console.error('Rejection error:', error);
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Failed to reject request'
+      });
+    }
+  }
+
+  /**
+   * Finance force-reject a request that is APPROVED or DISPATCHED
+   * POST /api/approvals/:requestId/finance-force-reject
+   */
+  async financeForceReject(req, res) {
+    try {
+      // Finance Clerk, Admin, and finance managers (FOS Lead/HOP) only — a Lead/HOP
+      // from a non-finance department must not be able to force-reject.
+      if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(req.user.role) && !isFinanceManager(req.user)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Only Finance can reject an already-approved request'
+        });
+      }
+
+      const { requestId } = req.params;
+      const { comments } = req.body;
+      const approverId = req.user.id;
+      const approverRole = req.user.role;
+      const ipAddress = req.ip;
+
+      const result = await approvalService.financeForceReject(
+        requestId, approverId, approverRole, comments, ipAddress
+      );
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error('Finance force-reject error:', error);
       res.status(400).json({
         success: false,
         error: error.message || 'Failed to reject request'

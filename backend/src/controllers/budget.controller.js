@@ -545,7 +545,8 @@ class BudgetController {
           SUM(bl.allocated_amount) as total_allocated,
           SUM(bl.spent_amount) as total_spent,
           SUM(bl.allocated_amount - bl.spent_amount) as total_balance,
-          ROUND(AVG((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100), 2) as avg_utilization
+          -- Utilisation from group totals, not the average of per-line percentages.
+          ROUND(COALESCE(SUM(bl.spent_amount) / NULLIF(SUM(bl.allocated_amount), 0) * 100, 0), 2) as avg_utilization
          FROM departments d
          LEFT JOIN budget_lines bl ON d.id = bl.department_id AND bl.is_active = TRUE ${yearFilter}
          ${departmentScope}
@@ -952,7 +953,10 @@ class BudgetController {
           COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
           don.total_committed - COALESCE(SUM(bl.allocated_amount), 0) as unallocated,
           COUNT(bl.id) as budget_line_count,
-          ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
+          -- Utilisation must come from the group totals, not the average of each line's
+          -- percentage: averaging lets one small overspent line read as full utilisation
+          -- while the group still has budget remaining.
+          ROUND(COALESCE(SUM(bl.spent_amount) / NULLIF(SUM(bl.allocated_amount), 0) * 100, 0), 2) as avg_utilization
         FROM donors don
         LEFT JOIN budget_lines bl ON don.id = bl.donor_id AND bl.is_active = TRUE ${deptJoinFilter} ${yearFilter} ${projectFilter}
         WHERE don.is_active = TRUE ${donorId ? 'AND don.id = ?' : ''}
@@ -977,7 +981,10 @@ class BudgetController {
           COALESCE(SUM(bl.spent_amount), 0) as total_spent,
           COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
           COUNT(bl.id) as budget_line_count,
-          ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
+          -- Utilisation must come from the group totals, not the average of each line's
+          -- percentage: averaging lets one small overspent line read as full utilisation
+          -- while the group still has budget remaining.
+          ROUND(COALESCE(SUM(bl.spent_amount) / NULLIF(SUM(bl.allocated_amount), 0) * 100, 0), 2) as avg_utilization
         FROM projects p
         LEFT JOIN donors don ON p.donor_id = don.id
         LEFT JOIN budget_lines bl ON bl.project_id = p.id AND bl.is_active = TRUE ${deptJoinFilter} ${yearFilter}
@@ -998,7 +1005,10 @@ class BudgetController {
           COALESCE(SUM(bl.allocated_amount), 0) as total_allocated,
           COALESCE(SUM(bl.spent_amount), 0) as total_spent,
           COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
-          ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
+          -- Utilisation must come from the group totals, not the average of each line's
+          -- percentage: averaging lets one small overspent line read as full utilisation
+          -- while the group still has budget remaining.
+          ROUND(COALESCE(SUM(bl.spent_amount) / NULLIF(SUM(bl.allocated_amount), 0) * 100, 0), 2) as avg_utilization
         FROM departments d
         LEFT JOIN budget_lines bl ON d.id = bl.department_id AND bl.is_active = TRUE ${scopedYearFilter}
         GROUP BY d.id, d.department_name, d.department_code
@@ -1015,7 +1025,10 @@ class BudgetController {
           COALESCE(SUM(bl.allocated_amount), 0) as total_allocated,
           COALESCE(SUM(bl.spent_amount), 0) as total_spent,
           COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
-          ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
+          -- Utilisation must come from the group totals, not the average of each line's
+          -- percentage: averaging lets one small overspent line read as full utilisation
+          -- while the group still has budget remaining.
+          ROUND(COALESCE(SUM(bl.spent_amount) / NULLIF(SUM(bl.allocated_amount), 0) * 100, 0), 2) as avg_utilization
         FROM budget_lines bl
         WHERE bl.is_active = TRUE ${scopedYearFilter}
         GROUP BY bl.category
@@ -1277,7 +1290,9 @@ class BudgetController {
           COALESCE(SUM(bl.spent_amount), 0) as grand_total_spent,
           COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as grand_total_remaining,
           COUNT(bl.id) as total_budget_lines,
-          ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as overall_utilization
+          -- Utilisation from grand totals so it agrees with the remaining balance shown
+          -- alongside it, rather than averaging each line's percentage.
+          ROUND(COALESCE(SUM(bl.spent_amount) / NULLIF(SUM(bl.allocated_amount), 0) * 100, 0), 2) as overall_utilization
         FROM budget_lines bl
         WHERE bl.is_active = TRUE ${scopedYearFilter}`,
         scopedYearParam

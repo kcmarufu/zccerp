@@ -24,7 +24,7 @@ const procurementController = require('../controllers/procurement.controller');
 const notificationService = require('../services/notification.service');
 
 // Middleware
-const { authenticateToken, requireRole, requirePermission, requireSameDepartment, requireFinanceManager, requirePartnerManager } = require('../middleware/auth.middleware');
+const { authenticateToken, requireRole, requirePermission, requireSameDepartment, requireFinanceManager, requireDispatchAccess } = require('../middleware/auth.middleware');
 const { uploadSingle, uploadMultiple, handleUploadError } = require('../middleware/upload.middleware');
 const {
   createRequestValidator,
@@ -73,6 +73,10 @@ router.get('/approvals/:requestId/trail', authenticateToken, approvalController.
 router.get('/approvals/:requestId/budget-impact', authenticateToken, requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN), approvalController.getBudgetImpact.bind(approvalController));
 router.post('/approvals/:requestId/reverse', authenticateToken, requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN), approvalController.reverseApproval.bind(approvalController));
 router.get('/approvals/:requestId/can-reverse', authenticateToken, requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN), approvalController.canReverseApproval.bind(approvalController));
+// Finance Lead/HOP (FOS dept) carry finance authority alongside the Finance Clerk, and the UI
+// offers them this action. Admit those roles here; the controller then narrows it to finance
+// managers so a non-finance department Lead still cannot force-reject.
+router.post('/approvals/:requestId/finance-force-reject', authenticateToken, requireRole(ROLES.FINANCE_CLERK, ROLES.ADMIN, ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS), approvalController.financeForceReject.bind(approvalController));
 router.get('/approvals/history', authenticateToken, requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN), approvalController.getApprovalHistory.bind(approvalController));
 router.get('/approvals/approved', authenticateToken, requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN), approvalController.getApprovedRequests.bind(approvalController));
 router.get('/approvals/rejected', authenticateToken, requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN), approvalController.getRejectedRequests.bind(approvalController));
@@ -101,8 +105,8 @@ router.get('/export/dispatch/:requestId/pdf', authenticateToken, requirePermissi
 router.get('/export/reconciliation/:requestId/pdf', authenticateToken, exportController.generateReconciliationPDF.bind(exportController));
 router.get('/export/dispatch/:requestId/excel', authenticateToken, requirePermission(PERMISSIONS.EXPORT_DATA), exportController.generateDispatchExcel.bind(exportController));
 router.post('/export/bulk', authenticateToken, requirePermission(PERMISSIONS.EXPORT_DATA), exportController.generateBulkExport.bind(exportController));
-router.post('/export/dispatch/:requestId/mark-dispatched', authenticateToken, requireRole(ROLES.FINANCE_CLERK, ROLES.ADMIN), exportController.markAsDispatched.bind(exportController));
-router.post('/export/dispatch/:requestId/reverse-dispatch', authenticateToken, requireRole(ROLES.FINANCE_CLERK, ROLES.ADMIN), exportController.reverseDispatch.bind(exportController));
+router.post('/export/dispatch/:requestId/mark-dispatched', authenticateToken, requireDispatchAccess, exportController.markAsDispatched.bind(exportController));
+router.post('/export/dispatch/:requestId/reverse-dispatch', authenticateToken, requireDispatchAccess, exportController.reverseDispatch.bind(exportController));
 
 // ============================================================================
 // DONOR ROUTES
@@ -111,17 +115,17 @@ router.post('/export/dispatch/:requestId/reverse-dispatch', authenticateToken, r
 router.get('/donors/next-code', authenticateToken, donorController.getNextDonorCode.bind(donorController));
 router.get('/donors', authenticateToken, donorController.getAllDonors.bind(donorController));
 router.get('/donors/:donorId/projects', authenticateToken, projectController.getProjectsByDonor.bind(projectController));
-router.post('/donors/:donorId/projects', authenticateToken, requirePartnerManager, projectController.createProject.bind(projectController));
+router.post('/donors/:donorId/projects', authenticateToken, requireFinanceManager, projectController.createProject.bind(projectController));
 router.get('/donors/:id/stats', authenticateToken, donorController.getDonorStats.bind(donorController));
 router.get('/donors/:id/transactions', authenticateToken, donorController.getDonorTransactions.bind(donorController));
 router.get('/donors/:id/budget-lines', authenticateToken, donorController.getDonorBudgetLines.bind(donorController));
 router.get('/donors/:id', authenticateToken, donorController.getDonorById.bind(donorController));
-router.post('/donors', authenticateToken, requirePartnerManager, donorController.createDonor.bind(donorController));
-router.put('/donors/:id', authenticateToken, requirePartnerManager, donorController.updateDonor.bind(donorController));
-router.patch('/donors/:id/activate', authenticateToken, requirePartnerManager, donorController.activateDonor.bind(donorController));
-router.patch('/donors/:id/deactivate', authenticateToken, requirePartnerManager, donorController.deactivateDonor.bind(donorController));
-router.post('/donors/:id/add-funds', authenticateToken, requirePartnerManager, donorController.addFunds.bind(donorController));
-router.post('/donors/:id/remove-funds', authenticateToken, requirePartnerManager, donorController.removeFunds.bind(donorController));
+router.post('/donors', authenticateToken, requireFinanceManager, donorController.createDonor.bind(donorController));
+router.put('/donors/:id', authenticateToken, requireFinanceManager, donorController.updateDonor.bind(donorController));
+router.patch('/donors/:id/activate', authenticateToken, requireFinanceManager, donorController.activateDonor.bind(donorController));
+router.patch('/donors/:id/deactivate', authenticateToken, requireFinanceManager, donorController.deactivateDonor.bind(donorController));
+router.post('/donors/:id/add-funds', authenticateToken, requireFinanceManager, donorController.addFunds.bind(donorController));
+router.post('/donors/:id/remove-funds', authenticateToken, requireFinanceManager, donorController.removeFunds.bind(donorController));
 router.delete('/donors/:id', authenticateToken, requireRole(ROLES.ADMIN), donorController.deleteDonor.bind(donorController));
 
 // ============================================================================
@@ -132,10 +136,10 @@ router.get('/projects', authenticateToken, projectController.getAllProjects.bind
 router.get('/projects/:id/budget-lines', authenticateToken, projectController.getProjectBudgetLines.bind(projectController));
 router.get('/projects/:id/activity', authenticateToken, projectController.getProjectActivity.bind(projectController));
 router.get('/projects/:id', authenticateToken, projectController.getProjectById.bind(projectController));
-router.post('/projects', authenticateToken, requirePartnerManager, projectController.createProject.bind(projectController));
-router.put('/projects/:id', authenticateToken, requirePartnerManager, projectController.updateProject.bind(projectController));
-router.post('/projects/:id/add-funds', authenticateToken, requirePartnerManager, projectController.addProjectFunds.bind(projectController));
-router.post('/projects/:id/deduct-funds', authenticateToken, requirePartnerManager, projectController.deductProjectFunds.bind(projectController));
+router.post('/projects', authenticateToken, requireFinanceManager, projectController.createProject.bind(projectController));
+router.put('/projects/:id', authenticateToken, requireFinanceManager, projectController.updateProject.bind(projectController));
+router.post('/projects/:id/add-funds', authenticateToken, requireFinanceManager, projectController.addProjectFunds.bind(projectController));
+router.post('/projects/:id/deduct-funds', authenticateToken, requireFinanceManager, projectController.deductProjectFunds.bind(projectController));
 router.delete('/projects/:id', authenticateToken, requireRole(ROLES.ADMIN), projectController.deleteProject.bind(projectController));
 
 // ============================================================================
@@ -148,6 +152,7 @@ router.get('/reconciliations/pending', authenticateToken, reconciliationControll
 router.get('/reconciliations/pending-lead', authenticateToken, reconciliationController.getPendingLeadReconciliations.bind(reconciliationController));
 router.get('/reconciliations/lead-approved', authenticateToken, reconciliationController.getLeadApprovedReconciliations.bind(reconciliationController));
 router.get('/reconciliations/history', authenticateToken, reconciliationController.getReconciliationHistory.bind(reconciliationController));
+router.get('/reconciliations/finance-review-history', authenticateToken, reconciliationController.getFinanceReviewHistory.bind(reconciliationController));
 router.get('/reconciliations/overdue-check', authenticateToken, reconciliationController.getOverdueCheck.bind(reconciliationController));
 router.get('/reconciliations/:requestId', authenticateToken, reconciliationController.getReconciliation.bind(reconciliationController));
 router.post('/reconciliations', authenticateToken, reconciliationController.submitReconciliation.bind(reconciliationController));
@@ -184,10 +189,13 @@ router.put('/procurement/requests/:id', authenticateToken, procurementController
 router.delete('/procurement/requests/:id', authenticateToken, procurementController.deletePurchaseRequest.bind(procurementController));
 router.post('/procurement/requests/:id/submit', authenticateToken, procurementController.submitPurchaseRequest.bind(procurementController));
 router.post('/procurement/requests/:id/approve', authenticateToken, procurementController.approveDeptLevel.bind(procurementController));
+// Backward-compatibility alias for cached browsers that call the old approve-dept endpoint
+router.post('/procurement/requests/:id/approve-dept', authenticateToken, procurementController.approveDeptLevel.bind(procurementController));
 router.post('/procurement/requests/:id/reject', authenticateToken, procurementController.rejectRequest.bind(procurementController));
 router.post('/procurement/requests/:id/reverse-dept-approval', authenticateToken, procurementController.reverseDeptApproval.bind(procurementController));
 router.post('/procurement/requests/:id/finance-approve', authenticateToken, procurementController.approveFinanceLevel.bind(procurementController));
 router.post('/procurement/requests/:id/submit-committee', authenticateToken, procurementController.submitToCommittee.bind(procurementController));
+router.post('/procurement/requests/:id/resubmit-committee', authenticateToken, procurementController.resubmitToCommittee.bind(procurementController));
 router.post('/procurement/requests/:id/committee-decision', authenticateToken, procurementController.committeeDecision.bind(procurementController));
 router.post('/procurement/requests/:id/final-approve', authenticateToken, uploadSingle, handleUploadError, procurementController.finalFinanceApproval.bind(procurementController));
 router.post('/procurement/requests/:id/reverse-final-approval', authenticateToken, procurementController.reverseFinalApproval.bind(procurementController));
@@ -198,9 +206,11 @@ router.get('/procurement/requests/:id/attachments', authenticateToken, procureme
 router.post('/procurement/requests/:id/attachments', authenticateToken, uploadSingle, handleUploadError, procurementController.uploadRequestAttachment.bind(procurementController));
 router.delete('/procurement/requests/:id/attachments/:attachmentId', authenticateToken, procurementController.deleteRequestAttachment.bind(procurementController));
 router.get('/procurement/requests/:id/attachments/:attachmentId/download', authenticateToken, procurementController.downloadRequestAttachment.bind(procurementController));
+// Alias used by frontend procurementService.downloadRequestAttachment (no requestId in URL)
+router.get('/procurement/attachments/:attachmentId/download', authenticateToken, procurementController.downloadRequestAttachment.bind(procurementController));
 router.get('/procurement/requests/:id/quotations', authenticateToken, procurementController.getQuotations.bind(procurementController));
 router.post('/procurement/requests/:id/quotations', authenticateToken, uploadSingle, handleUploadError, procurementController.uploadQuotation.bind(procurementController));
-router.put('/procurement/requests/:id/quotations/:quotationId', authenticateToken, procurementController.updateQuotation.bind(procurementController));
+router.put('/procurement/requests/:id/quotations/:quotationId', authenticateToken, uploadSingle, handleUploadError, procurementController.updateQuotation.bind(procurementController));
 router.delete('/procurement/requests/:id/quotations/:quotationId', authenticateToken, procurementController.deleteQuotation.bind(procurementController));
 router.get('/procurement/requests/:id/quotations/:quotationId/download', authenticateToken, procurementController.downloadQuotation.bind(procurementController));
 router.get('/procurement/requests/:id/pop/download', authenticateToken, procurementController.downloadPOP.bind(procurementController));
@@ -217,6 +227,7 @@ router.delete('/procurement/vendors/:id', authenticateToken, procurementControll
 router.get('/per-diem/rates', authenticateToken, perDiemController.getRates.bind(perDiemController));
 router.get('/requests/:requestId/per-diem', authenticateToken, perDiemController.getClaim.bind(perDiemController));
 router.post('/requests/:requestId/per-diem', authenticateToken, perDiemController.upsertClaim.bind(perDiemController));
+router.put('/requests/:requestId/per-diem', authenticateToken, perDiemController.upsertClaim.bind(perDiemController));
 router.delete('/requests/:requestId/per-diem', authenticateToken, perDiemController.deleteClaim.bind(perDiemController));
 
 // ============================================================================
@@ -266,8 +277,12 @@ router.put('/notifications/read-all', authenticateToken, async (req, res) => {
 router.get('/admin/overview', authenticateToken, requireRole(ROLES.ADMIN), adminController.getOverallOverview.bind(adminController));
 router.get('/admin/users', authenticateToken, requireRole(ROLES.ADMIN), adminController.getAllUsers.bind(adminController));
 router.post('/admin/users', authenticateToken, requireRole(ROLES.ADMIN), adminController.createUser.bind(adminController));
+router.get('/admin/users/:id', authenticateToken, requireRole(ROLES.ADMIN), adminController.getUserById.bind(adminController));
 router.put('/admin/users/:id', authenticateToken, requireRole(ROLES.ADMIN), adminController.updateUser.bind(adminController));
 router.delete('/admin/users/:id', authenticateToken, requireRole(ROLES.ADMIN), adminController.deleteUser.bind(adminController));
+router.post('/admin/users/:id/reset-password', authenticateToken, requireRole(ROLES.ADMIN), adminController.resetPassword.bind(adminController));
+router.patch('/admin/users/:id/toggle-active', authenticateToken, requireRole(ROLES.ADMIN), adminController.toggleActive.bind(adminController));
+router.get('/admin/users/:id/login-history', authenticateToken, requireRole(ROLES.ADMIN), adminController.getLoginHistory.bind(adminController));
 router.get('/admin/departments', authenticateToken, requireRole(ROLES.ADMIN), adminController.getDepartments.bind(adminController));
 router.post('/admin/departments', authenticateToken, requireRole(ROLES.ADMIN), adminController.createDepartment.bind(adminController));
 router.put('/admin/departments/:id', authenticateToken, requireRole(ROLES.ADMIN), adminController.updateDepartment.bind(adminController));

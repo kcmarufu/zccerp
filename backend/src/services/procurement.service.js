@@ -400,24 +400,52 @@ class ProcurementService {
         conn, existing.project_id, requestId, existing.department_id
       );
 
+      // A resubmission returns to the desk that rejected it — a request rejected by
+      // Finance goes back to Finance, not through the whole pipeline again. Only a
+      // first-time submission starts at department approval.
+      let targetStatus = PROC_STATUS.PENDING_DEPT_APPROVAL;
+      if (isResubmission) {
+        const [rejectionLogs] = await conn.execute(
+          `SELECT previous_status FROM proc_approval_logs
+           WHERE request_id = ? AND action = 'REJECTED'
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [requestId]
+        );
+        const rejectedFrom = rejectionLogs[0]?.previous_status;
+        const resumable = [
+          PROC_STATUS.PENDING_DEPT_APPROVAL,
+          PROC_STATUS.PENDING_PROCUREMENT,
+          PROC_STATUS.PENDING_COMMITTEE,
+          PROC_STATUS.PENDING_FINAL_FINANCE
+        ];
+        if (resumable.includes(rejectedFrom)) {
+          targetStatus = rejectedFrom;
+        }
+      }
+
       await conn.execute(
-        `UPDATE proc_requests SET status='PENDING_DEPT_APPROVAL', routing_department_id=?, submitted_at=IF(submitted_at IS NULL, NOW(), submitted_at), rejection_reason=NULL, updated_at=NOW() WHERE id=?`,
-        [routingDepartmentId, requestId]
+        `UPDATE proc_requests SET status=?, routing_department_id=?, submitted_at=IF(submitted_at IS NULL, NOW(), submitted_at), rejection_reason=NULL, updated_at=NOW() WHERE id=?`,
+        [targetStatus, routingDepartmentId, requestId]
       );
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-         VALUES (?, ?, ?, ?, ?, 'PENDING_DEPT_APPROVAL', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [requestId, user.id, user.role,
           isResubmission ? 'RESUBMITTED' : 'SUBMITTED',
           existing.status,
+          targetStatus,
           isResubmission ? 'Request resubmitted after revision' : 'Request submitted for approval'
         ]
       );
-      return { success: true, _notif: { requestCode: existing.request_code, requesterId: user.id, deptId: existing.department_id, routingDeptId: routingDepartmentId } };
+      return { success: true, status: targetStatus, _notif: { requestCode: existing.request_code, requesterId: user.id, deptId: existing.department_id, routingDeptId: routingDepartmentId, targetStatus } };
     }).then(result => {
       if (result._notif) {
         const n = result._notif; delete result._notif;
-        notificationService.onProcurementSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.routingDeptId).catch(() => {});
+        // Only the department-approval stage notifies department Leads; a resubmission
+        // that resumes further down the pipeline must not ping them again.
+        if (n.targetStatus === PROC_STATUS.PENDING_DEPT_APPROVAL) {
+          notificationService.onProcurementSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.routingDeptId).catch(() => {});
+        }
       }
       return result;
     });
