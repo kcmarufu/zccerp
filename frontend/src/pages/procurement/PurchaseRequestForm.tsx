@@ -162,12 +162,15 @@ const PurchaseRequestForm: React.FC = () => {
     setCrossDeptWarning(null);
     if (!projectId) return;
 
-    // Cross-department warning
+    // Show which department's Lead/HOD will receive this request for approval.
+    // Routing follows the project's owning department, not the requester's.
     const selected = projects.find(p => p.id === projectId);
-    if (selected && selected.department_id && user?.department_id && selected.department_id !== user.department_id) {
+    if (selected && selected.department_id) {
       const ownerDept = selected.department_name || `Department ID ${selected.department_id}`;
       setCrossDeptWarning(
-        `This project is not assigned to your department. Your request will be routed to the HOP/Lead of the ${ownerDept} department for approval.`
+        selected.department_id === user?.department_id
+          ? `This request will be routed to the Lead/HOD of the ${ownerDept} department for approval.`
+          : `This project belongs to the ${ownerDept} department. Your request will be routed to the Lead/HOD of ${ownerDept} for approval — not your own department.`
       );
     }
 
@@ -211,7 +214,7 @@ const PurchaseRequestForm: React.FC = () => {
     title,
     justification,
     donor_id: donorId,
-    project_id: projectId || undefined,
+    project_id: projectId,
     expected_delivery_date: deliveryDate || null,
     items: items.map(i => ({
       item_description: i.item_description,
@@ -243,6 +246,10 @@ const PurchaseRequestForm: React.FC = () => {
   const validate = () => {
     if (!title.trim()) { toast.error('Title is required'); return false; }
     if (!justification.trim()) { toast.error('Justification is required'); return false; }
+    // Donor and Project are mandatory — the project determines which department's
+    // Lead/HOD approves this request.
+    if (!donorId) { toast.error('Donor is required'); return false; }
+    if (!projectId) { toast.error('Project is required'); return false; }
     if (items.length === 0) { toast.error('Add at least one item'); return false; }
     for (const item of items) {
       if (!item.item_description.trim()) { toast.error('All items must have a description'); return false; }
@@ -391,11 +398,10 @@ const PurchaseRequestForm: React.FC = () => {
           </Grid>
           <Grid item xs={12} md={4}>
             <TextField
-              select fullWidth label="Donor (optional)"
+              select fullWidth required label="Donor"
               value={donorId || ''} onChange={e => { setDonorId(e.target.value ? Number(e.target.value) : null); setProjectId(null); }}
               helperText="Link this request to a donor / funding source"
             >
-              <MenuItem value=""><em>No specific donor</em></MenuItem>
               {(donors as any[]).map((d: any) => (
                 <MenuItem key={d.id} value={d.id}>
                   <Box>
@@ -409,13 +415,12 @@ const PurchaseRequestForm: React.FC = () => {
           {donorId && (
             <Grid item xs={12} md={4}>
               <TextField
-                select fullWidth label="Project (optional)"
+                select fullWidth required label="Project"
                 value={projectId || ''} onChange={e => setProjectId(e.target.value ? Number(e.target.value) : null)}
-                helperText="Select a project to filter budget lines"
+                helperText="Approval is routed to the Lead/HOD of the department that owns this project"
                 disabled={loadingProjects}
                 InputProps={loadingProjects ? { endAdornment: <CircularProgress size={16} /> } : undefined}
               >
-                <MenuItem value=""><em>All projects</em></MenuItem>
                 {projects.map((p) => (
                   <MenuItem key={p.id} value={p.id}>
                     <Box>

@@ -5,7 +5,7 @@
  */
 
 const { query, transaction } = require('../config/database');
-const { ROLES } = require('../config/roles');
+const { ROLES, isAdminHrManager } = require('../config/roles');
 const notificationService = require('./notification.service');
 
 const PROC_STATUS = {
@@ -26,8 +26,67 @@ class ProcurementService {
   // PURCHASE REQUESTS
   // ============================================================
 
+  /**
+   * Resolve the department that owns the selected project. This — not the
+   * requester's department — decides which Lead/HOD gives the first approval.
+   *
+   * Falls back to the department on the request's budget lines for older
+   * projects that were created before projects.department_id existed, and
+   * finally to the requester's own department so a request is never left
+   * without an approver.
+   */
+  async _resolveOwningDepartmentId(conn, projectId, requestId, fallbackDepartmentId) {
+    const run = conn ? (sql, p) => conn.execute(sql, p).then(r => r[0]) : query;
+
+    const projRows = await run(
+      'SELECT department_id FROM projects WHERE id = ?',
+      [projectId]
+    );
+    if (projRows.length && projRows[0].department_id) {
+      return projRows[0].department_id;
+    }
+
+    if (requestId) {
+      const blRows = await run(
+        `SELECT bl.department_id
+         FROM proc_request_items pri
+         JOIN budget_lines bl ON bl.id = pri.budget_line_id
+         WHERE pri.request_id = ? AND bl.department_id IS NOT NULL
+         LIMIT 1`,
+        [requestId]
+      );
+      if (blRows.length && blRows[0].department_id) {
+        return blRows[0].department_id;
+      }
+    }
+
+    return fallbackDepartmentId || null;
+  }
+
+  /**
+   * Donor and Project are mandatory on a purchase request — the project is what
+   * determines the approval route, so a request cannot exist without one.
+   */
+  async _validateDonorAndProject(conn, donorId, projectId) {
+    const run = conn ? (sql, p) => conn.execute(sql, p).then(r => r[0]) : query;
+
+    if (!donorId) throw new Error('Donor is required');
+    if (!projectId) throw new Error('Project is required');
+
+    const projRows = await run(
+      'SELECT id, donor_id FROM projects WHERE id = ?',
+      [projectId]
+    );
+    if (!projRows.length) throw new Error('Selected project does not exist');
+    if (Number(projRows[0].donor_id) !== Number(donorId)) {
+      throw new Error('Selected project does not belong to the selected donor');
+    }
+  }
+
   async createPurchaseRequest(data, user) {
     return transaction(async (conn) => {
+      await this._validateDonorAndProject(conn, data.donor_id, data.project_id);
+
       const year = new Date().getFullYear();
       const [seq] = await conn.execute(
         'SELECT COUNT(*) + 1 AS seq FROM proc_requests WHERE YEAR(created_at) = ?',
@@ -39,21 +98,11 @@ class ProcurementService {
         return sum + ((item.quantity || 1) * (item.estimated_unit_price || 0));
       }, 0);
 
-      // Cross-department routing: check if the selected project belongs to a different department
-      let routingDepartmentId = null;
-      if (data.project_id) {
-        const [projRows] = await conn.execute(
-          'SELECT department_id FROM projects WHERE id = ?',
-          [data.project_id]
-        );
-        if (
-          projRows.length > 0 &&
-          projRows[0].department_id &&
-          projRows[0].department_id !== user.department_id
-        ) {
-          routingDepartmentId = projRows[0].department_id;
-        }
-      }
+      // Approval routing is always driven by the department that owns the selected
+      // project, regardless of which department the requester belongs to.
+      const routingDepartmentId = await this._resolveOwningDepartmentId(
+        conn, data.project_id, null, user.department_id
+      );
 
       const [result] = await conn.execute(
         `INSERT INTO proc_requests 
@@ -99,6 +148,18 @@ class ProcurementService {
         }
       }
 
+      // Projects created before projects.department_id existed resolve their owner
+      // from the budget lines, which are only known once the items are inserted.
+      const resolvedRoutingId = await this._resolveOwningDepartmentId(
+        conn, data.project_id, requestId, user.department_id
+      );
+      if (Number(resolvedRoutingId) !== Number(routingDepartmentId)) {
+        await conn.execute(
+          'UPDATE proc_requests SET routing_department_id = ? WHERE id = ?',
+          [resolvedRoutingId, requestId]
+        );
+      }
+
       // Log creation
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
@@ -119,16 +180,28 @@ class ProcurementService {
       where = 'WHERE pr.requester_id = ?';
       params.push(user.id);
     } else if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role)) {
-      // HOPs and Program Leads see:
-      //   1. Requests originating from their own department
-      //   2. Cross-dept requests explicitly routed to their department (for approval)
-      //   3. Any request they have personally acted on (history)
-      where = `WHERE (
-        pr.department_id = ? OR
-        (pr.status = 'PENDING_DEPT_APPROVAL' AND pr.routing_department_id = ?) OR
-        pr.id IN (SELECT DISTINCT pal.request_id FROM proc_approval_logs pal WHERE pal.actor_id = ?)
-      )`;
-      params.push(user.department_id, user.department_id, user.id);
+      if (isAdminHrManager(user)) {
+        // Admin/HR LEAD/HOD sees all PRs org-wide (same visibility as procurement officer / admin),
+        // except at the dept-approval stage, which belongs to the project-owning department.
+        where = `WHERE (
+          pr.status <> 'PENDING_DEPT_APPROVAL' OR
+          COALESCE(pr.routing_department_id, pr.department_id) = ?
+        )`;
+        params.push(user.department_id);
+      } else {
+        // HOPs and Program Leads see:
+        //   1. Requests awaiting dept approval ONLY where their department owns the
+        //      selected project — this is the queue they can actually act on
+        //   2. At every other stage, requests originating from their own department
+        //      or routed to it (for follow-up and reporting)
+        //   3. Any request they have personally acted on (history)
+        where = `WHERE (
+          (pr.status = 'PENDING_DEPT_APPROVAL' AND COALESCE(pr.routing_department_id, pr.department_id) = ?) OR
+          (pr.status <> 'PENDING_DEPT_APPROVAL' AND (pr.department_id = ? OR pr.routing_department_id = ?)) OR
+          pr.id IN (SELECT DISTINCT pal.request_id FROM proc_approval_logs pal WHERE pal.actor_id = ?)
+        )`;
+        params.push(user.department_id, user.department_id, user.department_id, user.id);
+      }
     } else if (user.role === ROLES.PROCUREMENT_OFFICER) {
       // Procurement officer sees everything from finance-approved stage onwards + rejected
       where = "WHERE pr.status IN ('PENDING_PROCUREMENT','PENDING_COMMITTEE','PENDING_FINAL_FINANCE','COMPLETED','REJECTED')";
@@ -254,18 +327,24 @@ class ProcurementService {
       throw new Error('You can only edit your own requests');
     }
 
+    const donorId = data.donor_id || existing.donor_id;
+    const projectId = data.project_id || existing.project_id;
+
     return transaction(async (conn) => {
+      await this._validateDonorAndProject(conn, donorId, projectId);
+
       const totalEstimated = (data.items || []).reduce((sum, item) => {
         return sum + ((item.quantity || 1) * (item.estimated_unit_price || 0));
       }, 0);
 
       await conn.execute(
-        `UPDATE proc_requests SET title=?, justification=?, donor_id=?, expected_delivery_date=?,
+        `UPDATE proc_requests SET title=?, justification=?, donor_id=?, project_id=?, expected_delivery_date=?,
           priority=?, total_estimated_amount=?, updated_at=NOW() WHERE id=?`,
         [
           data.title || existing.title,
           data.justification || existing.justification,
-          data.donor_id || existing.donor_id,
+          donorId,
+          projectId,
           data.expected_delivery_date || existing.expected_delivery_date,
           data.priority || existing.priority,
           totalEstimated || existing.total_estimated_amount,
@@ -286,6 +365,15 @@ class ProcurementService {
         }
       }
 
+      // Re-resolve routing: changing the project changes which Lead/HOD approves.
+      const routingDepartmentId = await this._resolveOwningDepartmentId(
+        conn, projectId, requestId, existing.department_id
+      );
+      await conn.execute(
+        'UPDATE proc_requests SET routing_department_id = ? WHERE id = ?',
+        [routingDepartmentId, requestId]
+      );
+
       return { success: true };
     });
   }
@@ -304,9 +392,17 @@ class ProcurementService {
     const isResubmission = existing.status === 'REJECTED';
 
     return transaction(async (conn) => {
+      await this._validateDonorAndProject(conn, existing.donor_id, existing.project_id);
+
+      // Recompute the owning department at submission so routing reflects the
+      // project selected right now, not whatever was on the request when drafted.
+      const routingDepartmentId = await this._resolveOwningDepartmentId(
+        conn, existing.project_id, requestId, existing.department_id
+      );
+
       await conn.execute(
-        `UPDATE proc_requests SET status='PENDING_DEPT_APPROVAL', submitted_at=IF(submitted_at IS NULL, NOW(), submitted_at), rejection_reason=NULL, updated_at=NOW() WHERE id=?`,
-        [requestId]
+        `UPDATE proc_requests SET status='PENDING_DEPT_APPROVAL', routing_department_id=?, submitted_at=IF(submitted_at IS NULL, NOW(), submitted_at), rejection_reason=NULL, updated_at=NOW() WHERE id=?`,
+        [routingDepartmentId, requestId]
       );
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
@@ -317,7 +413,7 @@ class ProcurementService {
           isResubmission ? 'Request resubmitted after revision' : 'Request submitted for approval'
         ]
       );
-      return { success: true, _notif: { requestCode: existing.request_code, requesterId: user.id, deptId: existing.department_id, routingDeptId: existing.routing_department_id || null } };
+      return { success: true, _notif: { requestCode: existing.request_code, requesterId: user.id, deptId: existing.department_id, routingDeptId: routingDepartmentId } };
     }).then(result => {
       if (result._notif) {
         const n = result._notif; delete result._notif;
@@ -341,10 +437,14 @@ class ProcurementService {
       throw new Error('Only Program Lead or Head of Programs can approve at this stage');
     }
 
-    // Cross-department routing: enforce that the approver belongs to the project-owning department.
-    if (user.role !== ROLES.ADMIN && req.routing_department_id) {
-      if (req.routing_department_id !== user.department_id) {
-        throw new Error('This cross-department request must be approved by the HOP/Lead of the project-owning department');
+    // The first approval belongs to the Lead/HOD of the department that owns the
+    // selected project — never the requester's own department Lead/HOD.
+    // routing_department_id is set from the project; department_id is only a
+    // fallback for legacy requests created before project-based routing.
+    if (user.role !== ROLES.ADMIN) {
+      const owningDepartmentId = Number(req.routing_department_id || req.department_id);
+      if (owningDepartmentId !== Number(user.department_id)) {
+        throw new Error('This request must be approved by the Lead/HOD of the department that owns the selected project');
       }
     }
 
@@ -435,6 +535,18 @@ class ProcurementService {
       throw new Error('Request cannot be rejected at this stage');
     }
 
+    // The dept-approval decision — approve or reject — belongs to the Lead/HOD of the
+    // department that owns the selected project.
+    if (
+      req.status === 'PENDING_DEPT_APPROVAL' &&
+      [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role)
+    ) {
+      const owningDepartmentId = Number(req.routing_department_id || req.department_id);
+      if (owningDepartmentId !== Number(user.department_id)) {
+        throw new Error('This request must be actioned by the Lead/HOD of the department that owns the selected project');
+      }
+    }
+
     return transaction(async (conn) => {
       const prev = req.status;
       await conn.execute(
@@ -470,6 +582,23 @@ class ProcurementService {
       throw new Error('At least one quotation must be uploaded before submitting to committee');
     }
 
+    // Check if the selected quotation value is below the USD 500 threshold
+    let bypassCommittee = false;
+    let selectedQuotationAmount = null;
+    if (selectedQuotationId) {
+      const quotDetails = await query(
+        'SELECT total_amount, currency FROM proc_quotations WHERE id = ? AND request_id = ?',
+        [selectedQuotationId, requestId]
+      );
+      if (quotDetails.length) {
+        const currency = quotDetails[0].currency || 'USD';
+        selectedQuotationAmount = parseFloat(quotDetails[0].total_amount);
+        if (currency === 'USD' && selectedQuotationAmount < 500) {
+          bypassCommittee = true;
+        }
+      }
+    }
+
     return transaction(async (conn) => {
       // Mark the selected quotation
       if (selectedQuotationId) {
@@ -480,6 +609,22 @@ class ProcurementService {
         );
       }
 
+      if (bypassCommittee) {
+        // Quotation is below USD 500 — skip committee and forward directly to Finance
+        await conn.execute(
+          `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', procurement_assigned_at=NOW(), committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
+          [requestId]
+        );
+        await conn.execute(
+          `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+           VALUES (?, ?, ?, 'COMMITTEE_BYPASSED', 'PENDING_PROCUREMENT', 'PENDING_FINAL_FINANCE', ?)`,
+          [requestId, user.id, user.role,
+           `Quotation total (USD ${selectedQuotationAmount.toFixed(2)}) is below the USD 500 threshold — Committee review bypassed, forwarded directly to Finance`]
+        );
+        return { success: true, bypassed: true, status: 'PENDING_FINAL_FINANCE' };
+      }
+
+      // Standard flow — send to committee
       await conn.execute(
         `UPDATE proc_requests SET status='PENDING_COMMITTEE', procurement_assigned_at=NOW(), updated_at=NOW() WHERE id=?`,
         [requestId]
@@ -489,7 +634,7 @@ class ProcurementService {
          VALUES (?, ?, ?, 'SUBMITTED_TO_COMMITTEE', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE', ?)`,
         [requestId, user.id, user.role, comments || 'Submitted to procurement committee']
       );
-      return { success: true };
+      return { success: true, bypassed: false };
     });
   }
 
@@ -510,7 +655,7 @@ class ProcurementService {
       throw new Error('Decision must be APPROVED or REJECTED');
     }
 
-    // Determine vote seat from user's department code (dept-based voting: one vote per dept)
+    // Fetch user's department code for informational/audit purposes only
     const [userRow] = await query(
       `SELECT d.department_code FROM users u
        LEFT JOIN departments d ON u.department_id = d.id
@@ -519,70 +664,49 @@ class ProcurementService {
     );
     const seat = userRow?.department_code || null;
 
-    // Required committee departments
-    const REQUIRED_SEATS = ['HSD', 'CPJS', 'FOS'];
-
-    if (user.role !== ROLES.ADMIN) {
-      if (!seat) {
-        throw new Error('Your account is not assigned to a department. Contact the system administrator.');
-      }
-      if (!REQUIRED_SEATS.includes(seat)) {
-        throw new Error(`Only members of HSD, CPJS, or FOS departments are on the Procurement Committee.`);
-      }
-    }
+    // Any Procurement Committee member may vote — no department restriction
 
     return transaction(async (conn) => {
-      if (seat && REQUIRED_SEATS.includes(seat)) {
-        // Check if this department has already voted (one vote per department)
-        const [existingVote] = await conn.execute(
-          'SELECT id, voter_id FROM proc_committee_votes WHERE request_id = ? AND committee_seat = ?',
-          [requestId, seat]
-        );
+      // Check if this voter has already cast a vote on this request
+      const [existingVote] = await conn.execute(
+        'SELECT id FROM proc_committee_votes WHERE request_id = ? AND voter_id = ?',
+        [requestId, user.id]
+      );
 
-        if (existingVote.length > 0) {
-          const originalVoterId = existingVote[0].voter_id;
-          if (originalVoterId !== user.id) {
-            // A different person from the same department already voted — block
-            throw new Error(`Your department (${seat}) has already cast its vote. Each department gets one vote only.`);
-          }
-          // Same person — allow updating their own vote
-          await conn.execute(
-            `UPDATE proc_committee_votes SET vote = ?, justification = ?, voted_at = NOW()
-             WHERE request_id = ? AND committee_seat = ?`,
-            [decision, justification || null, requestId, seat]
-          );
-        } else {
-          // First vote from this department — insert
-          await conn.execute(
-            `INSERT INTO proc_committee_votes (request_id, voter_id, committee_seat, vote, justification)
-             VALUES (?, ?, ?, ?, ?)`,
-            [requestId, user.id, seat, decision, justification || null]
-          );
-        }
-
-        // Log in approval trail
+      if (existingVote.length > 0) {
+        // Same voter — allow updating their own vote
         await conn.execute(
-          `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-           VALUES (?, ?, ?, ?, 'PENDING_COMMITTEE', 'PENDING_COMMITTEE', ?)`,
-          [requestId, user.id, user.role,
-           decision === 'APPROVED' ? 'COMMITTEE_VOTE_APPROVED' : 'COMMITTEE_VOTE_REJECTED',
-           `[${seat}] ${decision}${justification ? ': ' + justification : ''}`]
+          `UPDATE proc_committee_votes SET vote = ?, justification = ?, voted_at = NOW()
+           WHERE request_id = ? AND voter_id = ?`,
+          [decision, justification || null, requestId, user.id]
+        );
+      } else {
+        // First vote from this member — insert
+        await conn.execute(
+          `INSERT INTO proc_committee_votes (request_id, voter_id, committee_seat, vote, justification)
+           VALUES (?, ?, ?, ?, ?)`,
+          [requestId, user.id, seat, decision, justification || null]
         );
       }
+
+      // Log in approval trail
+      await conn.execute(
+        `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+         VALUES (?, ?, ?, ?, 'PENDING_COMMITTEE', 'PENDING_COMMITTEE', ?)`,
+        [requestId, user.id, user.role,
+         decision === 'APPROVED' ? 'COMMITTEE_VOTE_APPROVED' : 'COMMITTEE_VOTE_REJECTED',
+         `[${seat || 'N/A'}] ${decision}${justification ? ': ' + justification : ''}`]
+      );
 
       // Now check the current vote tally for this request
       const [allVotes] = await conn.execute(
-        `SELECT committee_seat, vote FROM proc_committee_votes WHERE request_id = ?`,
+        `SELECT voter_id, vote FROM proc_committee_votes WHERE request_id = ?`,
         [requestId]
       );
 
-      const voteMap = {};
-      allVotes.forEach(v => { voteMap[v.committee_seat] = v.vote; });
-
-      const votedSeats = Object.keys(voteMap);
-      const approvedSeats = votedSeats.filter(s => voteMap[s] === 'APPROVED');
-      const rejectedSeats = votedSeats.filter(s => voteMap[s] === 'REJECTED');
-      const pendingSeats = REQUIRED_SEATS.filter(s => !voteMap[s]);
+      const totalApproved = allVotes.filter(v => v.vote === 'APPROVED').length;
+      const totalRejected = allVotes.filter(v => v.vote === 'REJECTED').length;
+      const totalVotes = allVotes.length;
 
       // For ADMIN override — immediately advance
       if (user.role === ROLES.ADMIN && decision === 'APPROVED') {
@@ -595,12 +719,11 @@ class ProcurementService {
            VALUES (?, ?, ?, 'COMMITTEE_APPROVED', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', ?)`,
           [requestId, user.id, user.role, 'Admin override — forwarded to finance for final approval']
         );
-        return { success: true, status: 'PENDING_FINAL_FINANCE', message: 'All committee members have approved. Forwarded to finance.' };
+        return { success: true, status: 'PENDING_FINAL_FINANCE', message: 'Admin override approved. Forwarded to Finance for final approval.' };
       }
 
-      // All 3 required seats have voted APPROVED → advance to final finance
-      const allApproved = REQUIRED_SEATS.every(s => voteMap[s] === 'APPROVED');
-      if (allApproved) {
+      // 3 total APPROVED votes reached → advance to final finance
+      if (totalApproved >= 3) {
         await conn.execute(
           `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
           [requestId]
@@ -609,33 +732,27 @@ class ProcurementService {
           `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
            VALUES (?, ?, ?, 'COMMITTEE_APPROVED', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', ?)`,
           [requestId, user.id, user.role,
-            'All 3 committee seats approved — forwarded to finance for final approval']
+            '3 Procurement Committee votes received — forwarded to Finance for final approval']
         );
         return {
           success: true,
           status: 'PENDING_FINAL_FINANCE',
-          message: 'All 3 committee members have approved. Request forwarded to Finance for final approval.'
+          message: '3 Procurement Committee approvals received. Request forwarded to Finance for final approval.'
         };
       }
 
-      // Not all approved yet — stay at PENDING_COMMITTEE
-      // Build a status message showing who approved, who rejected, who hasn't voted
-      const parts = [];
-      if (approvedSeats.length) parts.push(`Approved: ${approvedSeats.join(', ')}`);
-      if (rejectedSeats.length) parts.push(`Rejected: ${rejectedSeats.join(', ')} (can re-vote)`);
-      if (pendingSeats.length) parts.push(`Pending: ${pendingSeats.join(', ')}`);
-
+      // Fewer than 3 approved — stay at PENDING_COMMITTEE
+      const remaining = 3 - totalApproved;
       return {
         success: true,
         status: 'PENDING_COMMITTEE',
-        votedCount: approvedSeats.length,
-        totalRequired: REQUIRED_SEATS.length,
-        approvedSeats,
-        rejectedSeats,
-        pendingSeats,
+        votedCount: totalApproved,
+        totalRequired: 3,
+        totalVotes,
+        totalRejected,
         message: decision === 'REJECTED'
-          ? `Vote recorded as REJECTED. The ${seat} seat can update this vote to Approve when ready. (${parts.join(' | ')})`
-          : `Vote recorded (${approvedSeats.length}/3 approved). ${parts.join(' | ')}`
+          ? `Vote recorded as REJECTED. You may update your vote to Approve when ready. (${totalApproved}/3 approved)`
+          : `Vote recorded (${totalApproved}/3 approved). ${remaining} more approval${remaining > 1 ? 's' : ''} needed.`
       };
     });
   }
@@ -727,8 +844,8 @@ class ProcurementService {
   async addQuotation(requestId, data, user) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
-    if (req.status !== 'PENDING_PROCUREMENT') {
-      throw new Error('Quotations can only be added when request is in procurement stage');
+    if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(req.status)) {
+      throw new Error('Quotations can only be added when request is in procurement or committee review stage');
     }
 
     const result = await query(
@@ -777,8 +894,8 @@ class ProcurementService {
   async deleteQuotation(quotationId, user) {
     const rows = await query('SELECT * FROM proc_quotations WHERE id = ?', [quotationId]);
     if (!rows.length) throw new Error('Quotation not found');
-    if (rows[0].created_by !== user.id && user.role !== ROLES.ADMIN) {
-      throw new Error('You can only delete your own quotations');
+    if (![ROLES.PROCUREMENT_OFFICER, ROLES.ADMIN].includes(user.role)) {
+      throw new Error('Only Procurement Officers can delete quotations');
     }
     await query('DELETE FROM proc_quotations WHERE id = ?', [quotationId]);
     return { success: true };
@@ -788,27 +905,83 @@ class ProcurementService {
     const rows = await query('SELECT pq.*, pr.status as request_status FROM proc_quotations pq JOIN proc_requests pr ON pq.request_id = pr.id WHERE pq.id = ?', [quotationId]);
     if (!rows.length) throw new Error('Quotation not found');
     const quot = rows[0];
-    if (quot.created_by !== user.id && user.role !== ROLES.ADMIN) {
-      throw new Error('You can only edit your own quotations');
+    if (![ROLES.PROCUREMENT_OFFICER, ROLES.ADMIN].includes(user.role)) {
+      throw new Error('Only Procurement Officers can edit quotations');
     }
     if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(quot.request_status)) {
       throw new Error('Quotations can only be edited while the request is in the procurement or committee-review stage');
     }
-    await query(
-      `UPDATE proc_quotations SET
-        vendor_name=COALESCE(?,vendor_name), vendor_email=COALESCE(?,vendor_email), vendor_phone=COALESCE(?,vendor_phone),
-        quotation_number=COALESCE(?,quotation_number), total_amount=COALESCE(?,total_amount),
-        currency=COALESCE(?,currency), validity_date=COALESCE(?,validity_date),
-        delivery_timeline=COALESCE(?,delivery_timeline), notes=COALESCE(?,notes), updated_at=NOW()
-       WHERE id=?`,
-      [
-        data.vendor_name || null, data.vendor_email || null, data.vendor_phone || null,
-        data.quotation_number || null, data.total_amount ? parseFloat(data.total_amount) : null,
-        data.currency || null, data.validity_date || null, data.delivery_timeline || null,
-        data.notes || null, quotationId
-      ]
-    );
+    // Build dynamic update — include file fields only when a new file is provided
+    const hasNewFile = data.file_path != null;
+    const sql = hasNewFile
+      ? `UPDATE proc_quotations SET
+          vendor_name=COALESCE(?,vendor_name), vendor_email=COALESCE(?,vendor_email), vendor_phone=COALESCE(?,vendor_phone),
+          quotation_number=COALESCE(?,quotation_number), total_amount=COALESCE(?,total_amount),
+          currency=COALESCE(?,currency), validity_date=COALESCE(?,validity_date),
+          delivery_timeline=COALESCE(?,delivery_timeline), notes=COALESCE(?,notes),
+          file_path=?, file_name=?, file_size=?, updated_at=NOW()
+         WHERE id=?`
+      : `UPDATE proc_quotations SET
+          vendor_name=COALESCE(?,vendor_name), vendor_email=COALESCE(?,vendor_email), vendor_phone=COALESCE(?,vendor_phone),
+          quotation_number=COALESCE(?,quotation_number), total_amount=COALESCE(?,total_amount),
+          currency=COALESCE(?,currency), validity_date=COALESCE(?,validity_date),
+          delivery_timeline=COALESCE(?,delivery_timeline), notes=COALESCE(?,notes), updated_at=NOW()
+         WHERE id=?`;
+
+    const params = [
+      data.vendor_name || null, data.vendor_email || null, data.vendor_phone || null,
+      data.quotation_number || null, data.total_amount ? parseFloat(data.total_amount) : null,
+      data.currency || null, data.validity_date || null, data.delivery_timeline || null,
+      data.notes || null,
+      ...(hasNewFile ? [data.file_path, data.file_name || null, data.file_size || null] : []),
+      quotationId
+    ];
+
+    await query(sql, params);
     return { success: true };
+  }
+
+  async resubmitToCommittee(requestId, selectedQuotationId, user, comments = '') {
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req) throw new Error('Request not found');
+    if (req.status !== 'PENDING_COMMITTEE') {
+      throw new Error('Only requests currently under committee review can be resubmitted');
+    }
+    if (![ROLES.PROCUREMENT_OFFICER, ROLES.ADMIN].includes(user.role)) {
+      throw new Error('Only Procurement Officers can resubmit to the committee');
+    }
+
+    // Check at least one quotation exists
+    const quotations = await query('SELECT id FROM proc_quotations WHERE request_id = ?', [requestId]);
+    if (!quotations.length) {
+      throw new Error('At least one quotation must exist before resubmitting');
+    }
+
+    return transaction(async (conn) => {
+      // Reset existing committee votes so members can vote afresh on the revised quotations
+      await conn.execute('DELETE FROM proc_committee_votes WHERE request_id = ?', [requestId]);
+
+      // Update selected quotation if specified
+      if (selectedQuotationId) {
+        await conn.execute('UPDATE proc_quotations SET is_selected=FALSE WHERE request_id=?', [requestId]);
+        await conn.execute(
+          'UPDATE proc_quotations SET is_selected=TRUE, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
+          [user.id, selectedQuotationId, requestId]
+        );
+      }
+
+      // Keep status as PENDING_COMMITTEE but log the amendment
+      await conn.execute(
+        `UPDATE proc_requests SET updated_at=NOW() WHERE id=?`,
+        [requestId]
+      );
+      await conn.execute(
+        `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+         VALUES (?, ?, ?, 'RESUBMITTED_TO_COMMITTEE', 'PENDING_COMMITTEE', 'PENDING_COMMITTEE', ?)`,
+        [requestId, user.id, user.role, comments || 'Quotations amended and resubmitted to committee for review']
+      );
+      return { success: true };
+    });
   }
 
   // ============================================================
@@ -958,9 +1131,14 @@ class ProcurementService {
       requestFilter = 'WHERE pr.requester_id = ?';
       params.push(user.id);
     } else if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role)) {
-      // Include own-dept requests AND cross-dept requests explicitly routed to their dept
-      requestFilter = 'WHERE (pr.department_id = ? OR pr.routing_department_id = ?)';
-      params.push(user.department_id, user.department_id);
+      if (isAdminHrManager(user)) {
+        // Admin/HR LEAD/HOD sees full org-wide stats
+        requestFilter = 'WHERE 1=1';
+      } else {
+        // Include own-dept requests AND cross-dept requests explicitly routed to their dept
+        requestFilter = 'WHERE (pr.department_id = ? OR pr.routing_department_id = ?)';
+        params.push(user.department_id, user.department_id);
+      }
     } else if (user.role === ROLES.PROCUREMENT_OFFICER) {
       requestFilter = "WHERE pr.status IN ('PENDING_PROCUREMENT','PENDING_COMMITTEE','PENDING_FINAL_FINANCE','COMPLETED')";
     } else if (user.role === ROLES.PROCUREMENT_COMMITTEE) {
@@ -991,11 +1169,13 @@ class ProcurementService {
       params
     );
 
+    // Only count requests this department actually approves — i.e. those whose
+    // selected project is owned by it.
     const [pendingMine] = await query(
       `SELECT COUNT(*) AS count FROM proc_requests pr
        WHERE pr.status = 'PENDING_DEPT_APPROVAL'
-         AND (pr.department_id = ? OR pr.routing_department_id = ?)`,
-      [user.department_id, user.department_id]
+         AND COALESCE(pr.routing_department_id, pr.department_id) = ?`,
+      [user.department_id]
     );
 
     const recentRequests = await query(
