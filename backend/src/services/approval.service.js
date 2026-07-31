@@ -65,25 +65,34 @@ class ApprovalService {
       // so the user doesn't have to go through already-approved levels again.
       let targetStatus = REQUEST_STATUS.PENDING_LEAD_APPROVAL;
       if (isResubmission) {
+        // Reconciliation rejections also log action='REJECTED', but they send the
+        // request back to DISPATCHED to be reconciled again — they are not approval
+        // -pipeline rejections and must not decide where an approval resumes.
         const [rejectionLogs] = await connection.execute(
           `SELECT previous_status FROM approval_logs
            WHERE request_id = ? AND action = 'REJECTED'
-           ORDER BY created_at DESC LIMIT 1`,
-          [requestId]
+             AND previous_status NOT IN (?, ?)
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [requestId, REQUEST_STATUS.RECON_PENDING_LEAD, REQUEST_STATUS.RECON_PENDING_FINANCE]
         );
 
         if (rejectionLogs.length > 0) {
           const rejectedFromStatus = rejectionLogs[0].previous_status;
-          if (rejectedFromStatus === REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
-            targetStatus = REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
-          } else if (rejectedFromStatus === REQUEST_STATUS.PENDING_HOP_APPROVAL) {
-            targetStatus = REQUEST_STATUS.PENDING_HOP_APPROVAL;
-          } else if (rejectedFromStatus === REQUEST_STATUS.PENDING_ADMIN_APPROVAL) {
-            targetStatus = REQUEST_STATUS.PENDING_ADMIN_APPROVAL;
-          } else {
-            // PENDING_LEAD_APPROVAL or unrecognised — start from Lead level
-            targetStatus = REQUEST_STATUS.PENDING_LEAD_APPROVAL;
-          }
+          // Resume at the desk that rejected it, so already-completed levels are not
+          // re-run. A request Finance force-rejected after approval (previous_status
+          // APPROVED/DISPATCHED) belongs back on the Finance desk — its budget
+          // deduction was reversed by the force-reject, so Finance re-approving it
+          // deducts once, correctly.
+          const resumeAt = {
+            [REQUEST_STATUS.PENDING_FINANCE_APPROVAL]: REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
+            [REQUEST_STATUS.PENDING_HOP_APPROVAL]: REQUEST_STATUS.PENDING_HOP_APPROVAL,
+            [REQUEST_STATUS.PENDING_ADMIN_APPROVAL]: REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+            [REQUEST_STATUS.PENDING_LEAD_APPROVAL]: REQUEST_STATUS.PENDING_LEAD_APPROVAL,
+            [REQUEST_STATUS.APPROVED]: REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
+            [REQUEST_STATUS.DISPATCHED]: REQUEST_STATUS.PENDING_FINANCE_APPROVAL
+          };
+          // Unrecognised origin — fall back to starting at Lead level.
+          targetStatus = resumeAt[rejectedFromStatus] || REQUEST_STATUS.PENDING_LEAD_APPROVAL;
         }
       } else {
         // New submission: determine routing based on donor type and requester role.
@@ -117,10 +126,20 @@ class ApprovalService {
 
       // Cross-department routing: if the selected project belongs to a different
       // department, store that department's ID so approvals are routed there.
-      // Skip routing for Admin-donor requests — they use a single shared approval queue.
+      // For Admin-donor requests from non-AHR departments, route to AHR so only
+      // the Admin/HR Lead or HOP handles them (not the requester's own dept Lead).
       let routingDepartmentId = null;
       const isAdminDonorSubmit = (targetStatus === REQUEST_STATUS.PENDING_ADMIN_APPROVAL);
-      if (!isAdminDonorSubmit && request.project_id) {
+      if (isAdminDonorSubmit) {
+        // Look up AHR department and route there if requester is not already AHR.
+        const [ahrDeptRows] = await connection.execute(
+          "SELECT id FROM departments WHERE department_code = 'AHR' LIMIT 1"
+        );
+        const ahrDeptId = ahrDeptRows[0]?.id;
+        if (ahrDeptId && Number(request.requester_dept) !== Number(ahrDeptId)) {
+          routingDepartmentId = ahrDeptId;
+        }
+      } else if (request.project_id) {
         // Use project's own department_id; if NULL (old projects), fall back to the
         // department set on the budget lines used by this request's items.
         const [projRows] = await connection.execute(
@@ -455,7 +474,7 @@ class ApprovalService {
    * Budget deduction occurs at dispatch time (markAsDispatched), NOT here.
    * This prevents double-deduction: approve does not touch budget, dispatch does.
    */
-  async approveAsFinance(requestId, approverId, comments, expectedVersion, ipAddress) {
+  async approveAsFinance(requestId, approverId, comments, expectedVersion, ipAddress, approverRole) {
     comments = comments || null;
     return await transaction(async (connection) => {
       const [requests] = await connection.execute(
@@ -492,7 +511,7 @@ class ApprovalService {
         `INSERT INTO approval_logs
          (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
          VALUES (?, ?, ?, 'APPROVED', ?, ?, ?, ?)`,
-        [requestId, approverId, ROLES.FINANCE_CLERK, REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
+        [requestId, approverId, approverRole || ROLES.FINANCE_CLERK, REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
          REQUEST_STATUS.APPROVED, comments, ipAddress]
       );
 
@@ -602,23 +621,20 @@ class ApprovalService {
       case ROLES.PROGRAM_LEAD:
         useInClause = true;
         if (filters.isFinanceManager) {
-          // Finance Lead (FOS): Finance stage from any dept + own FOS dept stage
-          // PENDING_ADMIN_APPROVAL is AHR's domain — Finance Lead must not see or action those
+          // Finance Lead (FOS): ALL pending stages visible (PENDING_LEAD_APPROVAL from any dept + Finance stage).
+          // PENDING_ADMIN_APPROVAL is AHR's domain — Finance Lead must not see or action those.
+          // Approval restriction enforced in approveAsLead (FOS dept only at dept level).
           statusFilter = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
-          departmentFilter = `AND (
-            r.status = '${REQUEST_STATUS.PENDING_FINANCE_APPROVAL}'
-            OR (r.routing_department_id IS NULL AND r.department_id = ?)
-            OR r.routing_department_id = ?
-          )`;
+          departmentFilter = '';
         } else if (deptCode === 'AHR') {
-          // Admin/HR Lead: own dept + Admin-type donor requests pending admin approval
+          // Admin/HR Lead: own dept + ALL Admin-type donor requests (any pending status)
           statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
           departmentFilter = `AND (
             (r.routing_department_id IS NULL AND r.department_id = ?)
             OR r.routing_department_id = ?
-            OR (r.status = '${REQUEST_STATUS.PENDING_ADMIN_APPROVAL}' AND EXISTS (
+            OR EXISTS (
               SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'
-            ))
+            )
           )`;
         } else {
           // CPJS/HSD Lead: own dept requests only
@@ -637,14 +653,14 @@ class ApprovalService {
           statusFilter = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
           departmentFilter = '';
         } else if (deptCode === 'AHR') {
-          // Admin/HR HOP: own dept + Admin-type donor requests
+          // Admin/HR HOP: own dept + ALL Admin-type donor requests (any pending status)
           statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
           departmentFilter = `AND (
             (r.routing_department_id IS NULL AND r.department_id = ?)
             OR r.routing_department_id = ?
-            OR (r.status = '${REQUEST_STATUS.PENDING_ADMIN_APPROVAL}' AND EXISTS (
+            OR EXISTS (
               SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'
-            ))
+            )
           )`;
         } else {
           // CPJS/HSD HOP: own dept only, no Finance stage
@@ -709,7 +725,7 @@ class ApprovalService {
         rd.department_code as routing_department_code
       FROM requests r
       JOIN users u ON r.requester_id = u.id
-      JOIN departments d ON r.department_id = d.id
+      LEFT JOIN departments d ON r.department_id = d.id
       LEFT JOIN departments rd ON r.routing_department_id = rd.id
       WHERE ${statusCondition} ${departmentFilter}
       ORDER BY
@@ -731,9 +747,11 @@ class ApprovalService {
         u.email as approver_email,
         CONCAT(u.first_name, ' ', u.last_name) as actor_name,
         al.approver_role as actor_role,
-        al.comments as comment
+        al.comments as comment,
+        d.department_code as actor_department_code
        FROM approval_logs al
        JOIN users u ON al.approver_id = u.id
+       LEFT JOIN departments d ON u.department_id = d.id
        WHERE al.request_id = ?
        ORDER BY al.created_at ASC`,
       [requestId]
@@ -932,6 +950,109 @@ class ApprovalService {
   }
 
   /**
+   * Finance force-reject: allows Finance Clerk / Finance HOP/LEAD / Admin to
+   * reject a request that is in APPROVED or DISPATCHED status, even after the
+   * 12-hour reversal window has passed.  The budget deductions are reversed and
+   * the request is moved to REJECTED status.
+   */
+  async financeForceReject(requestId, approverId, approverRole, comments, ipAddress) {
+    comments = comments || null;
+    const result = await transaction(async (connection) => {
+      const [requests] = await connection.execute(
+        'SELECT * FROM requests WHERE id = ? FOR UPDATE',
+        [requestId]
+      );
+
+      if (requests.length === 0) {
+        throw new Error('Request not found');
+      }
+
+      const request = requests[0];
+
+      if (![REQUEST_STATUS.APPROVED, 'DISPATCHED'].includes(request.status)) {
+        throw new Error(`Cannot force-reject a request with status: ${request.status}. Only APPROVED or DISPATCHED requests can be force-rejected.`);
+      }
+
+      // Reverse every budget deduction tied to this request
+      const [transactions] = await connection.execute(
+        `SELECT bt.*, bl.donor_id FROM budget_transactions bt
+         JOIN budget_lines bl ON bt.budget_line_id = bl.id
+         WHERE bt.request_id = ? AND bt.transaction_type = 'DEDUCTION'`,
+        [requestId]
+      );
+
+      const donorReversals = new Map();
+
+      for (const trans of transactions) {
+        await connection.execute(
+          `UPDATE budget_lines SET spent_amount = spent_amount - ?, updated_at = NOW() WHERE id = ?`,
+          [trans.amount, trans.budget_line_id]
+        );
+
+        if (trans.donor_id) {
+          if (!donorReversals.has(trans.donor_id)) donorReversals.set(trans.donor_id, 0);
+          donorReversals.set(trans.donor_id, donorReversals.get(trans.donor_id) + parseFloat(trans.amount));
+        }
+
+        const [bl] = await connection.execute(
+          'SELECT (allocated_amount - spent_amount) as balance FROM budget_lines WHERE id = ?',
+          [trans.budget_line_id]
+        );
+
+        await connection.execute(
+          `INSERT INTO budget_transactions
+           (budget_line_id, request_id, transaction_type, amount, balance_before, balance_after, description, performed_by)
+           VALUES (?, ?, 'REVERSAL', ?, ?, ?, ?, ?)`,
+          [
+            trans.budget_line_id, requestId, trans.amount,
+            bl[0].balance - trans.amount, bl[0].balance,
+            `Budget reversal for request #${request.request_code} — Finance force-rejected`,
+            approverId
+          ]
+        );
+      }
+
+      for (const [donorId, reversalAmount] of donorReversals) {
+        await connection.execute(
+          `UPDATE donors SET total_spent = total_spent - ?, updated_at = NOW() WHERE id = ?`,
+          [reversalAmount, donorId]
+        );
+      }
+
+      // Clear finance approval timestamps and move to REJECTED
+      await connection.execute(
+        `UPDATE requests
+         SET status = ?, finance_approved_at = NULL, completed_at = NULL, dispatched_at = NULL,
+             updated_at = NOW(), version = version + 1
+         WHERE id = ?`,
+        [REQUEST_STATUS.REJECTED, requestId]
+      );
+
+      await connection.execute(
+        `INSERT INTO approval_logs
+         (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
+         VALUES (?, ?, ?, 'REJECTED', ?, ?, ?, ?)`,
+        [requestId, approverId, approverRole, request.status, REQUEST_STATUS.REJECTED, comments, ipAddress]
+      );
+
+      return {
+        success: true,
+        message: 'Request has been rejected and budget reversed.',
+        newStatus: REQUEST_STATUS.REJECTED,
+        _notif: { requestCode: request.request_code, requesterId: request.requester_id, approverId, reason: comments }
+      };
+    });
+
+    if (result._notif) {
+      const n = result._notif; delete result._notif;
+      const approver = await query('SELECT first_name, last_name FROM users WHERE id = ?', [n.approverId]).catch(() => [{}]);
+      const approverName = approver[0] ? `${approver[0].first_name} ${approver[0].last_name}` : 'Finance';
+      notificationService.onRequestRejected(requestId, n.requestCode, n.requesterId, approverName, n.reason).catch(() => {});
+    }
+    return result;
+  }
+
+  /**
    * Check if an approver can reverse their approval
    */
   async canReverseApproval(requestId, approverId, approverRole) {
@@ -976,12 +1097,18 @@ class ApprovalService {
     const params = [userId];
 
     // Finance HOP/Lead sees all history; non-Finance HOP and Leads see own dept only.
+    // AHR Lead/HOP: no extra dept filter — they approve Admin-donor requests from any
+    // department, so scoping by approver_id alone is the correct boundary.
     if (role === ROLES.PROGRAM_LEAD && !filters.isFinanceManager) {
-      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
-      params.push(departmentId, departmentId);
+      if (filters.departmentCode !== 'AHR') {
+        departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+        params.push(departmentId, departmentId);
+      }
     } else if (role === ROLES.HEAD_OF_PROGRAMS && !filters.isFinanceManager) {
-      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
-      params.push(departmentId, departmentId);
+      if (filters.departmentCode !== 'AHR') {
+        departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+        params.push(departmentId, departmentId);
+      }
     } else if (filters.departmentId) {
       departmentFilter = 'AND r.department_id = ?';
       params.push(filters.departmentId);
@@ -1002,7 +1129,7 @@ class ApprovalService {
         latest_log.comments as approver_comments
       FROM requests r
       JOIN users u ON r.requester_id = u.id
-      JOIN departments d ON r.department_id = d.id
+      LEFT JOIN departments d ON r.department_id = d.id
       INNER JOIN (
         SELECT al.request_id, al.action, al.created_at, al.comments
         FROM approval_logs al
@@ -1025,11 +1152,22 @@ class ApprovalService {
     const params = [];
 
     // Finance HOP/Lead and Admin see all; non-Finance HOP and Leads see own dept.
+    // AHR Lead/HOP: also include Admin-type donor requests (ADMININT) from any dept —
+    // those requests have routing_department_id = NULL after Admin-stage approval so
+    // the plain dept check would miss them once they advance past PENDING_ADMIN_APPROVAL.
     if (role === ROLES.PROGRAM_LEAD && !filters.isFinanceManager) {
-      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      if (filters.departmentCode === 'AHR') {
+        departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
+      } else {
+        departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      }
       params.push(departmentId, departmentId);
     } else if (role === ROLES.HEAD_OF_PROGRAMS && !filters.isFinanceManager) {
-      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      if (filters.departmentCode === 'AHR') {
+        departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
+      } else {
+        departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      }
       params.push(departmentId, departmentId);
     } else if (filters.departmentId) {
       departmentFilter = 'AND r.department_id = ?';
@@ -1047,7 +1185,7 @@ class ApprovalService {
         d.department_code
       FROM requests r
       JOIN users u ON r.requester_id = u.id
-      JOIN departments d ON r.department_id = d.id
+      LEFT JOIN departments d ON r.department_id = d.id
       WHERE r.status IN (
         'PENDING_FINANCE_APPROVAL',
         'APPROVED', 'DISPATCHED',
@@ -1067,12 +1205,21 @@ class ApprovalService {
     let departmentFilter = '';
     const params = [];
 
-    // Finance HOP/Lead and Admin see all rejected; AHR sees own dept + Admin donor; CPJS/HSD see own dept.
+    // Finance HOP/Lead and Admin see all rejected; CPJS/HSD see own dept only.
+    // AHR Lead/HOP: also include Admin-type donor (ADMININT) rejected requests.
     if (role === ROLES.PROGRAM_LEAD && !filters.isFinanceManager) {
-      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      if (filters.departmentCode === 'AHR') {
+        departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
+      } else {
+        departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      }
       params.push(departmentId, departmentId);
     } else if (role === ROLES.HEAD_OF_PROGRAMS && !filters.isFinanceManager) {
-      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      if (filters.departmentCode === 'AHR') {
+        departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
+      } else {
+        departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+      }
       params.push(departmentId, departmentId);
     } else if (filters.departmentId) {
       departmentFilter = 'AND r.department_id = ?';
@@ -1099,7 +1246,7 @@ class ApprovalService {
          ORDER BY al.created_at DESC LIMIT 1) as rejection_reason
       FROM requests r
       JOIN users u ON r.requester_id = u.id
-      JOIN departments d ON r.department_id = d.id
+      LEFT JOIN departments d ON r.department_id = d.id
       WHERE r.status = 'REJECTED' ${departmentFilter}
       ORDER BY r.updated_at DESC
     `;
@@ -1120,20 +1267,23 @@ class ApprovalService {
       case ROLES.PROGRAM_LEAD:
         useInClause = true;
         if (isFinanceManager) {
-          // Finance Lead: Finance stage (any dept) + own FOS dept
-          // PENDING_ADMIN_APPROVAL excluded — AHR domain only
+          // Finance Lead (FOS): ALL pending stages except PENDING_ADMIN_APPROVAL (AHR domain).
+          // Finance Lead can view all dept-level requests; approval restriction is enforced separately.
           pendingStatus = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
-          departmentFilter = `AND (r.status = '${REQUEST_STATUS.PENDING_FINANCE_APPROVAL}' OR r.department_id = ? OR r.routing_department_id = ?)`;
+          departmentFilter = '';
+          // No dept params needed — baseParams push is skipped below for Finance Lead
         } else if (departmentCode === 'AHR') {
-          // Admin/HR Lead: own dept + Admin donor requests
+          // Admin/HR Lead: own dept + ALL Admin donor requests (any pending status)
           pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
-          departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ? OR (r.status = '${REQUEST_STATUS.PENDING_ADMIN_APPROVAL}' AND EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')))`;
+          departmentFilter = `AND ((r.routing_department_id IS NULL AND r.department_id = ?) OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
+          baseParams.push(departmentId, departmentId);
         } else {
-          // CPJS/HSD Lead: own dept only
+          // CPJS/HSD Lead: own dept only (routing_department_id must be NULL for dept match)
           pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
-          departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ?)`;
+          departmentFilter = `AND ((r.routing_department_id IS NULL AND r.department_id = ?) OR r.routing_department_id = ?)`;
+          baseParams.push(departmentId, departmentId);
         }
-        baseParams.push(departmentId, departmentId);
+        // NOTE: Finance Lead case does not push dept params (no dept filter).
         break;
 
       case ROLES.HEAD_OF_PROGRAMS:
@@ -1143,14 +1293,14 @@ class ApprovalService {
           pendingStatus = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
           departmentFilter = '';
         } else if (departmentCode === 'AHR') {
-          // Admin/HR HOP: own dept + Admin donor requests
+          // Admin/HR HOP: own dept + ALL Admin donor requests (any pending status)
           pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
-          departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ? OR (r.status = '${REQUEST_STATUS.PENDING_ADMIN_APPROVAL}' AND EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')))`;
+          departmentFilter = `AND ((r.routing_department_id IS NULL AND r.department_id = ?) OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
           baseParams.push(departmentId, departmentId);
         } else {
-          // CPJS/HSD HOP: own dept only, no Finance stage
+          // CPJS/HSD HOP: own dept only (routing_department_id must be NULL for dept match)
           pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
-          departmentFilter = `AND (r.department_id = ? OR r.routing_department_id = ?)`;
+          departmentFilter = `AND ((r.routing_department_id IS NULL AND r.department_id = ?) OR r.routing_department_id = ?)`;
           baseParams.push(departmentId, departmentId);
         }
         break;
