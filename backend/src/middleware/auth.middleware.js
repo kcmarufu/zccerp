@@ -5,7 +5,7 @@
 
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/database');
-const { hasPermission, isFinanceManager, isAdminHrManager, ROLES } = require('../config/roles');
+const { hasPermission, isFinanceManager, ROLES } = require('../config/roles');
 
 /**
  * Verify JWT token and attach user to request
@@ -138,8 +138,8 @@ const requireSameDepartment = async (req, res, next) => {
       return next();
     }
 
-    // Finance Clerk, Admin, and Head of Programs can see all departments.
-    if ([ROLES.FINANCE_CLERK, ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role)) {
+    // Finance Clerk, Admin, Head of Programs, and Finance Managers (FOS LEAD/HOP) can see all departments.
+    if ([ROLES.FINANCE_CLERK, ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS].includes(req.user.role) || isFinanceManager(req.user)) {
       return next();
     }
 
@@ -184,7 +184,7 @@ const requireSameDepartment = async (req, res, next) => {
       });
     }
 
-    if (requests[0].requester_id === req.user.id) {
+    if (Number(requests[0].requester_id) === Number(req.user.id)) {
       return next();
     }
 
@@ -223,27 +223,27 @@ const requireFinanceManager = (req, res, next) => {
 };
 
 /**
- * Middleware that restricts access to donor (partner) and project management:
+ * Middleware that allows dispatch actions to:
  *   - ADMIN
  *   - FINANCE_CLERK
- *   - HEAD_OF_PROGRAMS or PROGRAM_LEAD in the Admin/HR (AHR) department
- * Used to protect write operations on donors and projects.
+ *   - Finance (FOS) HEAD_OF_PROGRAMS or PROGRAM_LEAD (Finance HOP/LEAD)
+ * Used to protect mark-dispatched and reverse-dispatch endpoints.
  */
-const requirePartnerManager = (req, res, next) => {
+const requireDispatchAccess = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({
       success: false,
       error: 'Authentication required'
     });
   }
-  const allowedByRole = [ROLES.ADMIN, ROLES.FINANCE_CLERK].includes(req.user.role);
-  if (!allowedByRole && !isAdminHrManager(req.user)) {
-    return res.status(403).json({
-      success: false,
-      error: 'Only Admin, Finance, or Admin/HR HOP/Lead can perform this action'
-    });
+  // FINANCE_CLERK can always dispatch; Finance HOP/LEAD (isFinanceManager covers ADMIN too)
+  if (req.user.role === ROLES.FINANCE_CLERK || isFinanceManager(req.user)) {
+    return next();
   }
-  next();
+  return res.status(403).json({
+    success: false,
+    error: 'Only Finance Clerk, Finance HOP/Lead, or Admin can perform dispatch actions'
+  });
 };
 
 module.exports = {
@@ -252,5 +252,5 @@ module.exports = {
   requirePermission,
   requireSameDepartment,
   requireFinanceManager,
-  requirePartnerManager
+  requireDispatchAccess
 };

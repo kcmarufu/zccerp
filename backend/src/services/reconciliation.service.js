@@ -804,12 +804,16 @@ class ReconciliationService {
     let params = [REQUEST_STATUS.RECON_PENDING_LEAD];
 
     // Routing rules for Admin-donor reconciliations:
-    //   - Only HR-dept Lead/HOP see Admin-donor reconciliations (from any department)
-    //   - Non-HR Lead/HOP see their own department's requests PLUS cross-dept requests
+    //   - FOS-dept (Finance Operations Support) Lead/HOP see ALL pending lead reconciliations
+    //   - Only AHR-dept (Admin & HR) Lead/HOP see Admin-donor reconciliations (from any department)
+    //   - Non-AHR/Non-FOS Lead/HOP see their own department's requests PLUS cross-dept requests
     //     where routing_department_id matches their department
     if (approverRole === ROLES.PROGRAM_LEAD || approverRole === ROLES.HEAD_OF_PROGRAMS) {
-      if (departmentCode === 'HR') {
-        // HR-dept approvers: own-dept requests + ALL Admin-donor requests across departments
+      if (departmentCode === 'FOS') {
+        // FOS Finance dept Lead/HOP: oversees all reconciliations — no department filter
+        departmentFilter = '';
+      } else if (departmentCode === 'AHR') {
+        // AHR-dept approvers: own-dept requests + ALL Admin-donor requests across departments
         departmentFilter = `AND (
           (r.routing_department_id IS NULL AND r.department_id = ?)
           OR r.routing_department_id = ?
@@ -820,7 +824,7 @@ class ReconciliationService {
         // Other-dept approvers:
         //   - Own-dept requests with NO cross-dept routing
         //   - Cross-dept requests explicitly routed TO their dept
-        //   (exclude admin-donor requests — those go to HR only)
+        //   (exclude admin-donor requests — those go to AHR only)
         departmentFilter = `AND (
           (r.routing_department_id IS NULL AND r.department_id = ?)
           OR r.routing_department_id = ?
@@ -858,14 +862,17 @@ class ReconciliationService {
    * Get reconciliations already approved at lead level (forwarded to finance / completed)
    * Provides audit trail for Lead/HOP of what they have already approved
    */
-  async getLeadApprovedReconciliations(approverId, approverRole, departmentId) {
+  async getLeadApprovedReconciliations(approverId, approverRole, departmentId, departmentCode) {
     let departmentFilter = '';
     const params = [approverId];
 
     if (approverRole === ROLES.PROGRAM_LEAD) {
-      // Include own-dept AND cross-dept requests routed to their department
-      departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
-      params.push(departmentId, departmentId);
+      if (departmentCode !== 'FOS') {
+        // Non-FOS Lead: filter by their department only
+        departmentFilter = 'AND (r.department_id = ? OR r.routing_department_id = ?)';
+        params.push(departmentId, departmentId);
+      }
+      // FOS Lead: no department filter — sees all approvals across departments
     }
 
     return await query(
@@ -991,9 +998,9 @@ class ReconciliationService {
    * Get all requests pending reconciliation review (for Finance)
    */
   async getPendingReconciliations(role) {
-    // Finance pending tab only shows RECON_PENDING_FINANCE items.
-    // Lead/HOP sees RECON_PENDING_LEAD items in the separate Lead tab.
-    const statuses = [REQUEST_STATUS.RECON_PENDING_FINANCE];
+    // Finance pending tab shows RECON_PENDING_FINANCE (actionable by Finance Clerk) and
+    // RECON_PENDING_LEAD (read-only visibility) so Finance Clerks can track the full pipeline.
+    const statuses = [REQUEST_STATUS.RECON_PENDING_FINANCE, REQUEST_STATUS.RECON_PENDING_LEAD];
     const placeholders = statuses.map(() => '?').join(', ');
 
     return await query(
@@ -1047,6 +1054,7 @@ class ReconciliationService {
     // Everyone else only sees reconciliations for their own department.
     const isFOS = departmentCode === 'FOS';
     const seeAll = role === ROLES.ADMIN ||
+      role === ROLES.FINANCE_CLERK ||
       (isFOS && (role === ROLES.PROGRAM_LEAD || role === ROLES.HEAD_OF_PROGRAMS));
 
     let deptFilter = '';
@@ -1090,7 +1098,17 @@ class ReconciliationService {
   /**
    * Count the number of overdue unsubmitted reconciliations for a user.
    * A reconciliation is overdue when the request is still in DISPATCHED status
-   * and more than 5 working days have elapsed since the dispatch date.
+   * and more than 4 working days have elapsed since the reference date
+   * (i.e. the 4-working-day deadline has been missed).
+   *
+   * Reference date:
+   *   - Activity requests: activity_end_date  (DATE column — no time component)
+   *   - All other requests: DATE(dispatched_at) (strip time so day-boundary is midnight)
+   *
+   * Using DATE() on dispatched_at is critical: dispatched_at is a DATETIME
+   * (e.g. 2026-07-08 08:04:06), so DATE_ADD(dispatched_at, INTERVAL 7 DAY)
+   * = 2026-07-15 08:04:06, which is NOT <= CURDATE() (midnight) and therefore
+   * the final working day is missed, under-counting by 1.
    */
   async getOverdueCount(userId) {
     const rows = await query(
@@ -1098,25 +1116,70 @@ class ReconciliationService {
        FROM requests r
        WHERE r.requester_id = ?
          AND r.status = 'DISPATCHED'
-         AND r.dispatched_at IS NOT NULL
+         AND (
+           (r.is_activity_request = 0 AND r.dispatched_at IS NOT NULL)
+           OR (r.is_activity_request = 1 AND r.activity_end_date IS NOT NULL)
+         )
          AND (
            SELECT COUNT(*) FROM reconciliations rec
            WHERE rec.request_id = r.id
          ) = 0
          AND (
            SELECT COALESCE(SUM(
-             CASE WHEN DAYOFWEEK(DATE_ADD(r.dispatched_at, INTERVAL seq.n DAY)) NOT IN (1,7) THEN 1 ELSE 0 END
+             CASE WHEN DAYOFWEEK(DATE_ADD(
+               CASE WHEN r.is_activity_request = 1 AND r.activity_end_date IS NOT NULL
+                    THEN r.activity_end_date
+                    ELSE DATE(r.dispatched_at)
+               END,
+             INTERVAL seq.n DAY)) NOT IN (1,7) THEN 1 ELSE 0 END
            ), 0)
            FROM (
              SELECT 1 AS n UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5
              UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9 UNION SELECT 10
              UNION SELECT 11 UNION SELECT 12 UNION SELECT 13 UNION SELECT 14
            ) seq
-           WHERE DATE_ADD(r.dispatched_at, INTERVAL seq.n DAY) <= CURDATE()
-         ) > 5`,
+           WHERE DATE_ADD(
+             CASE WHEN r.is_activity_request = 1 AND r.activity_end_date IS NOT NULL
+                  THEN r.activity_end_date
+                  ELSE DATE(r.dispatched_at)
+             END,
+           INTERVAL seq.n DAY) <= CURDATE()
+         ) > 4`,
       [userId]
     );
     return rows[0] ? Number(rows[0].cnt) : 0;
+  }
+
+  /**
+   * Get reconciliations reviewed by a specific Finance Clerk (for My Review History tab)
+   */
+  async getFinanceReviewHistory(financeClerkId) {
+    return await query(
+      `SELECT r.*,
+              u.first_name as requester_first_name,
+              u.last_name as requester_last_name,
+              d.department_name, d.department_code,
+              rec.id as reconciliation_id,
+              rec.total_spent,
+              rec.total_returned,
+              rec.status as reconciliation_status,
+              rec.finance_comments,
+              rec.reviewed_at,
+              al.action as finance_action,
+              al.created_at as finance_reviewed_at
+       FROM requests r
+       JOIN users u ON r.requester_id = u.id
+       JOIN departments d ON r.department_id = d.id
+       JOIN reconciliations rec ON rec.request_id = r.id
+         AND rec.finance_reviewer_id = ?
+       LEFT JOIN approval_logs al ON al.request_id = r.id
+         AND al.approver_id = ?
+         AND al.approver_role = 'FINANCE_CLERK'
+         AND al.action IN ('APPROVED', 'REJECTED')
+       WHERE rec.status IN ('APPROVED', 'REJECTED')
+       ORDER BY rec.reviewed_at DESC`,
+      [financeClerkId, financeClerkId]
+    );
   }
 }
 

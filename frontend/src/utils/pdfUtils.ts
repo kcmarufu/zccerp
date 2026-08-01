@@ -6,7 +6,7 @@
 import html2pdf from 'html2pdf.js';
 
 /** Build a full travel-claim page HTML block (starts with a page-break div). */
-export const buildTravelClaimPageHTML = (claim: any, requestCode: string, poweredBy: string): string => {
+export const buildTravelClaimPageHTML = (claim: any, requestCode: string): string => {
   const fmtAmt = (v: any) => '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
   const payable = Number(claim.amount_payable) >= 0;
 
@@ -128,15 +128,8 @@ export const buildTravelClaimPageHTML = (claim: any, requestCode: string, powere
     <tbody>${distRows}</tbody>
   </table>` : ''}
 
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:22px">
-    <div style="border-top:1px solid #555;padding-top:5px"><div style="font-size:9px;color:#666">Staff Signature</div><div style="font-size:10px;font-weight:bold;margin-top:2px">${claim.full_name || '___________________'}</div><div style="font-size:9px;color:#999;margin-top:2px">Signature: ___________________</div></div>
-    <div style="border-top:1px solid #555;padding-top:5px"><div style="font-size:9px;color:#666">Program Lead / HOP</div><div style="font-size:10px;font-weight:bold;margin-top:2px">___________________</div><div style="font-size:9px;color:#999;margin-top:2px">Signature: ___________________</div></div>
-    <div style="border-top:1px solid #555;padding-top:5px"><div style="font-size:9px;color:#666">Finance Clerk</div><div style="font-size:10px;font-weight:bold;margin-top:2px">___________________</div><div style="font-size:9px;color:#999;margin-top:2px">Signature: ___________________</div></div>
-  </div>
-
-  <div style="margin-top:18px;padding-top:8px;border-top:1px solid #ccc;display:flex;justify-content:space-between">
+  <div style="margin-top:18px;padding-top:8px;border-top:1px solid #ccc">
     <div style="font-size:9px;color:#666">ERP Connect - Zimbabwe Council of Churches &nbsp;|&nbsp; CONFIDENTIAL &nbsp;|&nbsp; Generated: ${new Date().toLocaleString('en-GB')}</div>
-    <div style="font-size:9px;font-weight:bold;color:#006064">${poweredBy}</div>
   </div>
 
 </div>`;
@@ -196,8 +189,84 @@ export const downloadHTMLAsPDF = (htmlString: string, filename: string): void =>
         scrollX: 0
       },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak: { mode: 'avoid-all' }
+      // 'avoid-all' refuses to split ANY element, so a table that doesn't fit in
+      // the space left on a page is pushed whole to the next one, leaving a large
+      // blank gap. Let content flow instead and only keep individual rows intact.
+      pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.page-footer'] }
     })
     .from(content)
     .save();
+};
+
+/**
+ * Single source of truth for the Purchase Order PDF.
+ * Every PO in the system renders through this so the layout cannot drift
+ * between the list, the detail page and the approvals desk.
+ */
+export const buildPurchaseOrderHTML = (request: any): string => {
+  const items: any[] = request.items || [];
+  const quotations: any[] = request.quotations || [];
+  const selectedQuot: any = quotations.find((q: any) => q.is_selected);
+  const reqCode = request.request_code;
+
+  const poDate = request.final_finance_approved_at
+    ? new Date(request.final_finance_approved_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
+    : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+
+  const totalAmount = selectedQuot
+    ? Number(selectedQuot.total_amount || 0)
+    : items.reduce((s: number, it: any) => s + Number(it.quantity || 1) * Number(it.estimated_unit_price || 0), 0);
+
+  const itemRows = items.map((item: any, i: number) => {
+    const unitPrice = Number(item.estimated_unit_price || 0);
+    const lineTotal = Number(item.quantity || 1) * unitPrice;
+    return `<tr>
+      <td>${i + 1}</td>
+      <td>${item.item_description || item.description || '—'}</td>
+      <td>${item.specifications || '—'}</td>
+      <td align="right">${Number(item.quantity || 1)}</td>
+      <td>${item.unit || item.unit_of_measure || 'pcs'}</td>
+      <td align="right">$${unitPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+      <td align="right">$${lineTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+    </tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Purchase Order — ${reqCode}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; font-size: 12px; color: #1a1a1a; margin: 0; padding: 24px; background: #fff; }
+  .po-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #006064; padding-bottom: 14px; margin-bottom: 20px; }
+  .org-name { font-size: 11px; font-weight: bold; color: #006064; }
+  .po-title { font-size: 22px; font-weight: bold; color: #006064; margin: 4px 0 2px; }
+  .po-sub { font-size: 11px; color: #555; }
+  .po-ref-box { text-align: right; }
+  .po-ref { font-size: 15px; font-weight: bold; color: #006064; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  th { background: #006064; color: #fff; padding: 7px 8px; font-size: 11px; text-align: left; }
+  td { padding: 6px 8px; border-bottom: 1px solid #e0e0e0; font-size: 11px; }
+  .total-row td { font-weight: bold; background: #e0f7fa; border-top: 2px solid #006064; }
+  .page-footer { margin-top: 30px; border-top: 1px solid #ccc; padding-top: 6px; font-size: 10px; color: #888; }
+</style></head><body>
+<div class="po-header">
+  <div>
+    <div class="org-name">ZIMBABWE COUNCIL OF CHURCHES (ZCC)</div>
+    <div class="po-title">PURCHASE ORDER</div>
+    <div class="po-sub">Official Procurement Document</div>
+  </div>
+  <div class="po-ref-box">
+    <div class="po-ref">PO-${reqCode}</div>
+    <div style="font-size:11px;color:#555;">Date: ${poDate}</div>
+    ${selectedQuot ? `<div style="font-size:11px;color:#555;">Supplier: ${selectedQuot.vendor_name || selectedQuot.vendor_company || '—'}</div>` : ''}
+    ${selectedQuot?.quotation_number ? `<div style="font-size:11px;color:#555;">Quotation Ref: ${selectedQuot.quotation_number}</div>` : ''}
+  </div>
+</div>
+<table><thead><tr><th>#</th><th>Description</th><th>Specifications</th><th align="right">Qty</th><th>Unit</th><th align="right">Unit Price</th><th align="right">Total</th></tr></thead>
+<tbody>${itemRows}
+<tr class="total-row"><td colspan="6" align="right">GRAND TOTAL:</td><td align="right">$${totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td></tr>
+</tbody></table>
+<div class="page-footer">
+  <div>Generated: ${new Date().toLocaleString('en-GB')} &nbsp;|&nbsp; ERP Connect — Zimbabwe Council of Churches &nbsp;|&nbsp; OFFICIAL DOCUMENT</div>
+</div>
+</body></html>`;
 };

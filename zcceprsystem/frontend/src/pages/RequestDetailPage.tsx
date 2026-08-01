@@ -3,7 +3,7 @@
  * Shows full request details, items, approval trail, and actions
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -97,6 +97,13 @@ const RequestDetailPage: React.FC = () => {
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const [perDiemClaim, setPerDiemClaim] = useState<PerDiemClaim | null>(null);
 
+  // fetchGeneration is incremented every time a new fetch starts.
+  // Each async fetch captures its generation at start; if the generation has
+  // changed by the time an await resolves, the result is stale and discarded.
+  // This prevents a slow Request-A fetch from overwriting Request-B's state
+  // after the user has already navigated away.
+  const fetchGeneration = useRef(0);
+
   useEffect(() => {
     if (requestId) {
       fetchRequestDetails();
@@ -125,10 +132,24 @@ const RequestDetailPage: React.FC = () => {
   };
 
   const fetchRequestDetails = async () => {
+    // Capture the generation for this fetch invocation.
+    // If requestId changes before this fetch finishes, fetchGeneration.current
+    // will have been incremented and myGeneration will no longer match — all
+    // state updates below will be skipped, preventing stale data from a
+    // previous request from overwriting the current view.
+    fetchGeneration.current += 1;
+    const myGeneration = fetchGeneration.current;
+
     try {
       setIsLoading(true);
       setError(null);
+      // Always clear the claim immediately so a previous request's claim is
+      // never visible while the new request loads.
+      setPerDiemClaim(null);
       const response = await requestService.getById(parseInt(requestId!));
+
+      // Abort if a newer fetch has already started (user navigated away).
+      if (myGeneration !== fetchGeneration.current) return;
 
       if (response.success && response.data) {
         // Handle both response structures
@@ -148,8 +169,17 @@ const RequestDetailPage: React.FC = () => {
         if (resolvedRequest.has_per_diem_claim) {
           try {
             const claim = await perDiemService.getClaim(parseInt(requestId!));
+            // Check again after the second await — another navigation could
+            // have happened while the claim was being fetched.
+            if (myGeneration !== fetchGeneration.current) return;
             setPerDiemClaim(claim);
-          } catch (_) { /* no claim yet */ }
+          } catch (_) {
+            // Any failure (404 = no claim, 403 = access denied, network error)
+            // means we should ensure the claim state is cleared, not left stale.
+            if (myGeneration === fetchGeneration.current) {
+              setPerDiemClaim(null);
+            }
+          }
         } else {
           setPerDiemClaim(null);
         }
@@ -158,6 +188,7 @@ const RequestDetailPage: React.FC = () => {
         if (hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK')) {
           try {
             const reversalResponse = await approvalService.canReverseApproval(requestId!);
+            if (myGeneration !== fetchGeneration.current) return;
             if (reversalResponse.success && reversalResponse.data) {
               setReversalInfo(reversalResponse.data);
             }
@@ -170,9 +201,13 @@ const RequestDetailPage: React.FC = () => {
         setError(response.message || 'Failed to fetch request details');
       }
     } catch (err) {
-      setError('An error occurred while fetching request details');
+      if (myGeneration === fetchGeneration.current) {
+        setError('An error occurred while fetching request details');
+      }
     } finally {
-      setIsLoading(false);
+      if (myGeneration === fetchGeneration.current) {
+        setIsLoading(false);
+      }
     }
   };
 

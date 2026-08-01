@@ -157,6 +157,17 @@ class ProcurementController {
     }
   }
 
+  async resubmitToCommittee(req, res) {
+    try {
+      const result = await procurementService.resubmitToCommittee(
+        req.params.id, req.body.selected_quotation_id || null, req.user, req.body.comments || ''
+      );
+      res.json({ success: true, data: result, message: 'Quotations amended and resubmitted to the Procurement Committee' });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
   async committeeDecision(req, res) {
     try {
       const { decision, selected_quotation_id, justification } = req.body;
@@ -245,7 +256,14 @@ class ProcurementController {
 
   async updateQuotation(req, res) {
     try {
-      const result = await procurementService.updateQuotation(req.params.quotationId, req.body, req.user);
+      const data = { ...req.body };
+      // If a replacement file was uploaded via multer, include file fields
+      if (req.file) {
+        data.file_path = req.file.path;
+        data.file_name = req.file.originalname;
+        data.file_size = req.file.size;
+      }
+      const result = await procurementService.updateQuotation(req.params.quotationId, data, req.user);
       res.json({ success: true, data: result, message: 'Quotation updated successfully' });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
@@ -341,9 +359,11 @@ class ProcurementController {
     try {
       const logs = await query(
         `SELECT pal.*,
-          u.first_name AS actor_first_name, u.last_name AS actor_last_name, u.email AS actor_email
+          u.first_name AS actor_first_name, u.last_name AS actor_last_name, u.email AS actor_email,
+          d.department_code AS actor_department_code
          FROM proc_approval_logs pal
          JOIN users u ON pal.actor_id = u.id
+         LEFT JOIN departments d ON u.department_id = d.id
          WHERE pal.request_id = ?
          ORDER BY pal.created_at ASC`,
         [req.params.id]

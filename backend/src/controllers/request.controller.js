@@ -5,7 +5,7 @@
 
 const { validationResult } = require('express-validator');
 const { query, transaction } = require('../config/database');
-const { REQUEST_STATUS, ROLES } = require('../config/roles');
+const { REQUEST_STATUS, ROLES, isFinanceManager } = require('../config/roles');
 const approvalService = require('../services/approval.service');
 
 class RequestController {
@@ -255,14 +255,15 @@ class RequestController {
         });
       }
 
-      // Get items with budget line info
+      // Get items with budget line info.
+      // LEFT JOIN so items without a matching budget_line_id still appear.
       const items = await query(
         `SELECT ri.*, 
                 bl.budget_code,
                 bl.budget_name,
                 (bl.allocated_amount - bl.spent_amount) as budget_balance
          FROM request_items ri
-         JOIN budget_lines bl ON ri.budget_line_id = bl.id
+         LEFT JOIN budget_lines bl ON ri.budget_line_id = bl.id
          WHERE ri.request_id = ?`,
         [requestId]
       );
@@ -294,9 +295,9 @@ class RequestController {
    */
   async getRequests(req, res) {
     try {
-      const { status, page = 1, limit = 20, sortBy = 'created_at', sortOrder = 'DESC' } = req.query;
+      const { status, search, page = 1, limit = 20, sortBy = 'created_at', sortOrder = 'DESC' } = req.query;
       const pageNum = Math.max(1, parseInt(page) || 1);
-      const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 20));
+      const limitNum = Math.max(1, Math.min(1000, parseInt(limit) || 20));
       const offset = Math.max(0, (pageNum - 1) * limitNum);
       const userRole = req.user.role;
       const userId = req.user.id;
@@ -307,10 +308,28 @@ class RequestController {
 
       // Role-based filtering
       if (userRole === ROLES.GENERAL_USER) {
+        // General users only see their own requests.
         whereClause += ' AND r.requester_id = ?';
         params.push(userId);
+      } else if (userRole === ROLES.PROGRAM_LEAD) {
+        // Finance (FOS) PROGRAM_LEAD are department leaders — they must see ALL requests
+        // just like HEAD_OF_PROGRAMS, FINANCE_CLERK, and ADMIN.
+        // Only non-Finance leads are scoped to their own department.
+        if (!isFinanceManager(req.user)) {
+          // Program Leads see requests from their own department OR requests that
+          // have been explicitly cross-routed to their department for approval.
+          whereClause += ' AND (r.department_id = ? OR r.routing_department_id = ?)';
+          params.push(departmentId, departmentId);
+        }
       }
-      // HEAD_OF_PROGRAMS, PROGRAM_LEAD, FINANCE_CLERK and ADMIN can all see all requests.
+      // Finance PROGRAM_LEAD, HEAD_OF_PROGRAMS, FINANCE_CLERK and ADMIN can see all requests.
+
+      // Search filter — matches reference code, justification, or requester name
+      if (search) {
+        const sp = `%${search}%`;
+        whereClause += ' AND (r.request_code LIKE ? OR r.justification LIKE ? OR CONCAT(u.first_name, \' \', u.last_name) LIKE ?)';
+        params.push(sp, sp, sp);
+      }
 
       // Status filter
       if (status) {
@@ -318,9 +337,11 @@ class RequestController {
         params.push(status);
       }
 
-      // Get total count
+      // Get total count — must JOIN users so the search clause on u.first_name works
       const countResult = await query(
-        `SELECT COUNT(*) as total FROM requests r WHERE ${whereClause}`,
+        `SELECT COUNT(*) as total FROM requests r
+         JOIN users u ON r.requester_id = u.id
+         WHERE ${whereClause}`,
         params
       );
 
@@ -328,7 +349,8 @@ class RequestController {
       const validSortOrder = sortOrder === 'ASC' ? 'ASC' : 'DESC';
       const validSortBy = ['created_at', 'updated_at', 'submitted_at', 'total_amount', 'status', 'request_code'].includes(sortBy) ? sortBy : 'created_at';
 
-      // Get paginated results
+      // Get paginated results.
+      // LEFT JOIN departments so requests without a valid department_id still appear.
       const requests = await query(
         `SELECT r.*,
                 u.first_name as requester_first_name,
@@ -337,7 +359,7 @@ class RequestController {
                 d.department_code
          FROM requests r
          JOIN users u ON r.requester_id = u.id
-         JOIN departments d ON r.department_id = d.id
+         LEFT JOIN departments d ON r.department_id = d.id
          WHERE ${whereClause}
          ORDER BY r.${validSortBy} ${validSortOrder}
          LIMIT ${limitNum} OFFSET ${offset}`,

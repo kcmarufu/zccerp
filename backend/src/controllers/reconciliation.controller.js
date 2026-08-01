@@ -293,9 +293,10 @@ class ReconciliationController {
       const approverId = req.user.id;
       const approverRole = req.user.role;
       const departmentId = req.user.department_id;
+      const departmentCode = req.user.department_code;
 
       const requests = await reconciliationService.getLeadApprovedReconciliations(
-        approverId, approverRole, departmentId
+        approverId, approverRole, departmentId, departmentCode
       );
 
       res.json({ success: true, data: requests });
@@ -353,6 +354,24 @@ class ReconciliationController {
       res.status(400).json({
         success: false,
         error: error.message || 'Failed to update reconciliation'
+      });
+    }
+  }
+
+  /**
+   * Get reconciliations reviewed by the current Finance Clerk
+   * GET /api/reconciliations/finance-review-history
+   */
+  async getFinanceReviewHistory(req, res) {
+    try {
+      const userId = req.user.id;
+      const history = await reconciliationService.getFinanceReviewHistory(userId);
+      res.json({ success: true, data: history });
+    } catch (error) {
+      console.error('Error fetching finance review history:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch review history'
       });
     }
   }

@@ -15,7 +15,7 @@ const perDiemService = {
 
   /** Create or fully replace the claim for a request */
   upsertClaim: async (requestId: number, data: PerDiemClaimFormData): Promise<void> => {
-    await api.put(`/requests/${requestId}/per-diem`, data);
+    await api.post(`/requests/${requestId}/per-diem`, data);
   },
 
   /** Remove the claim from a request */

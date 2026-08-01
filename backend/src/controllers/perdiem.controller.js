@@ -10,6 +10,18 @@
 const { query, transaction } = require('../config/database');
 const { ROLES } = require('../config/roles');
 
+// Strips the time portion from an ISO date string (e.g. '2026-07-17T00:00:00.000Z' → '2026-07-17').
+// MySQL DATE columns reject ISO timestamps, so we normalise here.
+function toSqlDate(val) {
+  if (!val) return null;
+  const s = String(val);
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // ISO timestamp — take first 10 characters
+  if (s.length > 10) return s.slice(0, 10);
+  return s;
+}
+
 // ── Rate defaults (configurable via env so Finance can adjust without a deploy) ──
 const DEFAULT_RATES = {
   breakfast:     parseFloat(process.env.PERDIEM_RATE_BREAKFAST     || '10'),
@@ -40,7 +52,9 @@ class PerDiemController {
       if (!reqRows) {
         return res.status(404).json({ success: false, error: 'Request not found' });
       }
-      if (userRole === ROLES.GENERAL_USER && reqRows.requester_id !== userId) {
+      // Use Number() coercion on both sides to guard against type mismatches
+      // (e.g. integer from DB vs string/bigint from JWT decode edge-cases).
+      if (userRole === ROLES.GENERAL_USER && Number(reqRows.requester_id) !== Number(userId)) {
         return res.status(403).json({ success: false, error: 'Access denied' });
       }
       if (!reqRows.has_per_diem_claim) {
@@ -130,12 +144,13 @@ class PerDiemController {
 
         // ── Calculate trip items (no time-of-day eligibility rules) ────────────────
         for (const item of trip_items) {
-          // Store rates at time of submission so records are reproducible
-          item._rate_breakfast    = item.rate_breakfast    ?? DEFAULT_RATES.breakfast;
-          item._rate_lunch        = item.rate_lunch        ?? DEFAULT_RATES.lunch;
-          item._rate_dinner       = item.rate_dinner       ?? DEFAULT_RATES.dinner;
-          item._rate_overnight    = item.rate_overnight    ?? DEFAULT_RATES.overnight;
-          item._rate_accommodation = item.rate_accommodation ?? 0;
+          // Store rates at time of submission so records are reproducible.
+          // Use parseFloat to ensure numeric arithmetic — frontend may send strings.
+          item._rate_breakfast    = parseFloat(item.rate_breakfast    ?? DEFAULT_RATES.breakfast)    || 0;
+          item._rate_lunch        = parseFloat(item.rate_lunch        ?? DEFAULT_RATES.lunch)        || 0;
+          item._rate_dinner       = parseFloat(item.rate_dinner       ?? DEFAULT_RATES.dinner)       || 0;
+          item._rate_overnight    = parseFloat(item.rate_overnight    ?? DEFAULT_RATES.overnight)    || 0;
+          item._rate_accommodation = parseFloat(item.rate_accommodation ?? 0)                       || 0;
 
           item._line_total =
             (item.breakfast      ? item._rate_breakfast     : 0) +
@@ -151,8 +166,8 @@ class PerDiemController {
         // Derive trip date range from depart (trip_date) and expected return_date
         const allDates = [];
         for (const i of trip_items) {
-          if (i.trip_date)   allDates.push(i.trip_date);
-          if (i.return_date) allDates.push(i.return_date);
+          if (i.trip_date)   allDates.push(toSqlDate(i.trip_date));
+          if (i.return_date) allDates.push(toSqlDate(i.return_date));
         }
         allDates.sort();
         const trip_start_date = allDates[0] || null;
@@ -217,7 +232,7 @@ class PerDiemController {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
             [claimId,
              t.recipient_user_id || null, t.recipient_name || null, i,
-             t.trip_date, t.return_date || null, t.from_location, t.to_location,
+             toSqlDate(t.trip_date), toSqlDate(t.return_date) || null, t.from_location, t.to_location,
              t.departure_time, t.arrival_time, t.purpose,
              t.breakfast ? 1 : 0, t.lunch ? 1 : 0, t.dinner ? 1 : 0, t.overnight_stay ? 1 : 0, t.accommodation ? 1 : 0,
              t._rate_breakfast, t._rate_lunch, t._rate_dinner, t._rate_overnight, t._rate_accommodation, t._line_total]

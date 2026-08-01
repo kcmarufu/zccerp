@@ -20,7 +20,37 @@ const PROC_STATUS = {
   CANCELLED: 'CANCELLED'
 };
 
+// ── High-value procurement rule ──────────────────────────────────────────────
+// A selected quotation at or above this USD amount is voted on by the Super
+// Admin (ADMIN) and the head of the HIGH_VALUE_SEAT department ONLY — the
+// regular "any 3 committee members" rule does not apply to it.
+// Both constants are deliberately here so the threshold or the department can
+// be changed in one place.
+const HIGH_VALUE_THRESHOLD_USD = 5000;
+const HIGH_VALUE_SEAT = 'FOS';
+
 class ProcurementService {
+
+  /**
+   * Returns the selected quotation's value and whether it crosses the
+   * high-value threshold. Only USD quotations are evaluated; anything else
+   * falls back to the normal committee flow.
+   */
+  async isHighValueRequest(requestId) {
+    const rows = await query(
+      `SELECT total_amount, currency FROM proc_quotations
+        WHERE request_id = ? AND is_selected = TRUE LIMIT 1`,
+      [requestId]
+    );
+    if (!rows.length) return { isHighValue: false, amount: 0, currency: null };
+    const amount = parseFloat(rows[0].total_amount) || 0;
+    const currency = rows[0].currency || 'USD';
+    return {
+      isHighValue: currency === 'USD' && amount >= HIGH_VALUE_THRESHOLD_USD,
+      amount,
+      currency
+    };
+  }
 
   // ============================================================
   // PURCHASE REQUESTS
@@ -232,7 +262,12 @@ class ProcurementService {
         u.first_name, u.last_name, u.email AS requester_email,
         d.department_name, d.department_code,
         dn.donor_name, dn.donor_code,
-        (SELECT COUNT(*) FROM proc_quotations q WHERE q.request_id = pr.id) AS quotation_count
+        (SELECT COUNT(*) FROM proc_quotations q WHERE q.request_id = pr.id) AS quotation_count,
+        (SELECT q.total_amount FROM proc_quotations q
+          WHERE q.request_id = pr.id AND q.is_selected = TRUE LIMIT 1) AS selected_quotation_amount,
+        (SELECT CASE WHEN q.currency = 'USD' AND q.total_amount >= ${HIGH_VALUE_THRESHOLD_USD} THEN 1 ELSE 0 END
+           FROM proc_quotations q
+          WHERE q.request_id = pr.id AND q.is_selected = TRUE LIMIT 1) AS is_high_value
       FROM proc_requests pr
       JOIN users u ON pr.requester_id = u.id
       LEFT JOIN departments d ON pr.department_id = d.id
@@ -266,6 +301,13 @@ class ProcurementService {
     if (!requests.length) return null;
 
     const request = requests[0];
+
+    // Flag high-value requests so the UI can mark them for special approval.
+    const highValue = await this.isHighValueRequest(requestId);
+    request.is_high_value = highValue.isHighValue ? 1 : 0;
+    request.selected_quotation_amount = highValue.amount || null;
+    request.high_value_threshold = HIGH_VALUE_THRESHOLD_USD;
+    request.high_value_seat = HIGH_VALUE_SEAT;
 
     const [items, logs, quotations] = await Promise.all([
       query(
@@ -692,7 +734,23 @@ class ProcurementService {
     );
     const seat = userRow?.department_code || null;
 
-    // Any Procurement Committee member may vote — no department restriction
+    // ── High-value gate ──────────────────────────────────────────────────────
+    // Quotations at or above the threshold are voted on by the Super Admin and
+    // the head of the HIGH_VALUE_SEAT department ONLY. Everything below the
+    // threshold keeps the normal "any 3 committee members" flow untouched.
+    const highValue = await this.isHighValueRequest(requestId);
+
+    if (highValue.isHighValue) {
+      const isSuperAdmin = user.role === ROLES.ADMIN;
+      const isHighValueSeat = seat === HIGH_VALUE_SEAT;
+      if (!isSuperAdmin && !isHighValueSeat) {
+        throw new Error(
+          `This request is USD ${highValue.amount.toFixed(2)}, at or above the USD ${HIGH_VALUE_THRESHOLD_USD} threshold. ` +
+          `Only the Super Admin and the ${HIGH_VALUE_SEAT} head of department may vote on it.`
+        );
+      }
+    }
+    // Below the threshold: any Procurement Committee member may vote.
 
     return transaction(async (conn) => {
       // Check if this voter has already cast a vote on this request
@@ -735,6 +793,51 @@ class ProcurementService {
       const totalApproved = allVotes.filter(v => v.vote === 'APPROVED').length;
       const totalRejected = allVotes.filter(v => v.vote === 'REJECTED').length;
       const totalVotes = allVotes.length;
+
+      // ── High-value tally: needs BOTH the Super Admin AND the high-value seat ──
+      if (highValue.isHighValue) {
+        const [voterRows] = await conn.execute(
+          `SELECT cv.vote, u.role, d.department_code
+             FROM proc_committee_votes cv
+             JOIN users u ON cv.voter_id = u.id
+             LEFT JOIN departments d ON u.department_id = d.id
+            WHERE cv.request_id = ?`,
+          [requestId]
+        );
+        const adminApproved = voterRows.some(v => v.vote === 'APPROVED' && v.role === ROLES.ADMIN);
+        const seatApproved  = voterRows.some(v => v.vote === 'APPROVED' && v.department_code === HIGH_VALUE_SEAT);
+
+        if (adminApproved && seatApproved) {
+          await conn.execute(
+            `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
+            [requestId]
+          );
+          await conn.execute(
+            `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+             VALUES (?, ?, ?, 'COMMITTEE_APPROVED', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', ?)`,
+            [requestId, user.id, user.role,
+             `High-value approval (USD ${highValue.amount.toFixed(2)}): Super Admin and ${HIGH_VALUE_SEAT} head both approved — forwarded to Finance`]
+          );
+          return {
+            success: true,
+            status: 'PENDING_FINAL_FINANCE',
+            highValue: true,
+            message: `High-value request approved by both the Super Admin and the ${HIGH_VALUE_SEAT} head. Forwarded to Finance for final approval.`
+          };
+        }
+
+        const waitingOn = [];
+        if (!adminApproved) waitingOn.push('Super Admin');
+        if (!seatApproved) waitingOn.push(`${HIGH_VALUE_SEAT} head of department`);
+        return {
+          success: true,
+          status: 'PENDING_COMMITTEE',
+          highValue: true,
+          votedCount: (adminApproved ? 1 : 0) + (seatApproved ? 1 : 0),
+          totalRequired: 2,
+          message: `Vote recorded. High-value request (USD ${highValue.amount.toFixed(2)}) still awaiting: ${waitingOn.join(' and ')}.`
+        };
+      }
 
       // For ADMIN override — immediately advance
       if (user.role === ROLES.ADMIN && decision === 'APPROVED') {

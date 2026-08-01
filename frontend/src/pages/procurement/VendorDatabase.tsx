@@ -144,7 +144,7 @@ const VendorDatabase: React.FC = () => {
   thead th{background:#006064;color:white;padding:6px 8px;text-align:left;}
   tbody td{padding:5px 8px;border-bottom:1px solid #e0e0e0;}
   tbody tr:nth-child(even) td{background:#f7f7f7;}
-  .footer{margin-top:16px;padding-top:8px;border-top:1px solid #e0e0e0;display:flex;justify-content:space-between;font-size:9px;color:#999;}
+  .footer{margin-top:16px;padding-top:8px;border-top:1px solid #e0e0e0;font-size:9px;color:#999;}
 </style></head><body>
 <div class="header">
   <div><div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div><h1>Vendor Database</h1><p>Total vendors: <strong>${vendors.length}</strong></p></div>
@@ -154,7 +154,7 @@ const VendorDatabase: React.FC = () => {
   <thead><tr><th>#</th><th>Company Name</th><th>Category</th><th>Contact Person</th><th>Email</th><th>Phone</th><th>Prequalified</th><th>Active</th></tr></thead>
   <tbody>${tableRows}</tbody>
 </table>
-<div class="footer"><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div><div>Powered By Kudakwashe C Marufu</div></div>
+<div class="footer"><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div></div>
 </body></html>`;
     downloadHTMLAsPDF(html, `vendor-database-${new Date().toISOString().slice(0, 10)}`);
     toast.success('PDF exported');

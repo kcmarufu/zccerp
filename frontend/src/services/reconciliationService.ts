@@ -129,6 +129,14 @@ export const reconciliationService = {
   },
 
   /**
+   * Get reconciliations reviewed by the current Finance Clerk
+   */
+  async getFinanceReviewHistory(): Promise<any> {
+    const response = await api.get('/reconciliations/finance-review-history');
+    return response.data;
+  },
+
+  /**
    * Check if the current user has 2+ overdue unsubmitted reconciliations.
    * Returns { overdueCount, isBlocked }
    */

@@ -58,7 +58,6 @@ import perDiemService from '../../services/perDiemService';
 
 const DispatchDesk: React.FC = () => {
   // ── HARDCODED BRANDING ────────────────────────────────────────────────
-  const POWERED_BY = 'Powered By Kudakwashe C Marufu' as const;
   const DOC_TITLE  = 'Float Requisition' as const;
   // ──────────────────────────────────────────────────────────────────
   const [requests, setRequests] = useState<Request[]>([]);
@@ -122,7 +121,7 @@ const DispatchDesk: React.FC = () => {
 
       const response = await requestService.getAll({
         status: statusToFetch,
-        limit: 100
+        limit: 1000
       });
 
       if (response.success && response.data) {
@@ -247,10 +246,8 @@ const DispatchDesk: React.FC = () => {
   tbody tr:nth-child(even) td {background:#f7f7f7;}
   .total-row td {font-weight:bold;background:#e0f2f1 !important;border-top:1.5px solid #006064;font-size:13px;}
   .act-APPROVED {color:#2e7d32;font-weight:bold;} .act-REJECTED {color:#c62828;font-weight:bold;} .act-SUBMITTED {color:#1565c0;font-weight:bold;}
-  .sig-block {display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:28px;}
-  .sig-col {text-align:center;} .sig-line {border-top:1px solid #333;margin-top:40px;padding-top:6px;font-size:11px;color:#555;}
-  .page-footer {margin-top:24px;padding-top:8px;border-top:2px solid #e0e0e0;display:flex;justify-content:space-between;}
-  .footer-left {font-size:10px;color:#999;} .footer-right {font-size:10px;font-weight:bold;color:#006064;}
+  .page-footer {margin-top:24px;padding-top:8px;border-top:2px solid #e0e0e0;}
+  .footer-left {font-size:10px;color:#999;}
 </style></head><body>
 <div class="doc-header">
   <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
@@ -280,17 +277,11 @@ const DispatchDesk: React.FC = () => {
 <table><thead><tr><th>#</th><th>Budget Code</th><th>Description</th><th align="right">Qty</th><th>Unit</th><th align="right">Unit Price</th><th align="right">Subtotal</th></tr></thead>
 <tbody>${itemRows}<tr class="total-row"><td colspan="6" align="right">TOTAL:</td><td align="right">$${total.toLocaleString(undefined,{minimumFractionDigits:2})}</td></tr></tbody></table>
 ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By</th><th>Role</th><th>Comments</th><th>Date</th></tr></thead><tbody>${trailRows}</tbody></table>`:''}
-<div class="sig-block">
-  <div class="sig-col"><div class="sig-line">Requester: ${req.requester_first_name||''} ${req.requester_last_name||''}</div></div>
-  <div class="sig-col"><div class="sig-line">Programme Lead / HOP</div></div>
-  <div class="sig-col"><div class="sig-line">Finance Clerk</div></div>
-</div>
 <div class="page-footer">
   <div class="footer-left"><div>Generated: ${format(new Date(),'dd MMM yyyy HH:mm')}</div><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div></div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 ${buildDigitalStamp(req.status || '')}
-${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code, POWERED_BY) : ''}
+${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
 </body></html>`;
       downloadHTMLAsPDF(html, `float-requisition-${requestCode}-${format(new Date(), 'yyyy-MM-dd')}`);
       toast.success('PDF downloaded');
@@ -451,8 +442,8 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code, POWERE
   tbody td{padding:5px 8px;border-bottom:1px solid #e0e0e0;}
   tbody tr:nth-child(even) td{background:#f7f7f7;}
   .total-row td{font-weight:bold;background:#e0f2f1 !important;border-top:1.5px solid #006064;}
-  .page-footer{margin-top:24px;padding-top:8px;border-top:1.5px solid #e0e0e0;display:flex;justify-content:space-between;}
-  .footer-left{font-size:9px;color:#999;} .footer-right{font-size:9px;font-weight:bold;color:#006064;}
+  .page-footer{margin-top:24px;padding-top:8px;border-top:1.5px solid #e0e0e0;}
+  .footer-left{font-size:9px;color:#999;}
 </style></head><body>
 <div class="doc-header">
   <div><div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div><h1>${DOC_TITLE} — Dispatch Report</h1><p>Records: <strong>${targets.length}</strong> &nbsp;|&nbsp; Total: <strong>$${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong></p></div>
@@ -467,7 +458,6 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code, POWERE
 </table>
 <div class="page-footer">
   <div class="footer-left"><div>Generated: ${format(new Date(), 'dd MMM yyyy HH:mm')}</div><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div></div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 ${buildDigitalStamp('')}
 </body></html>`;

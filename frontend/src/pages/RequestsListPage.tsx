@@ -53,7 +53,6 @@ import { requestService } from '../services/requestService';
 import { Request, RequestStatus } from '../types';
 
 // ── HARDCODED BRANDING ─────────────────────────────────────────────────────
-const POWERED_BY = 'Powered By Kudakwashe C Marufu' as const;
 const DOC_TITLE  = 'Float Requisition' as const;
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -226,9 +225,8 @@ const RequestsListPage: React.FC = () => {
   .status-REJECTED        { color: #c62828; font-weight: bold; }
   .status-DRAFT           { color: #616161; }
   .status-DISPATCHED      { color: #1565c0; font-weight: bold; }
-  .page-footer { margin-top: 24px; padding-top: 8px; border-top: 2px solid #e0e0e0; display: flex; justify-content: space-between; }
+  .page-footer { margin-top: 24px; padding-top: 8px; border-top: 2px solid #e0e0e0; }
   .footer-left  { font-size: 9px; color: #999; }
-  .footer-right { font-size: 9px; font-weight: bold; color: #006064; }
   @media print { body { padding: 8px; } thead { display: table-header-group; } tr { page-break-inside: avoid; } }
 </style></head><body>
 <div class="doc-header">
@@ -250,7 +248,6 @@ const RequestsListPage: React.FC = () => {
 </table>
 <div class="page-footer">
   <div class="footer-left"><div>Generated: ${format(new Date(), 'dd MMM yyyy HH:mm')}</div><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div></div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 </body></html>`;
     const w = window.open('', '_blank', 'width=960,height=720');

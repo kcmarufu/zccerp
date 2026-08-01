@@ -71,6 +71,12 @@ export const approvalService = {
     return response.data;
   },
 
+  // Finance force-reject: reject an APPROVED or DISPATCHED request after the reversal window
+  financeForceReject: async (requestId: number | string, comments: string): Promise<ApiResponse<{ newStatus: string }>> => {
+    const response = await api.post(`/approvals/${requestId}/finance-force-reject`, { comments });
+    return response.data;
+  },
+
   // Get approval history (all requests the approver has acted on)
   getApprovalHistory: async (departmentId?: number): Promise<ApiResponse<Request[]>> => {
     const response = await api.get('/approvals/history', {

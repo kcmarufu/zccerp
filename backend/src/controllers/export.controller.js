@@ -200,33 +200,12 @@ class ExportController {
         y += 10;
       }
 
-      // ── Signature Lines ───────────────────────────────────────────────────────
-      if (y > 650) { doc.addPage(); y = 50; }
-      y += 10;
-      doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(1).strokeColor('#006064').stroke();
-      y += 14;
-      doc.fontSize(11).font('Helvetica-Bold').fillColor('#006064').text('AUTHORISATION SIGNATURES', 50, y);
-      y += 22;
-
-      const sigPositions = [50, 195, 340];
-      const sigLabels = [
-        `Requester\n${request.requester_first_name} ${request.requester_last_name}`,
-        'Programme Lead / HOP',
-        'Finance Clerk'
-      ];
-      sigPositions.forEach((x, i) => {
-        doc.moveTo(x, y + 36).lineTo(x + 130, y + 36).lineWidth(0.5).strokeColor('#333').stroke();
-        doc.fontSize(8).font('Helvetica').fillColor('#555').text(sigLabels[i], x, y + 40, { width: 130 });
-      });
-      y += 60;
-
       // ── Footer ────────────────────────────────────────────────────────────────
       if (y > 720) { doc.addPage(); y = 50; }
       doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(0.5).strokeColor('#ccc').stroke();
       y += 6;
       doc.fontSize(7).font('Helvetica').fillColor('#999');
       doc.text(`Generated: ${new Date().toLocaleString('en-GB')}  |  ERP Connect — Zimbabwe Council of Churches  |  CONFIDENTIAL`, 50, y);
-      doc.text('Powered By Kudakwashe C Marufu', doc.page.width - 230, y, { width: 180, align: 'right' });
 
       doc.end();
 
@@ -430,31 +409,12 @@ class ExportController {
         y += 10;
       }
 
-      // ── Signature Lines ────────────────────────────────────────────────────────
-      if (y > 650) { doc.addPage(); y = 50; }
-      y += 10;
-      doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(1).strokeColor('#006064').stroke();
-      y += 14;
-      doc.fontSize(11).font('Helvetica-Bold').fillColor('#006064').text('AUTHORISATION SIGNATURES', 50, y);
-      y += 22;
-      const sigPositions = [50, 195, 340];
-      const sigLabels = [
-        `Requester\n${request.requester_first_name} ${request.requester_last_name}`,
-        'Programme Lead / HOP',
-        'Finance Clerk'
-      ];
-      sigPositions.forEach((x, i) => {
-        doc.moveTo(x, y + 36).lineTo(x + 130, y + 36).lineWidth(0.5).strokeColor('#333').stroke();
-        doc.fontSize(8).font('Helvetica').fillColor('#555').text(sigLabels[i], x, y + 40, { width: 130 });
-      });
-
-      // ── Footer ─────────────────────────────────────────────────────────────────
-      y += 60;
+      // ── Footer (signature block removed) ───────────────────────────────────────
+      if (y > 720) { doc.addPage(); y = 50; }
       doc.moveTo(50, y).lineTo(doc.page.width - 50, y).lineWidth(0.5).strokeColor('#ccc').stroke();
       y += 6;
       doc.fontSize(7).font('Helvetica').fillColor('#999');
       doc.text(`Generated: ${new Date().toLocaleString('en-GB')}  |  ERP Connect — Zimbabwe Council of Churches  |  CONFIDENTIAL`, 50, y);
-      doc.text('Powered By Kudakwashe C Marufu', doc.page.width - 230, y, { width: 180, align: 'right' });
 
       doc.end();
 
@@ -818,8 +778,8 @@ class ExportController {
         await connection.execute(
           `INSERT INTO approval_logs 
            (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
-           VALUES (?, ?, 'FINANCE_CLERK', 'DISPATCHED', 'APPROVED', 'DISPATCHED', 'Request dispatched', ?)`,
-          [requestId, userId, ipAddress]
+           VALUES (?, ?, ?, 'DISPATCHED', 'APPROVED', 'DISPATCHED', 'Request dispatched', ?)`,
+          [requestId, userId, req.user.role, ipAddress]
         );
       });
 
@@ -940,8 +900,8 @@ class ExportController {
         await connection.execute(
           `INSERT INTO approval_logs
            (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
-           VALUES (?, ?, 'FINANCE_CLERK', 'REVERSED', 'DISPATCHED', 'APPROVED', ?, ?)`,
-          [requestId, userId, reason || 'Dispatch reversed by Finance', ipAddress]
+           VALUES (?, ?, ?, 'REVERSED', 'DISPATCHED', 'APPROVED', ?, ?)`,
+          [requestId, userId, req.user.role, reason || 'Dispatch reversed by Finance', ipAddress]
         );
       });
 

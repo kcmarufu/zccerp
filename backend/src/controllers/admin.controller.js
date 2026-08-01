@@ -147,7 +147,7 @@ class AdminController {
    */
   async getUserById(req, res) {
     try {
-      const { userId } = req.params;
+      const userId = req.params.id;
       const users = await query(
         `SELECT u.id, u.email, u.first_name, u.last_name,
                 u.is_active, u.last_login, u.created_at, u.updated_at,
@@ -229,7 +229,7 @@ class AdminController {
    */
   async updateUser(req, res) {
     try {
-      const { userId } = req.params;
+      const userId = req.params.id;
       const { email, first_name, last_name, role, department_id, is_active } = req.body;
 
       // Check user exists
@@ -283,7 +283,7 @@ class AdminController {
    */
   async resetPassword(req, res) {
     try {
-      const { userId } = req.params;
+      const userId = req.params.id;
       const { newPassword } = req.body;
 
       if (!newPassword || newPassword.length < 8) {
@@ -321,7 +321,7 @@ class AdminController {
    */
   async toggleActive(req, res) {
     try {
-      const { userId } = req.params;
+      const userId = req.params.id;
 
       // Prevent self-deactivation
       if (parseInt(userId) === req.user.id) {
@@ -356,7 +356,7 @@ class AdminController {
    */
   async deleteUser(req, res) {
     try {
-      const { userId } = req.params;
+      const userId = req.params.id;
       const targetId = parseInt(userId);
 
       // Prevent self-deletion
@@ -537,7 +537,7 @@ class AdminController {
    */
   async getLoginHistory(req, res) {
     try {
-      const { userId } = req.params;
+      const userId = req.params.id;
 
       // Try to get login history from approval_logs or a dedicated table
       // For now, return the last login info and any logged auth events

@@ -16,10 +16,20 @@ const leaveAccrualScheduler = require('./scheduler/leaveAccrual.scheduler');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Trust the first proxy (Nginx) so that express-rate-limit can correctly
+// identify client IPs from the X-Forwarded-For header.
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
+const _corsAllowed = (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map(s => s.trim());
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (server-to-server, curl, health checks)
+    if (!origin || _corsAllowed.includes(origin)) return callback(null, origin || true);
+    // Unknown origin — don't set ACAO; browser will enforce the block
+    callback(null, false);
+  },
   credentials: true
 }));
 
@@ -58,6 +68,16 @@ app.use('/api/', (req, res, next) => {
 // Body parsing — 2mb max (file uploads use multipart, not JSON)
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
+// Prevent browsers and proxies from caching any API response.
+// Without this, a shared device could serve one user's private data to the next
+// user who opens the same URL (e.g. GET /api/requests).
+app.use('/api/', (req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {

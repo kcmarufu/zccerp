@@ -636,7 +636,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </Box>
         <Box>
           <Typography variant="subtitle1" fontWeight="bold" color="primary.dark" lineHeight={1.2}>
-            ERP Connect
+            ZCC ERP Connect
           </Typography>
           <Typography variant="caption" color="text.secondary">
             Together, Let&apos;s Make the World a Better Place
@@ -830,7 +830,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       <Divider />
       <Box sx={{ p: 1.5 }}>
         <Typography variant="caption" color="text.disabled" textAlign="center" display="block">
-          ERP Connect v1.0.0
+          ZCC ERP Connect v1.0.0
         </Typography>
       </Box>
     </Box>

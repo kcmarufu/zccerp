@@ -18,7 +18,7 @@ dist/
 # Logs
 logs/
 *.log
-backend/logs/
+backend/logs
 
 # Uploads (user files)
 backend/uploads/invoices/*
@@ -47,3 +47,9 @@ Thumbs.db
 
 # Temp files
 *.tmp
+# Runtime data (never commit uploads or logs)
+backend/logs
+backend/uploads/*
+!backend/uploads/*/
+backend/uploads/*/*
+!backend/uploads/*/.gitkeep

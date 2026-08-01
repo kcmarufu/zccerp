@@ -45,7 +45,7 @@ const PIPELINE_STEPS = [
 const ProcurementDashboard: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { user, hasRole, hasPermission } = useAuthStore();
+  const { user, hasRole, hasPermission, isAdminHrManager } = useAuthStore();
 
   const { data: stats, isLoading, error } = useQuery({
     queryKey: ['proc-dashboard'],
@@ -57,6 +57,7 @@ const ProcurementDashboard: React.FC = () => {
   const canApprove = hasPermission('approve_purchase_request') || hasPermission('proc_finance_approve');
   const canManageQuotations = hasPermission('manage_quotations');
   const canCommittee = hasPermission('committee_review');
+  const isAdminHr = isAdminHrManager();
 
   const kpiCards = [
     {
@@ -74,15 +75,15 @@ const ProcurementDashboard: React.FC = () => {
       value: stats?.totalInProcurement ?? 'â€”',
       icon: <QuotIcon />,
       gradient: 'linear-gradient(135deg, #6a1b9a 0%, #4a148c 100%)',
-      show: canManageQuotations || hasRole('ADMIN', 'FINANCE_CLERK')
+      show: canManageQuotations || hasRole('ADMIN', 'FINANCE_CLERK') || isAdminHr
     },
     {
       label: 'At Committee',
       sublabel: 'Awaiting all 3 votes',
-      value: stats?.totalAwaitingCommittee ?? 'â€”',
+      value: stats?.totalAwaitingCommittee ?? 'â€"',
       icon: <CommitteeIcon />,
       gradient: 'linear-gradient(135deg, #0277bd 0%, #01579b 100%)',
-      show: canCommittee || hasRole('ADMIN', 'FINANCE_CLERK')
+      show: canCommittee || hasRole('ADMIN', 'FINANCE_CLERK') || isAdminHr
     },
     {
       label: 'Completed',
@@ -133,7 +134,7 @@ const ProcurementDashboard: React.FC = () => {
       icon: <VendorIcon sx={{ fontSize: 28 }} />,
       color: '#6a1b9a',
       path: '/procurement/vendors',
-      show: canManageQuotations
+      show: canManageQuotations || isAdminHr
     }
   ].filter(a => a.show);
 

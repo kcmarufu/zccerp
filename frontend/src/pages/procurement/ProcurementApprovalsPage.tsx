@@ -60,7 +60,7 @@ import {
 } from '../../services/procurementService';
 import { ProcRequest, ProcVendor } from '../../types';
 import api from '../../services/api';
-import { downloadHTMLAsPDF } from '../../utils/pdfUtils';
+import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type ActionType =
@@ -80,10 +80,20 @@ interface ActionState {
 // Only exclude DRAFT from history tabs so completed/forwarded items are ALWAYS visible
 const ACTED_ON_EXCLUDED = ['DRAFT'];
 
-const getRoleTabs = (role: string) => {
+const getRoleTabs = (role: string, isAdminHr: boolean = false) => {
   switch (role) {
     case 'PROGRAM_LEAD':
     case 'HEAD_OF_PROGRAMS':
+      if (isAdminHr) {
+        // Admin/HR LEAD/HOD: dept approval + full org-wide procurement view
+        return [
+          { label: 'Awaiting My Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
+          { label: 'Procurement Queue',     status: 'PENDING_PROCUREMENT',   actedOn: false },
+          { label: 'At Committee',          status: 'PENDING_COMMITTEE',     actedOn: false },
+          { label: 'Final Finance',         status: 'PENDING_FINAL_FINANCE', actedOn: false },
+          { label: 'All Records',           status: '',                      actedOn: true  }
+        ];
+      }
       return [
         { label: 'Awaiting My Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
         { label: 'All Records', status: '', actedOn: true }
@@ -126,10 +136,11 @@ const ProcurementApprovalsPage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { user } = useAuthStore();
+  const { user, isAdminHrManager } = useAuthStore();
 
   const role = user?.role || '';
-  const tabs = getRoleTabs(role);
+  const isAdminHr = isAdminHrManager();
+  const tabs = getRoleTabs(role, isAdminHr);
 
   const [tabIdx, setTabIdx] = useState(0);
   const [page, setPage] = useState(0);
@@ -239,120 +250,7 @@ const ProcurementApprovalsPage: React.FC = () => {
     try {
       const request = await getPurchaseRequestById(String(requestId)) as any;
       if (!request) { toast.error('Could not load request details'); return; }
-      const items: any[] = request.items || [];
-      const quotations: any[] = request.quotations || [];
-      const selectedQuot = quotations.find((q: any) => q.is_selected);
-      const POWERED_BY = 'Powered By Kudakwashe C Marufu';
-      const poDate = request.final_finance_approved_at
-        ? new Date(request.final_finance_approved_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-        : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
-      const totalAmount = selectedQuot
-        ? Number(selectedQuot.total_amount || 0)
-        : items.reduce((s: number, it: any) => s + Number(it.quantity || 1) * Number(it.estimated_unit_price || 0), 0);
-
-      const itemRows = items.map((item: any, i: number) => {
-        const unitPrice = Number(item.estimated_unit_price || 0);
-        const lineTotal = Number(item.quantity || 1) * unitPrice;
-        return `<tr>
-          <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8">${i + 1}</td>
-          <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8">${item.item_description}${item.specifications ? `<br/><span style="font-size:10px;color:#666">${item.specifications}</span>` : ''}</td>
-          <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8;text-align:center">${item.quantity}</td>
-          <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8">${item.unit_of_measure || '—'}</td>
-          <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8;text-align:right">${unitPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-          <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8;text-align:right;font-weight:bold">${lineTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-        </tr>`;
-      }).join('');
-
-      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>Purchase Order — ${request.request_code}</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; font-size: 12px; color: #1a1a1a; margin: 0; padding: 24px; background: #fff; }
-  .po-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #006064; padding-bottom: 14px; margin-bottom: 20px; }
-  .org-name { font-size: 11px; font-weight: bold; color: #006064; letter-spacing: 0.4px; }
-  .po-title { font-size: 22px; font-weight: bold; color: #006064; margin: 4px 0 2px; }
-  .po-sub { font-size: 11px; color: #555; }
-  .po-ref-box { text-align: right; }
-  .po-ref-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.4px; }
-  .po-ref-val { font-size: 18px; font-weight: bold; color: #006064; letter-spacing: 1px; }
-  .po-date { font-size: 11px; color: #555; margin-top: 4px; }
-  .po-status { display:inline-block; padding:3px 10px; border-radius:12px; font-size:11px; font-weight:bold; background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; margin-top:6px; }
-  .section-title { font-size: 11px; font-weight: bold; color: #006064; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1.5px solid #006064; padding-bottom: 4px; margin: 18px 0 10px; }
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin-bottom: 14px; }
-  .info-item { display: flex; flex-direction: column; gap: 2px; }
-  .info-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.4px; font-weight: bold; }
-  .info-value { font-size: 12px; color: #1a1a1a; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 11px; }
-  thead th { background: #006064; color: white; padding: 7px 9px; text-align: left; font-size: 10px; text-transform: uppercase; }
-  tbody td { padding: 6px 9px; border-bottom: 1px solid #e8e8e8; vertical-align: top; }
-  tbody tr:nth-child(even) td { background: #f9f9f9; }
-  .total-row td { font-weight: bold; background: #e0f2f1 !important; font-size: 13px; border-top: 2px solid #006064; padding: 8px 9px; }
-  .sig-block { display: flex; gap: 40px; margin-top: 40px; }
-  .sig-col { flex: 1; }
-  .sig-line { border-top: 1.5px solid #333; padding-top: 6px; font-size: 11px; color: #333; margin-top: 40px; }
-  .page-footer { margin-top: 28px; padding-top: 10px; border-top: 2px solid #e0e0e0; display: flex; justify-content: space-between; font-size: 10px; color: #999; }
-  .footer-right { font-weight: bold; color: #006064; }
-  .terms-box { background: #f5f5f5; border-left: 4px solid #006064; padding: 10px 14px; border-radius: 0 4px 4px 0; margin: 14px 0; font-size: 10px; color: #444; }
-</style></head><body>
-<div class="po-header">
-  <div>
-    <div class="org-name">Zimbabwe Council of Churches — ERP Connect</div>
-    <div class="po-title">PURCHASE ORDER</div>
-    <div class="po-sub">This document constitutes a binding purchase order upon supplier acceptance.</div>
-    <div class="po-status">✓ COMMITTEE APPROVED — COMPLETED</div>
-  </div>
-  <div class="po-ref-box">
-    <div class="po-ref-label">PO Reference</div>
-    <div class="po-ref-val">PO-${request.request_code}</div>
-    <div class="po-date">Date: ${poDate}</div>
-  </div>
-</div>
-<div class="section-title">Supplier / Vendor Information</div>
-<div class="info-grid">
-  <div class="info-item"><span class="info-label">Supplier Name</span><span class="info-value">${selectedQuot?.vendor_name || '—'}</span></div>
-  <div class="info-item"><span class="info-label">Quotation Reference</span><span class="info-value">${selectedQuot?.quotation_number || '—'}</span></div>
-  <div class="info-item"><span class="info-label">Contact Person</span><span class="info-value">${selectedQuot?.vendor_contact_person || '—'}</span></div>
-  <div class="info-item"><span class="info-label">Quotation Date</span><span class="info-value">${selectedQuot?.created_at ? new Date(selectedQuot.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
-</div>
-<div class="section-title">Requisition Details</div>
-<div class="info-grid">
-  <div class="info-item"><span class="info-label">PR Reference Number</span><span class="info-value">${request.request_code}</span></div>
-  <div class="info-item"><span class="info-label">Requested By</span><span class="info-value">${request.first_name} ${request.last_name}</span></div>
-  <div class="info-item"><span class="info-label">Department</span><span class="info-value">${request.department_name}${request.department_code ? ` (${request.department_code})` : ''}</span></div>
-  <div class="info-item"><span class="info-label">Partner / Project</span><span class="info-value">${request.donor_name || '—'} / ${request.project_name || '—'}</span></div>
-  <div class="info-item"><span class="info-label">Priority</span><span class="info-value">${request.priority}</span></div>
-  <div class="info-item"><span class="info-label">Expected Delivery</span><span class="info-value">${request.expected_delivery_date ? new Date(request.expected_delivery_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
-  <div class="info-item" style="grid-column:1/-1"><span class="info-label">Description / Justification</span><span class="info-value">${request.justification || '—'}</span></div>
-</div>
-<div class="section-title">Order Items</div>
-<table>
-  <thead><tr>
-    <th style="width:30px">#</th><th>Description</th>
-    <th style="width:50px;text-align:center">Qty</th><th style="width:60px">Unit</th>
-    <th style="width:100px;text-align:right">Unit Price (USD)</th>
-    <th style="width:100px;text-align:right">Total (USD)</th>
-  </tr></thead>
-  <tbody>
-    ${itemRows}
-    <tr class="total-row">
-      <td colspan="5" style="text-align:right">TOTAL ORDER AMOUNT:</td>
-      <td style="text-align:right">USD ${totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-    </tr>
-  </tbody>
-</table>
-<div class="terms-box">
-  <strong>Terms &amp; Conditions:</strong> This Purchase Order is subject to the Zimbabwe Council of Churches standard procurement terms. Delivery must be completed by the date specified above. All goods/services must conform to stated specifications. Invoice must reference PO number <strong>PO-${request.request_code}</strong>.
-</div>
-<div class="sig-block">
-  <div class="sig-col"><div class="sig-line">Prepared By: _________________________<br/><span style="font-size:10px;color:#666">Name / Signature / Date</span></div></div>
-  <div class="sig-col"><div class="sig-line">Approved By: _________________________<br/><span style="font-size:10px;color:#666">Name / Signature / Date</span></div></div>
-  <div class="sig-col"><div class="sig-line">Received By (Supplier): _____________<br/><span style="font-size:10px;color:#666">Name / Signature / Date</span></div></div>
-</div>
-<div class="page-footer">
-  <div>Generated: ${new Date().toLocaleString('en-GB')} &nbsp;|&nbsp; ERP Connect — Zimbabwe Council of Churches &nbsp;|&nbsp; OFFICIAL DOCUMENT</div>
-  <div class="footer-right">${POWERED_BY}</div>
-</div>
-</body></html>`;
+      const html = buildPurchaseOrderHTML(request);
       downloadHTMLAsPDF(html, `PO-${request.request_code}-${format(new Date(), 'yyyy-MM-dd')}`);
     } catch {
       toast.error('Failed to generate Purchase Order PDF');
@@ -757,7 +655,19 @@ const ProcurementApprovalsPage: React.FC = () => {
                         </Box>
                       </TableCell>
                       <TableCell>
-                        <Chip label={req.priority} size="small" color={PRIORITY_COLOR[req.priority] || 'default'} />
+                        <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                          <Chip label={req.priority} size="small" color={PRIORITY_COLOR[req.priority] || 'default'} />
+                          {Number((req as any).is_high_value) === 1 && (
+                            <Tooltip title="Quotation is USD 5,000 or more — approved by the Super Admin and the FOS head of department only">
+                              <Chip
+                                label="HIGH VALUE"
+                                size="small"
+                                color="error"
+                                sx={{ fontWeight: 700, height: 20, fontSize: '0.62rem' }}
+                              />
+                            </Tooltip>
+                          )}
+                        </Stack>
                       </TableCell>
                       <TableCell align="right">
                         <Typography variant="body2" fontWeight={600}>
@@ -863,7 +773,7 @@ const ProcurementApprovalsPage: React.FC = () => {
                       );
                     })()}
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                      {committeeVotes.filter((v: any) => v.vote === 'APPROVED').length}/3 approved — all three must approve to advance.
+                      {committeeVotes.filter((v: any) => v.vote === 'APPROVED').length}/3 approved — 3 total approvals needed to advance.
                     </Typography>
                   </Box>
                 )}

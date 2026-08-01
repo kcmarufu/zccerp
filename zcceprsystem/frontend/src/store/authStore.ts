@@ -204,8 +204,9 @@ export const useAuthStore = create<AuthStore>()(
         const { user } = get();
         if (!user) return false;
         if (user.role === 'ADMIN') return true;
-        return ['HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'].includes(user.role)
-          && user.department_code === 'AF';
+        // Finance (FOS) or Admin/HR (AHR) HOPs/Leads can manage partners, projects and budget lines
+        return ['HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'].includes(user.role) &&
+          (user.department_code === 'FOS' || user.department_code === 'AHR');
       }
     }),
     {

@@ -355,7 +355,11 @@ const RequestForm: React.FC = () => {
                 cost_distribution: claim.cost_distribution.map(d => ({ ...d, id: String(d.id) })),
               });
             }
-          } catch (e) { /* claim may not exist yet */ }
+          } catch (e) {
+            // Reset to a blank claim form on any error (including 403/500) so
+            // stale data from a previous session is never silently displayed.
+            setHasPerDiemClaim(false);
+          }
         }
       } catch (error) {
         toast.error('Failed to load request for editing');

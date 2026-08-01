@@ -34,7 +34,7 @@ import {
 import { ProcurementStatus, Priority } from '../../types';
 import * as XLSX from 'xlsx';
 import api from '../../services/api';
-import { downloadHTMLAsPDF } from '../../utils/pdfUtils';
+import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
 import { toast } from 'react-toastify';
 
 const STATUSES: ProcurementStatus[] = [
@@ -129,74 +129,7 @@ const PurchaseRequestList: React.FC = () => {
     try {
       const request = await getPurchaseRequestById(String(reqId)) as any;
       if (!request) { toast.error('Could not load request details'); return; }
-      const items: any[] = request.items || [];
-      const quotations: any[] = request.quotations || [];
-      const selectedQuot = quotations.find((q: any) => q.is_selected);
-      const POWERED_BY = 'Powered By Kudakwashe C Marufu';
-      const poDate = request.final_finance_approved_at
-        ? new Date(request.final_finance_approved_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-        : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
-      const totalAmount = selectedQuot
-        ? Number(selectedQuot.total_amount || 0)
-        : items.reduce((s: number, it: any) => s + Number(it.quantity || 1) * Number(it.estimated_unit_price || 0), 0);
-      const itemRows = items.map((item: any, i: number) => {
-        const unitPrice = Number(item.estimated_unit_price || 0);
-        const lineTotal = Number(item.quantity || 1) * unitPrice;
-        return `<tr>
-          <td>${i + 1}</td>
-          <td>${item.item_description || item.description || '—'}</td>
-          <td>${item.specifications || '—'}</td>
-          <td align="right">${Number(item.quantity || 1)}</td>
-          <td>${item.unit || 'pcs'}</td>
-          <td align="right">$${unitPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-          <td align="right">$${lineTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-        </tr>`;
-      }).join('');
-      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>Purchase Order — ${reqCode}</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; font-size: 12px; color: #1a1a1a; margin: 0; padding: 24px; background: #fff; }
-  .po-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #006064; padding-bottom: 14px; margin-bottom: 20px; }
-  .org-name { font-size: 11px; font-weight: bold; color: #006064; }
-  .po-title { font-size: 22px; font-weight: bold; color: #006064; margin: 4px 0 2px; }
-  .po-ref-box { text-align: right; }
-  .po-ref { font-size: 15px; font-weight: bold; color: #006064; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-  th { background: #006064; color: #fff; padding: 7px 8px; font-size: 11px; text-align: left; }
-  td { padding: 6px 8px; border-bottom: 1px solid #e0e0e0; font-size: 11px; }
-  .total-row td { font-weight: bold; background: #e0f7fa; border-top: 2px solid #006064; }
-  .sig-block { display: flex; justify-content: space-between; margin-top: 40px; }
-  .sig-col { width: 45%; }
-  .sig-line { border-top: 1px solid #333; padding-top: 4px; margin-top: 30px; font-size: 11px; color: #555; }
-  .page-footer { margin-top: 30px; border-top: 1px solid #ccc; padding-top: 6px; font-size: 10px; color: #888; display: flex; justify-content: space-between; }
-</style></head><body>
-<div class="po-header">
-  <div>
-    <div class="org-name">ZIMBABWE COUNCIL OF CHURCHES (ZCC)</div>
-    <div class="po-title">PURCHASE ORDER</div>
-    <div class="po-sub">Official Procurement Document</div>
-  </div>
-  <div class="po-ref-box">
-    <div class="po-ref">PO-${reqCode}</div>
-    <div style="font-size:11px;color:#555;">Date: ${poDate}</div>
-    ${selectedQuot ? `<div style="font-size:11px;color:#555;">Supplier: ${selectedQuot.vendor_name || selectedQuot.vendor_company || '—'}</div>` : ''}
-    ${selectedQuot?.quotation_number ? `<div style="font-size:11px;color:#555;">Quotation Ref: ${selectedQuot.quotation_number}</div>` : ''}
-  </div>
-</div>
-<table><thead><tr><th>#</th><th>Description</th><th>Specifications</th><th align="right">Qty</th><th>Unit</th><th align="right">Unit Price</th><th align="right">Total</th></tr></thead>
-<tbody>${itemRows}
-<tr class="total-row"><td colspan="6" align="right">GRAND TOTAL:</td><td align="right">$${totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td></tr>
-</tbody></table>
-<div class="sig-block">
-  <div class="sig-col"><div class="sig-line">Prepared By: ________________________</div></div>
-  <div class="sig-col"><div class="sig-line">Approved By: ________________________</div></div>
-</div>
-<div class="page-footer">
-  <div>Generated: ${new Date().toLocaleString('en-GB')} &nbsp;|&nbsp; ERP Connect — Zimbabwe Council of Churches &nbsp;|&nbsp; OFFICIAL DOCUMENT</div>
-  <div>${POWERED_BY}</div>
-</div>
-</body></html>`;
+      const html = buildPurchaseOrderHTML(request);
       downloadHTMLAsPDF(html, `PO-${reqCode}-${format(new Date(), 'yyyy-MM-dd')}`);
     } catch {
       toast.error('Failed to generate Purchase Order PDF');
@@ -389,11 +322,23 @@ const PurchaseRequestList: React.FC = () => {
                     <Chip label={req.department_code} size="small" variant="outlined" />
                   </TableCell>
                   <TableCell>
-                    <Chip
-                      label={req.priority}
-                      color={PRIORITY_COLORS[req.priority] || 'default'}
-                      size="small"
-                    />
+                    <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                      <Chip
+                        label={req.priority}
+                        color={PRIORITY_COLORS[req.priority] || 'default'}
+                        size="small"
+                      />
+                      {Number((req as any).is_high_value) === 1 && (
+                        <Tooltip title="Quotation is USD 5,000 or more — approved by the Super Admin and the FOS head of department only">
+                          <Chip
+                            label="HIGH VALUE"
+                            color="error"
+                            size="small"
+                            sx={{ fontWeight: 700, height: 20, fontSize: '0.62rem' }}
+                          />
+                        </Tooltip>
+                      )}
+                    </Stack>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" fontWeight={600}>

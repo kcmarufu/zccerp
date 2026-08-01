@@ -103,11 +103,14 @@ interface RequestWithReversal extends Request {
 const ApprovalsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  // isFinanceManager: true if user is Finance HOP/Lead (FOS dept) or Admin
+  const isFinanceManager = (user?.role === 'HEAD_OF_PROGRAMS' || user?.role === 'PROGRAM_LEAD')
+    ? user?.department_code === 'FOS'
+    : user?.role === 'ADMIN';
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   // ── HARDCODED BRANDING ────────────────────────────────────────────────────
-  const POWERED_BY = 'Powered By Kudakwashe C Marufu' as const;
   const DOC_TITLE  = 'Float Requisition' as const;
   // ──────────────────────────────────────────────────────────────────────────
   
@@ -125,7 +128,7 @@ const ApprovalsPage: React.FC = () => {
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [budgetImpact, setBudgetImpact] = useState<BudgetImpact[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [dialogAction, setDialogAction] = useState<'approve' | 'reject' | 'reverse' | 'view'>('approve');
+  const [dialogAction, setDialogAction] = useState<'approve' | 'reject' | 'reverse' | 'force-reject' | 'view'>('approve');
   const [comments, setComments] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [dialogPerDiemClaim, setDialogPerDiemClaim] = useState<PerDiemClaim | null>(null);
@@ -231,7 +234,7 @@ const ApprovalsPage: React.FC = () => {
     }
   };
 
-  const handleOpenDialog = async (request: Request, action: 'approve' | 'reject' | 'reverse' | 'view') => {
+  const handleOpenDialog = async (request: Request, action: 'approve' | 'reject' | 'reverse' | 'force-reject' | 'view') => {
     setSelectedRequest(request);
     setDialogAction(action);
     setComments('');
@@ -294,6 +297,14 @@ const ApprovalsPage: React.FC = () => {
         const response = await approvalService.reverseApproval(selectedRequest.id, comments);
         if (response.success) {
           toast.success('Approval reversed successfully');
+          setIsDialogOpen(false);
+          fetchAllData();
+        }
+      } else if (dialogAction === 'force-reject') {
+        if (!comments.trim()) { toast.error('A reason is required for rejection'); return; }
+        const response = await approvalService.financeForceReject(selectedRequest.id, comments);
+        if (response.success) {
+          toast.success('Request has been rejected and budget reversed.');
           setIsDialogOpen(false);
           fetchAllData();
         }
@@ -457,10 +468,8 @@ const ApprovalsPage: React.FC = () => {
   tbody tr:nth-child(even) td {background:#f7f7f7;}
   .total-row td {font-weight:bold;background:#e0f2f1 !important;border-top:1.5px solid #006064;font-size:13px;}
   .act-APPROVED {color:#2e7d32;font-weight:bold;} .act-REJECTED {color:#c62828;font-weight:bold;} .act-SUBMITTED {color:#1565c0;font-weight:bold;}
-  .sig-block {display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:28px;}
-  .sig-col {text-align:center;} .sig-line {border-top:1px solid #333;margin-top:40px;padding-top:6px;font-size:11px;color:#555;}
-  .page-footer {margin-top:24px;padding-top:8px;border-top:2px solid #e0e0e0;display:flex;justify-content:space-between;}
-  .footer-left {font-size:10px;color:#999;} .footer-right {font-size:10px;font-weight:bold;color:#006064;}
+  .page-footer {margin-top:24px;padding-top:8px;border-top:2px solid #e0e0e0;}
+  .footer-left {font-size:10px;color:#999;}
 </style></head><body>
 <div class="doc-header">
   <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
@@ -490,23 +499,49 @@ const ApprovalsPage: React.FC = () => {
 <table><thead><tr><th>#</th><th>Budget Code</th><th>Description</th><th align="right">Qty</th><th>Unit</th><th align="right">Unit Price</th><th align="right">Subtotal</th></tr></thead>
 <tbody>${itemRows}<tr class="total-row"><td colspan="6" align="right">TOTAL:</td><td align="right">$${total.toLocaleString(undefined,{minimumFractionDigits:2})}</td></tr></tbody></table>
 ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By</th><th>Role</th><th>Comments</th><th>Date</th></tr></thead><tbody>${trailRows}</tbody></table>`:''}
-<div class="sig-block">
-  <div class="sig-col"><div class="sig-line">Requester: ${req.requester_first_name||''} ${req.requester_last_name||''}</div></div>
-  <div class="sig-col"><div class="sig-line">Programme Lead / HOP</div></div>
-  <div class="sig-col"><div class="sig-line">Finance Clerk</div></div>
-</div>
 <div class="page-footer">
   <div class="footer-left"><div>Generated: ${format(new Date(),'dd MMM yyyy HH:mm')}</div><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div></div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 ${buildDigitalStamp(req.status||'')}
-${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code, POWERED_BY) : ''}
+${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
 </body></html>`;
       downloadHTMLAsPDF(html, `float-requisition-${req.request_code}-${format(new Date(),'yyyy-MM-dd')}`);
       toast.success('PDF downloaded');
     } catch (err) {
       toast.error('Failed to generate PDF');
     }
+  };
+  // ─────────────────────────────────────────────────────────────────────
+  /**
+   * Determines whether the current user can approve a specific request.
+   * Finance HOP/Lead (FOS dept) can VIEW all requests including those at the
+   * Department Level (PENDING_LEAD_APPROVAL) from any dept, but may only APPROVE
+   * those that belong to their own department (FOS). All other pending stages
+   * (PENDING_FINANCE_APPROVAL, etc.) are unrestricted for Finance HOP/Lead.
+   */
+  const canApproveInList = (request: Request): boolean => {
+    if (!user) return false;
+    const role = user.role;
+
+    // Finance HOP/Lead: restrict approval at dept level to FOS only
+    if (isFinanceManager && (role === 'HEAD_OF_PROGRAMS' || role === 'PROGRAM_LEAD')) {
+      if (request.status === 'PENDING_LEAD_APPROVAL') {
+        const effectiveDeptId = (request as any).routing_department_id || request.department_id;
+        return effectiveDeptId === user.department_id;
+      }
+      return true; // Finance stage and others — fully allowed
+    }
+
+    // Non-Finance HOP/Lead: dept-level approval only for own dept
+    if (role === 'HEAD_OF_PROGRAMS' || role === 'PROGRAM_LEAD') {
+      if (request.status === 'PENDING_LEAD_APPROVAL' || request.status === 'PENDING_HOP_APPROVAL') {
+        const effectiveDeptId = (request as any).routing_department_id || request.department_id;
+        return effectiveDeptId === user.department_id;
+      }
+      return true;
+    }
+
+    return true; // Finance Clerk, Admin — always show approve button
   };
   // ─────────────────────────────────────────────────────────────────────
   const renderRequestsTable = (requests: Request[], showActions: boolean, type: 'pending' | 'approved' | 'rejected') => {
@@ -565,7 +600,6 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code, POWERE
   .status-rejected { color:#c62828; font-weight:bold; }
   .page-footer { margin-top:24px; padding-top:8px; border-top:2px solid #e0e0e0; display:flex; justify-content:space-between; }
   .footer-left { font-size:10px; color:#999; }
-  .footer-right { font-size:10px; font-weight:bold; color:#006064; }
   @media print { body{padding:8px;} thead{display:table-header-group;} tr{page-break-inside:avoid;} }
 </style></head><body>
 <div class="doc-header">
@@ -579,7 +613,6 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code, POWERE
 </table>
 <div class="page-footer">
   <div class="footer-left"><div>Generated: ${format(new Date(), 'dd MMM yyyy HH:mm')}</div><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div></div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'REJECTED' : 'PENDING')}
 </body></html>`;
@@ -719,22 +752,42 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                     </Tooltip>
                     {showActions && (
                       <>
-                        <Tooltip title="Approve">
-                          <IconButton size="small" color="success" onClick={() => handleOpenDialog(request, 'approve')}>
-                            <ApproveIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Reject">
-                          <IconButton size="small" color="error" onClick={() => handleOpenDialog(request, 'reject')}>
-                            <RejectIcon />
-                          </IconButton>
-                        </Tooltip>
+                        {canApproveInList(request) && (
+                          <Tooltip title="Approve">
+                            <IconButton size="small" color="success" onClick={() => handleOpenDialog(request, 'approve')}>
+                              <ApproveIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                        {!canApproveInList(request) && request.status === 'PENDING_LEAD_APPROVAL' && (
+                          <Tooltip title="View only — request is pending approval by its department Lead/HOP">
+                            <span>
+                              <IconButton size="small" disabled>
+                                <ApproveIcon />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
+                        {canApproveInList(request) && (
+                          <Tooltip title="Reject">
+                            <IconButton size="small" color="error" onClick={() => handleOpenDialog(request, 'reject')}>
+                              <RejectIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                       </>
                     )}
                     {type === 'approved' && canReverse && (
                       <Tooltip title="Reverse Approval (within 5h window)">
                         <IconButton size="small" color="warning" onClick={() => handleOpenDialog(request, 'reverse')}>
                           <ReverseIcon />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {type === 'approved' && !canReverse && (user?.role === 'FINANCE_CLERK' || isFinanceManager || user?.role === 'ADMIN') && ['APPROVED', 'DISPATCHED'].includes(request.status) && (
+                      <Tooltip title="Finance Reject (reversal window expired)">
+                        <IconButton size="small" color="error" onClick={() => handleOpenDialog(request, 'force-reject')}>
+                          <RejectIcon />
                         </IconButton>
                       </Tooltip>
                     )}
@@ -869,6 +922,9 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 { v: 'APPROVED', l: 'Approved' },
                 { v: 'REJECTED', l: 'Rejected' },
                 { v: 'DISPATCHED', l: 'Dispatched' },
+                { v: 'RECON_PENDING_LEAD', l: 'Pending Recon (Lead)' },
+                { v: 'RECON_PENDING_FINANCE', l: 'Pending Recon (Finance)' },
+                { v: 'RECONCILED', l: 'Reconciled' },
               ].map(s => <MenuItem key={s.v} value={s.v}>{s.l}</MenuItem>)}
             </TextField>
             <TextField size="small" type="date" label="From Date" InputLabelProps={{ shrink: true }} sx={{ minWidth: 150, flex: 1 }}
@@ -915,7 +971,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
       {/* Approval/Rejection/Reversal Dialog */}
       <Dialog open={isDialogOpen} onClose={() => setIsDialogOpen(false)} maxWidth="lg" fullWidth fullScreen={isMobile}>
         <DialogTitle>
-          {dialogAction === 'approve' ? 'Approve Request' : dialogAction === 'reject' ? 'Reject Request' : dialogAction === 'reverse' ? 'Reverse Approval' : 'View Request Details'}
+          {dialogAction === 'approve' ? 'Approve Request' : dialogAction === 'reject' ? 'Reject Request' : dialogAction === 'reverse' ? 'Reverse Approval' : dialogAction === 'force-reject' ? 'Finance Reject Request' : 'View Request Details'}
         </DialogTitle>
         <DialogContent>
           {isLoadingDetails ? (
@@ -1259,17 +1315,22 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                   You are about to reverse your approval. This will move the request back to the previous stage.
                 </Alert>
               )}
+              {dialogAction === 'force-reject' && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  <strong>Finance Rejection — Post-Reversal Window.</strong> The budget deductions for this request will be reversed and the request will be moved to REJECTED status. The requester will be notified. This action cannot be undone.
+                </Alert>
+              )}
 
               {dialogAction !== 'view' && (
                 <TextField
-                  label={dialogAction === 'approve' ? 'Comments (optional)' : dialogAction === 'reject' ? 'Reason for rejection (required)' : 'Reason for reversal'}
+                  label={dialogAction === 'approve' ? 'Comments (optional)' : dialogAction === 'reject' ? 'Reason for rejection (required)' : dialogAction === 'force-reject' ? 'Reason for rejection (required)' : 'Reason for reversal'}
                   multiline
                   rows={3}
                   fullWidth
                   value={comments}
                   onChange={(e) => setComments(e.target.value)}
-                  required={dialogAction === 'reject'}
-                  error={dialogAction === 'reject' && !comments}
+                  required={dialogAction === 'reject' || dialogAction === 'force-reject'}
+                  error={(dialogAction === 'reject' || dialogAction === 'force-reject') && !comments}
                 />
               )}
             </Box>
@@ -1282,12 +1343,12 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
           {dialogAction !== 'view' && (
             <Button
               variant="contained"
-              color={dialogAction === 'approve' ? 'success' : dialogAction === 'reject' ? 'error' : 'warning'}
+              color={dialogAction === 'approve' ? 'success' : (dialogAction === 'reject' || dialogAction === 'force-reject') ? 'error' : 'warning'}
               onClick={handleSubmit}
-              disabled={isSubmitting || (dialogAction === 'reject' && !comments) || (dialogAction === 'approve' && budgetImpact.some(bi => bi.hasInsufficientFunds))}
-              startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : (dialogAction === 'approve' ? <ApproveIcon /> : dialogAction === 'reject' ? <RejectIcon /> : <ReverseIcon />)}
+              disabled={isSubmitting || ((dialogAction === 'reject' || dialogAction === 'force-reject') && !comments) || (dialogAction === 'approve' && budgetImpact.some(bi => bi.hasInsufficientFunds))}
+              startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : (dialogAction === 'approve' ? <ApproveIcon /> : (dialogAction === 'reject' || dialogAction === 'force-reject') ? <RejectIcon /> : <ReverseIcon />)}
             >
-              {dialogAction === 'approve' ? 'Approve' : dialogAction === 'reject' ? 'Reject' : 'Reverse'}
+              {dialogAction === 'approve' ? 'Approve' : dialogAction === 'reject' ? 'Reject' : dialogAction === 'force-reject' ? 'Reject Request' : 'Reverse'}
             </Button>
           )}
         </DialogActions>

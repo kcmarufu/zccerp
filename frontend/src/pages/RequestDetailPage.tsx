@@ -64,6 +64,7 @@ import perDiemService from '../services/perDiemService';
 import { Request, RequestItem, ApprovalLog, RequestStatus, PerDiemClaim } from '../types';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
 import { buildTravelClaimPageHTML } from '../utils/pdfUtils';
+import { formatRoleLabel } from '../utils/roleUtils';
 import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
@@ -78,7 +79,7 @@ const RequestDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const { user, hasRole, hasPermission } = useAuthStore();
+  const { user, hasRole, hasPermission, isFinanceManager } = useAuthStore();
 
   const [request, setRequest] = useState<Request | null>(null);
   const [items, setItems] = useState<RequestItem[]>([]);
@@ -329,26 +330,8 @@ const RequestDetailPage: React.FC = () => {
   const canApprove = () => {
     if (!request || !user) return false;
 
-    // Admin can approve at PENDING_ADMIN_APPROVAL and any other pending stage
+    // Admin can approve at any pending stage
     if (hasRole('ADMIN') && [
-      'PENDING_ADMIN_APPROVAL',
-      'PENDING_LEAD_APPROVAL',
-      'PENDING_HOP_APPROVAL',
-      'PENDING_FINANCE_APPROVAL'
-    ].includes(request.status)) {
-      return true;
-    }
-
-    // Program Lead can approve at PENDING_ADMIN_APPROVAL (Admin requests — no dept check)
-    // at PENDING_LEAD_APPROVAL (own department only), or at PENDING_FINANCE_APPROVAL (Finance Lead authority)
-    if (hasRole('PROGRAM_LEAD')) {
-      if (request.status === 'PENDING_ADMIN_APPROVAL') return true;
-      if (request.status === 'PENDING_LEAD_APPROVAL') return request.department_id === user.department_id;
-      if (request.status === 'PENDING_FINANCE_APPROVAL') return true;
-    }
-
-    // HOP can approve at all pending stages including Finance (Finance HOP authority)
-    if (hasRole('HEAD_OF_PROGRAMS') && [
       'PENDING_ADMIN_APPROVAL',
       'PENDING_LEAD_APPROVAL',
       'PENDING_HOP_APPROVAL',
@@ -362,11 +345,47 @@ const RequestDetailPage: React.FC = () => {
       return true;
     }
 
+    // Program Lead approval rules
+    if (hasRole('PROGRAM_LEAD')) {
+      // PENDING_ADMIN_APPROVAL: only AHR Lead (Finance Lead must not action AHR requests)
+      if (request.status === 'PENDING_ADMIN_APPROVAL') {
+        return user.department_code === 'AHR';
+      }
+      // PENDING_LEAD_APPROVAL: Lead must be in the effective (routing or requester) department
+      if (request.status === 'PENDING_LEAD_APPROVAL') {
+        const effectiveDeptId = (request as any).routing_department_id || request.department_id;
+        return effectiveDeptId === user.department_id;
+      }
+      // PENDING_FINANCE_APPROVAL: only Finance Lead (FOS dept)
+      if (request.status === 'PENDING_FINANCE_APPROVAL') {
+        return isFinanceManager();
+      }
+    }
+
+    // HOP approval rules
+    if (hasRole('HEAD_OF_PROGRAMS')) {
+      // PENDING_ADMIN_APPROVAL: only AHR HOP
+      if (request.status === 'PENDING_ADMIN_APPROVAL') {
+        return user.department_code === 'AHR';
+      }
+      // PENDING_LEAD_APPROVAL / PENDING_HOP_APPROVAL: HOP must match the effective department
+      if (request.status === 'PENDING_LEAD_APPROVAL' || request.status === 'PENDING_HOP_APPROVAL') {
+        const effectiveDeptId = (request as any).routing_department_id || request.department_id;
+        return effectiveDeptId === user.department_id;
+      }
+      // PENDING_FINANCE_APPROVAL: only Finance HOP (FOS dept)
+      if (request.status === 'PENDING_FINANCE_APPROVAL') {
+        return isFinanceManager();
+      }
+    }
+
     return false;
   };
 
   const canDispatch = () => {
-    return request?.status === 'APPROVED' && (hasRole('FINANCE_CLERK') || hasRole('ADMIN'));
+    if (request?.status !== 'APPROVED') return false;
+    // Finance Clerk, Admin, and Finance HOP/Lead (FOS dept) can dispatch
+    return hasRole('FINANCE_CLERK') || hasRole('ADMIN') || isFinanceManager();
   };
 
   // Helper function to get approval log for a specific step
@@ -403,7 +422,6 @@ const RequestDetailPage: React.FC = () => {
   };
 
   // ── HARDCODED BRANDING ────────────────────────────────────────────────────
-  const POWERED_BY = 'Powered By Kudakwashe C Marufu' as const;
   const DOC_TITLE  = 'Float Requisition' as const;
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -414,7 +432,7 @@ const RequestDetailPage: React.FC = () => {
 
     // Use the shared travel-claim builder so PDF stays consistent across modules
     const buildClaimPage = () => perDiemClaim
-      ? buildTravelClaimPageHTML(perDiemClaim, request.request_code, POWERED_BY)
+      ? buildTravelClaimPageHTML(perDiemClaim, request.request_code)
       : '';
 
     const statusColor = {
@@ -473,16 +491,9 @@ const RequestDetailPage: React.FC = () => {
   .action-REJECTED  { color: #c62828; font-weight: bold; }
   .action-REVERSED  { color: #e65100; font-weight: bold; }
   .action-SUBMITTED { color: #1565c0; font-weight: bold; }
-  /* ── Signature block ── */
-  .sig-block { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 24px; }
-  .sig-item { border-top: 1px solid #555; padding-top: 6px; }
-  .sig-label { font-size: 10px; color: #666; }
-  .sig-name  { font-size: 11px; font-weight: bold; color: #1a1a1a; margin-top: 2px; }
-  .sig-date  { font-size: 10px; color: #999; }
   /* ── Footer ── */
   .page-footer { margin-top: 28px; padding-top: 10px; border-top: 2px solid #e0e0e0; display: flex; justify-content: space-between; align-items: flex-end; }
   .footer-left  { font-size: 10px; color: #999; }
-  .footer-right { font-size: 10px; font-weight: bold; color: #006064; letter-spacing: 0.3px; }
   @media print {
     body { padding: 12px; }
     .no-print { display: none; }
@@ -542,34 +553,15 @@ ${approvalLogs.length > 0 ? `
 <table>
   <thead><tr><th>Date &amp; Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Status Change</th><th>Comments</th></tr></thead>
   <tbody>
-    ${approvalLogs.map(log => `<tr><td>${new Date(log.created_at).toLocaleString('en-GB')}</td><td>${log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}</td><td>${(log.actor_role || log.approver_role || '').replace(/_/g, ' ')}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '—'}</td><td>${log.comment || log.comments || '—'}</td></tr>`).join('')}
+    ${approvalLogs.map(log => `<tr><td>${new Date(log.created_at).toLocaleString('en-GB')}</td><td>${log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}</td><td>${formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '—'}</td><td>${log.comment || log.comments || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
-
-<div class="sig-block">
-  <div class="sig-item">
-    <div class="sig-label">Requested By</div>
-    <div class="sig-name">${request.requester_first_name} ${request.requester_last_name}</div>
-    <div class="sig-date">Signature: ___________________</div>
-  </div>
-  <div class="sig-item">
-    <div class="sig-label">Program Lead / HOP</div>
-    <div class="sig-name">${approvalLogs.find(l => ['PROGRAM_LEAD','HEAD_OF_PROGRAMS'].includes(l.actor_role || l.approver_role || '') && l.action === 'APPROVED') ? (approvalLogs.find(l => ['PROGRAM_LEAD','HEAD_OF_PROGRAMS'].includes(l.actor_role || l.approver_role || '') && l.action === 'APPROVED')!.actor_name || 'Approved') : '___________________'}</div>
-    <div class="sig-date">Signature: ___________________</div>
-  </div>
-  <div class="sig-item">
-    <div class="sig-label">Finance Clerk</div>
-    <div class="sig-name">${approvalLogs.find(l => (l.actor_role || l.approver_role || '').includes('FINANCE') && l.action === 'APPROVED') ? (approvalLogs.find(l => (l.actor_role || l.approver_role || '').includes('FINANCE') && l.action === 'APPROVED')!.actor_name || 'Approved') : '___________________'}</div>
-    <div class="sig-date">Signature: ___________________</div>
-  </div>
-</div>
 
 <div class="page-footer">
   <div class="footer-left">
     <div>Generated: ${new Date().toLocaleString('en-GB')}</div>
     <div>ERP Connect - Zimbabwe Council of Churches &nbsp;|&nbsp; CONFIDENTIAL</div>
   </div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 ${buildClaimPage()}
 </body></html>`;
@@ -621,7 +613,7 @@ ${buildClaimPage()}
       const tRows = approvalLogs.map(log => [
         new Date(log.created_at).toLocaleString('en-GB'),
         log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim(),
-        (log.actor_role || log.approver_role || '').replace(/_/g, ' '),
+        formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code),
         log.action,
         log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '',
         log.comment || log.comments || ''
@@ -1103,7 +1095,7 @@ ${buildClaimPage()}
                 {approvalLogs.filter(l => l.action === 'REJECTED').map(log => (
                   <Box key={log.id} sx={{ mt: 1 }}>
                     <Typography variant="body2">
-                      By: {log.actor_name || `${log.approver_first_name} ${log.approver_last_name}`} ({log.actor_role?.replace(/_/g, ' ') || log.approver_role?.replace(/_/g, ' ')})
+                      By: {log.actor_name || `${log.approver_first_name} ${log.approver_last_name}`} ({formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code)})
                     </Typography>
                     <Typography variant="body2">
                       Date: {formatDate(log.created_at)}
@@ -1229,7 +1221,7 @@ ${buildClaimPage()}
                           </Typography>
                         </Box>
                         <Typography variant="caption" color="text.secondary">
-                          {(log.actor_role || log.approver_role)?.replace(/_/g, ' ')}
+                          {formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code)}
                         </Typography>
                         {log.previous_status && log.new_status && (
                           <Box sx={{ mt: 0.5 }}>

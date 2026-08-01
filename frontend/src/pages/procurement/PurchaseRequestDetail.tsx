@@ -42,6 +42,7 @@ import {
   approveFinanceLevel,
   rejectProcurementRequest,
   submitToCommittee,
+  resubmitToCommittee,
   committeeDecision,
   finalFinanceApproval,
   uploadQuotation,
@@ -61,7 +62,8 @@ import {
   getVendors
 } from '../../services/procurementService';
 import { ProcQuotation, ProcVendor } from '../../types';
-import { downloadHTMLAsPDF } from '../../utils/pdfUtils';
+import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
+import { formatRoleLabel } from '../../utils/roleUtils';
 import * as XLSX from 'xlsx';
 
 interface TabPanelProps { value: number; index: number; children: React.ReactNode; }
@@ -91,6 +93,12 @@ const PurchaseRequestDetail: React.FC = () => {
   const [editQuotDialog, setEditQuotDialog] = useState(false);
   const [editingQuot, setEditingQuot] = useState<ProcQuotation | null>(null);
   const [editQuotForm, setEditQuotForm] = useState({ vendor_name: '', vendor_email: '', vendor_phone: '', quotation_number: '', total_amount: '', currency: 'USD', validity_date: '', delivery_timeline: '', notes: '' });
+  const [editQuotFile, setEditQuotFile] = useState<File | null>(null);
+
+  // Resubmit to committee state
+  const [resubmitDialog, setResubmitDialog] = useState(false);
+  const [resubmitComments, setResubmitComments] = useState('');
+  const [resubmitQuotId, setResubmitQuotId] = useState<number | null>(null);
 
   // POP upload state (for final finance approval)
   const [popFile, setPopFile] = useState<File | null>(null);
@@ -162,6 +170,7 @@ const PurchaseRequestDetail: React.FC = () => {
   );
   const canUploadQuotation = hasPermission('manage_quotations') && ['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '');
   const canSubmitCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_PROCUREMENT';
+  const canResubmitToCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_COMMITTEE';
   const canCommitteeDecide = hasPermission('committee_review') && request?.status === 'PENDING_COMMITTEE';
   const canFinalApprove = hasPermission('proc_finance_approve') && request?.status === 'PENDING_FINAL_FINANCE';
   const canEdit = ['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
@@ -287,6 +296,7 @@ const PurchaseRequestDetail: React.FC = () => {
       delivery_timeline: quot.delivery_timeline || '',
       notes: quot.notes || ''
     });
+    setEditQuotFile(null);
     setEditQuotDialog(true);
   };
 
@@ -298,23 +308,33 @@ const PurchaseRequestDetail: React.FC = () => {
     }
     setActionLoading(true);
     try {
-      await updateQuotation(id!, editingQuot.id, {
-        vendor_name: editQuotForm.vendor_name,
-        vendor_email: editQuotForm.vendor_email || undefined,
-        vendor_phone: editQuotForm.vendor_phone || undefined,
-        quotation_number: editQuotForm.quotation_number || undefined,
-        total_amount: parseFloat(editQuotForm.total_amount) as any,
-        currency: editQuotForm.currency,
-        validity_date: editQuotForm.validity_date || undefined,
-        delivery_timeline: editQuotForm.delivery_timeline || undefined,
-        notes: editQuotForm.notes || undefined
-      });
+      const fd = new FormData();
+      Object.entries(editQuotForm).forEach(([k, v]) => { if (v) fd.append(k, v); });
+      if (editQuotFile) fd.append('file', editQuotFile);
+      await updateQuotation(id!, editingQuot.id, fd);
       toast.success('Quotation updated');
       setEditQuotDialog(false);
       setEditingQuot(null);
+      setEditQuotFile(null);
       invalidate();
     } catch (e: any) {
       toast.error(e?.response?.data?.error || 'Update failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleResubmitToCommittee = async () => {
+    setActionLoading(true);
+    try {
+      await resubmitToCommittee(id!, resubmitQuotId, resubmitComments);
+      toast.success('Revised quotations resubmitted to the Procurement Committee');
+      setResubmitDialog(false);
+      setResubmitComments('');
+      setResubmitQuotId(null);
+      invalidate();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'Resubmission failed');
     } finally {
       setActionLoading(false);
     }
@@ -387,7 +407,7 @@ const PurchaseRequestDetail: React.FC = () => {
       const tRows = request.approvalTrail.map(log => [
         format(new Date(log.created_at), 'dd MMM yyyy HH:mm'),
         `${log.actor_first_name} ${log.actor_last_name}`,
-        log.actor_role.replace(/_/g, ' '),
+        formatRoleLabel(log.actor_role, log.actor_department_code),
         log.action.replace(/_/g, ' '),
         log.comments || ''
       ]);
@@ -405,7 +425,6 @@ const PurchaseRequestDetail: React.FC = () => {
     const votes = (committeeVotes || []) as any[];
     const allCommitteeApproved = votes.length >= 3 && votes.every((v: any) => v.vote === 'APPROVED');
     // ── HARDCODED BRANDING ─────────────────────────────────────────────────
-    const POWERED_BY = 'Powered By Kudakwashe C Marufu';
     const DOC_TITLE  = 'Purchase Request';
     // ──────────────────────────────────────────────────────────────────────
     const html = `
@@ -448,11 +467,11 @@ const PurchaseRequestDetail: React.FC = () => {
   .action-APPROVED { color: #2e7d32; font-weight: bold; }
   .action-REJECTED { color: #c62828; font-weight: bold; }
   .action-RESUBMITTED { color: #1565c0; font-weight: bold; }
+  .action-RESUBMITTED_TO_COMMITTEE { color: #1565c0; font-weight: bold; }
   .committee-declaration { margin-top: 24px; padding: 14px 16px; background: #e8f5e9; border-left: 4px solid #2e7d32; border-radius: 0 4px 4px 0; font-size: 11px; color: #1b5e20; font-style: italic; }
   .committee-declaration strong { font-style: normal; }
-  .page-footer { margin-top: 28px; padding-top: 10px; border-top: 2px solid #e0e0e0; display: flex; justify-content: space-between; align-items: flex-end; }
+  .page-footer { margin-top: 28px; padding-top: 10px; border-top: 2px solid #e0e0e0; }
   .footer-left { font-size: 10px; color: #999; }
-  .footer-right { font-size: 10px; font-weight: bold; color: #006064; letter-spacing: 0.3px; }
 </style></head><body>
 ${request.status === 'DRAFT' ? '<div class="watermark">DRAFT</div>' : ''}
 
@@ -509,7 +528,7 @@ ${trail.length > 0 ? `
 <table>
   <thead><tr><th>Date &amp; Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Comments</th></tr></thead>
   <tbody>
-    ${trail.map(log => `<tr><td>${new Date(log.created_at).toLocaleString('en-GB')}</td><td>${log.actor_first_name} ${log.actor_last_name}</td><td>${log.actor_role.replace(/_/g, ' ')}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.comments || '—'}</td></tr>`).join('')}
+    ${trail.map(log => `<tr><td>${new Date(log.created_at).toLocaleString('en-GB')}</td><td>${log.actor_first_name} ${log.actor_last_name}</td><td>${formatRoleLabel(log.actor_role, log.actor_department_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.comments || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
 
@@ -524,7 +543,6 @@ ${allCommitteeApproved ? `
     <div>Generated: ${new Date().toLocaleString('en-GB')}</div>
     <div>ERP Connect - Zimbabwe Council of Churches &nbsp;|&nbsp; CONFIDENTIAL</div>
   </div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 </body></html>`;
     downloadHTMLAsPDF(html, `${request.request_code}-${format(new Date(), 'yyyy-MM-dd')}`);
@@ -532,135 +550,7 @@ ${allCommitteeApproved ? `
 
   const downloadPurchaseOrder = () => {
     if (!request) return;
-    const items = request.items || [];
-    const quotations = request.quotations || [];
-    const selectedQuot = quotations.find((q: any) => q.is_selected) as any;
-    const POWERED_BY = 'Powered By Kudakwashe C Marufu';
-    const poDate = (request as any).final_finance_approved_at
-      ? new Date((request as any).final_finance_approved_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-      : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
-    const totalAmount = selectedQuot
-      ? Number(selectedQuot.total_amount || 0)
-      : items.reduce((s: number, it: any) => s + Number(it.quantity || 1) * Number(it.estimated_unit_price || 0), 0);
-
-    const itemRows = items.map((item: any, i: number) => {
-      const unitPrice = selectedQuot ? Number(item.estimated_unit_price || 0) : Number(item.estimated_unit_price || 0);
-      const lineTotal = Number(item.quantity || 1) * unitPrice;
-      return `<tr>
-        <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8">${i + 1}</td>
-        <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8">${item.item_description}${item.specifications ? `<br/><span style="font-size:10px;color:#666">${item.specifications}</span>` : ''}</td>
-        <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8;text-align:center">${item.quantity}</td>
-        <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8">${item.unit_of_measure || '—'}</td>
-        <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8;text-align:right">${unitPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-        <td style="padding:6px 9px;border-bottom:1px solid #e8e8e8;text-align:right;font-weight:bold">${lineTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-      </tr>`;
-    }).join('');
-
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>Purchase Order — ${request.request_code}</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; font-size: 12px; color: #1a1a1a; margin: 0; padding: 24px; background: #fff; }
-  .po-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #006064; padding-bottom: 14px; margin-bottom: 20px; }
-  .org-name { font-size: 11px; font-weight: bold; color: #006064; letter-spacing: 0.4px; }
-  .po-title { font-size: 22px; font-weight: bold; color: #006064; margin: 4px 0 2px; }
-  .po-sub { font-size: 11px; color: #555; }
-  .po-ref-box { text-align: right; }
-  .po-ref-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.4px; }
-  .po-ref-val { font-size: 18px; font-weight: bold; color: #006064; letter-spacing: 1px; }
-  .po-date { font-size: 11px; color: #555; margin-top: 4px; }
-  .po-status { display:inline-block; padding:3px 10px; border-radius:12px; font-size:11px; font-weight:bold; background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; margin-top:6px; }
-  .section-title { font-size: 11px; font-weight: bold; color: #006064; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1.5px solid #006064; padding-bottom: 4px; margin: 18px 0 10px; }
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin-bottom: 14px; }
-  .info-item { display: flex; flex-direction: column; gap: 2px; }
-  .info-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.4px; font-weight: bold; }
-  .info-value { font-size: 12px; color: #1a1a1a; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 11px; }
-  thead th { background: #006064; color: white; padding: 7px 9px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
-  tbody td { padding: 6px 9px; border-bottom: 1px solid #e8e8e8; vertical-align: top; }
-  tbody tr:nth-child(even) td { background: #f9f9f9; }
-  .total-row td { font-weight: bold; background: #e0f2f1 !important; font-size: 13px; border-top: 2px solid #006064; padding: 8px 9px; }
-  .sig-block { display: flex; gap: 40px; margin-top: 40px; }
-  .sig-col { flex: 1; }
-  .sig-line { border-top: 1.5px solid #333; padding-top: 6px; font-size: 11px; color: #333; margin-top: 40px; }
-  .page-footer { margin-top: 28px; padding-top: 10px; border-top: 2px solid #e0e0e0; display: flex; justify-content: space-between; align-items: flex-end; font-size: 10px; color: #999; }
-  .footer-right { font-weight: bold; color: #006064; }
-  .terms-box { background: #f5f5f5; border-left: 4px solid #006064; padding: 10px 14px; border-radius: 0 4px 4px 0; margin: 14px 0; font-size: 10px; color: #444; }
-</style></head><body>
-
-<div class="po-header">
-  <div>
-    <div class="org-name">Zimbabwe Council of Churches &mdash; ERP Connect</div>
-    <div class="po-title">PURCHASE ORDER</div>
-    <div class="po-sub">This document constitutes a binding purchase order upon supplier acceptance.</div>
-    <div class="po-status">✓ COMMITTEE APPROVED &mdash; COMPLETED</div>
-  </div>
-  <div class="po-ref-box">
-    <div class="po-ref-label">PO Reference</div>
-    <div class="po-ref-val">PO-${request.request_code}</div>
-    <div class="po-date">Date: ${poDate}</div>
-  </div>
-</div>
-
-<div class="section-title">Supplier / Vendor Information</div>
-<div class="info-grid">
-  <div class="info-item"><span class="info-label">Supplier Name</span><span class="info-value">${selectedQuot?.vendor_name || '—'}</span></div>
-  <div class="info-item"><span class="info-label">Quotation Reference</span><span class="info-value">${selectedQuot?.quotation_number || '—'}</span></div>
-  <div class="info-item"><span class="info-label">Contact Person</span><span class="info-value">${selectedQuot?.vendor_contact_person || '—'}</span></div>
-  <div class="info-item"><span class="info-label">Quotation Date</span><span class="info-value">${selectedQuot?.created_at ? new Date(selectedQuot.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
-</div>
-
-<div class="section-title">Requisition Details</div>
-<div class="info-grid">
-  <div class="info-item"><span class="info-label">PR Reference Number</span><span class="info-value">${request.request_code}</span></div>
-  <div class="info-item"><span class="info-label">Requested By</span><span class="info-value">${request.first_name} ${request.last_name}</span></div>
-  <div class="info-item"><span class="info-label">Department</span><span class="info-value">${request.department_name}${request.department_code ? ` (${request.department_code})` : ''}</span></div>
-  <div class="info-item"><span class="info-label">Partner / Project</span><span class="info-value">${(request as any).donor_name || '—'} / ${(request as any).project_name || '—'}</span></div>
-  <div class="info-item"><span class="info-label">Priority</span><span class="info-value">${request.priority}</span></div>
-  <div class="info-item"><span class="info-label">Expected Delivery</span><span class="info-value">${request.expected_delivery_date ? new Date(request.expected_delivery_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
-  <div class="info-item" style="grid-column:1/-1"><span class="info-label">Description / Justification</span><span class="info-value">${request.justification || '—'}</span></div>
-</div>
-
-<div class="section-title">Order Items</div>
-<table>
-  <thead><tr>
-    <th style="width:30px">#</th>
-    <th>Description</th>
-    <th style="width:50px;text-align:center">Qty</th>
-    <th style="width:60px">Unit</th>
-    <th style="width:100px;text-align:right">Unit Price (USD)</th>
-    <th style="width:100px;text-align:right">Total (USD)</th>
-  </tr></thead>
-  <tbody>
-    ${itemRows}
-    <tr class="total-row">
-      <td colspan="5" style="text-align:right">TOTAL ORDER AMOUNT:</td>
-      <td style="text-align:right">USD ${totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-    </tr>
-  </tbody>
-</table>
-
-<div class="terms-box">
-  <strong>Terms &amp; Conditions:</strong> This Purchase Order is subject to the Zimbabwe Council of Churches standard procurement terms. Delivery must be completed by the date specified above. All goods/services must conform to stated specifications. Invoice must reference PO number <strong>PO-${request.request_code}</strong>.
-</div>
-
-<div class="sig-block">
-  <div class="sig-col">
-    <div class="sig-line">Prepared By: _________________________<br/><span style="font-size:10px;color:#666">Name / Signature / Date</span></div>
-  </div>
-  <div class="sig-col">
-    <div class="sig-line">Approved By: _________________________<br/><span style="font-size:10px;color:#666">Name / Signature / Date</span></div>
-  </div>
-  <div class="sig-col">
-    <div class="sig-line">Received By (Supplier): _____________<br/><span style="font-size:10px;color:#666">Name / Signature / Date</span></div>
-  </div>
-</div>
-
-<div class="page-footer">
-  <div>Generated: ${new Date().toLocaleString('en-GB')} &nbsp;|&nbsp; ERP Connect — Zimbabwe Council of Churches &nbsp;|&nbsp; OFFICIAL DOCUMENT</div>
-  <div class="footer-right">${POWERED_BY}</div>
-</div>
-</body></html>`;
+    const html = buildPurchaseOrderHTML(request);
     downloadHTMLAsPDF(html, `PO-${request.request_code}-${format(new Date(), 'yyyy-MM-dd')}`);
   };
 
@@ -781,7 +671,7 @@ ${allCommitteeApproved ? `
       </Paper>
 
       {/* Action Buttons */}
-      {(canApproveDept || canReverseDept || canReject || canSubmitCommittee || canCommitteeDecide || canFinalApprove) && (
+      {(canApproveDept || canReverseDept || canReject || canSubmitCommittee || canResubmitToCommittee || canCommitteeDecide || canFinalApprove) && (
         <Paper elevation={0} sx={{ p: 2, mb: 2, borderRadius: 2, bgcolor: alpha(theme.palette.primary.main, 0.04), border: `1px solid ${theme.palette.primary.light}` }}>
           <Typography variant="body2" fontWeight={600} mb={1}>Actions Available:</Typography>
           <Stack direction="row" spacing={1} flexWrap="wrap">
@@ -798,6 +688,11 @@ ${allCommitteeApproved ? `
             {canSubmitCommittee && (
               <Button variant="contained" color="primary" startIcon={<CommitteeIcon />} size="small" onClick={() => { setSelectedQuotId(lowestQuotation?.id || null); setActionDialog('submit_committee'); }}>
                 Submit to Committee
+              </Button>
+            )}
+            {canResubmitToCommittee && (
+              <Button variant="outlined" color="warning" startIcon={<SendIcon />} size="small" onClick={() => { setResubmitQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); setResubmitDialog(true); }}>
+                Resubmit Amended Quotations
               </Button>
             )}
             {canCommitteeDecide && (
@@ -1167,7 +1062,7 @@ ${allCommitteeApproved ? `
                             <Chip
                               label={log.actor_role === 'PROCUREMENT_COMMITTEE'
                                 ? `Committee Member`
-                                : log.actor_role.replace(/_/g, ' ')}
+                                : formatRoleLabel(log.actor_role, log.actor_department_code)}
                               size="small" variant="outlined" sx={{ fontSize: '0.65rem' }}
                             />
                             <Chip
@@ -1396,13 +1291,70 @@ ${allCommitteeApproved ? `
               <TextField fullWidth multiline rows={2} label="Notes" value={editQuotForm.notes}
                 onChange={e => setEditQuotForm(f => ({ ...f, notes: e.target.value }))} />
             </Grid>
+            <Grid item xs={12}>
+              <Box>
+                <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" mb={0.5}>
+                  Replace Quotation Document (optional)
+                </Typography>
+                <Button component="label" variant="outlined" size="small" startIcon={<UploadIcon />} sx={{ mr: 1 }}>
+                  {editQuotFile ? editQuotFile.name : (editingQuot?.file_name ? 'Replace existing file' : 'Attach file')}
+                  <input type="file" hidden onChange={e => setEditQuotFile(e.target.files?.[0] || null)} />
+                </Button>
+                {editQuotFile && (
+                  <Button size="small" color="error" onClick={() => setEditQuotFile(null)}>Remove</Button>
+                )}
+                {!editQuotFile && editingQuot?.file_name && (
+                  <Typography variant="caption" color="text.secondary">Current: {editingQuot.file_name}</Typography>
+                )}
+              </Box>
+            </Grid>
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEditQuotDialog(false)} disabled={actionLoading}>Cancel</Button>
+          <Button onClick={() => { setEditQuotDialog(false); setEditQuotFile(null); }} disabled={actionLoading}>Cancel</Button>
           <Button variant="contained" onClick={handleUpdateQuotation} disabled={actionLoading}
             startIcon={actionLoading ? <CircularProgress size={16} /> : <EditIcon />}>
             Save Changes
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Resubmit to Committee Dialog */}
+      <Dialog open={resubmitDialog} onClose={() => !actionLoading && setResubmitDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <SendIcon color="warning" />
+          Resubmit Amended Quotations to Committee
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            This will reset all existing committee votes so members can review the updated quotations afresh.
+          </Alert>
+          {request?.quotations && request.quotations.length > 0 && (
+            <TextField
+              select fullWidth label="Recommended Quotation (optional)" size="small" sx={{ mb: 2 }}
+              value={resubmitQuotId || ''}
+              onChange={e => setResubmitQuotId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <MenuItem value="">— No selection —</MenuItem>
+              {request.quotations.map(q => (
+                <MenuItem key={q.id} value={q.id}>
+                  {q.vendor_name} — {q.currency} {Number(q.total_amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+          <TextField
+            fullWidth multiline rows={3} label="Amendment Notes / Comments"
+            placeholder="Briefly describe what was changed and why..."
+            value={resubmitComments}
+            onChange={e => setResubmitComments(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResubmitDialog(false)} disabled={actionLoading}>Cancel</Button>
+          <Button variant="contained" color="warning" onClick={handleResubmitToCommittee} disabled={actionLoading}
+            startIcon={actionLoading ? <CircularProgress size={16} /> : <SendIcon />}>
+            Resubmit to Committee
           </Button>
         </DialogActions>
       </Dialog>

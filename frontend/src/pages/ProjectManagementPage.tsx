@@ -68,7 +68,6 @@ const statusColor = (status: string): 'default' | 'warning' | 'success' | 'error
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const SYSTEM_NAME = 'ERP Connect - Zimbabwe Council of Churches';
-const POWERED_BY  = 'Powered by KC Marufu';
 
 // ─── PDF Styles (shared) ─────────────────────────────────────────────────────
 
@@ -89,8 +88,7 @@ tbody tr:nth-child(even) td{background:#f7f7f7;}
 .chip-success{background:#e8f5e9;color:#2e7d32;}.chip-error{background:#ffebee;color:#c62828;}
 .chip-warning{background:#fff3e0;color:#e65100;}.chip-info{background:#e3f2fd;color:#1565c0;}
 .chip-default{background:#f5f5f5;color:#424242;}
-.doc-footer{margin-top:20px;padding-top:8px;border-top:1.5px solid #e0e0e0;display:flex;justify-content:space-between;font-size:8px;color:#999;}
-.doc-footer strong{color:#006064;}
+.doc-footer{margin-top:20px;padding-top:8px;border-top:1.5px solid #e0e0e0;font-size:8px;color:#999;}
 .stat-row{display:flex;gap:16px;background:#f5f5f5;border-radius:4px;padding:8px 12px;margin-bottom:10px;flex-wrap:wrap;}
 .stat-item{text-align:center;min-width:80px;}.stat-item .val{font-size:13px;font-weight:700;color:#006064;}
 .stat-item .lbl{font-size:8px;color:#666;}
@@ -151,7 +149,6 @@ function exportListPDF(projects: Project[], filters: string) {
 </table>
 <div class="doc-footer">
   <div>${SYSTEM_NAME} | CONFIDENTIAL | Generated: ${format(new Date(),'dd MMM yyyy HH:mm')}</div>
-  <div><strong>${POWERED_BY}</strong></div>
 </div>
 </body></html>`;
   downloadHTMLAsPDF(html, `projects-report-${format(new Date(),'yyyy-MM-dd')}`);
@@ -243,7 +240,6 @@ ${project.description?`<p style="font-size:9px;color:#555;margin-bottom:10px">${
 <table><thead><tr><th>Reference</th><th>Requester</th><th>Department</th><th class="right">Amount</th><th>Status</th><th>Date</th></tr></thead><tbody>${rqRows}</tbody></table>
 <div class="doc-footer">
   <div>${SYSTEM_NAME} | CONFIDENTIAL | Generated: ${format(new Date(),'dd MMM yyyy HH:mm')}</div>
-  <div><strong>${POWERED_BY}</strong></div>
 </div>
 </body></html>`;
   downloadHTMLAsPDF(html, `project-${project.project_code}-${format(new Date(),'yyyy-MM-dd')}`);

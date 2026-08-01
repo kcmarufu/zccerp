@@ -64,11 +64,11 @@ export const deletePurchaseRequest = async (id: number | string): Promise<void> 
 // APPROVALS
 // ============================================================================
 export const approveDeptLevel = async (id: number | string, comments?: string): Promise<void> => {
-  await api.post(`${BASE}/requests/${id}/approve-dept`, { comments });
+  await api.post(`${BASE}/requests/${id}/approve`, { comments });
 };
 
 export const approveFinanceLevel = async (id: number | string, comments?: string): Promise<void> => {
-  await api.post(`${BASE}/requests/${id}/approve-finance`, { comments });
+  await api.post(`${BASE}/requests/${id}/finance-approve`, { comments });
 };
 
 export const rejectProcurementRequest = async (id: number | string, comments: string): Promise<void> => {
@@ -81,6 +81,14 @@ export const submitToCommittee = async (
   comments?: string
 ): Promise<void> => {
   await api.post(`${BASE}/requests/${id}/submit-committee`, { selected_quotation_id, comments });
+};
+
+export const resubmitToCommittee = async (
+  id: number | string,
+  selected_quotation_id?: number | null,
+  comments?: string
+): Promise<void> => {
+  await api.post(`${BASE}/requests/${id}/resubmit-committee`, { selected_quotation_id, comments });
 };
 
 export const committeeDecision = async (
@@ -105,7 +113,7 @@ export const finalFinanceApproval = async (id: number | string, formData: FormDa
 };
 
 export const getApprovalTrail = async (id: number | string) => {
-  const res = await api.get(`${BASE}/requests/${id}/trail`);
+  const res = await api.get(`${BASE}/requests/${id}/approval-trail`);
   return res.data.data || [];
 };
 
@@ -130,8 +138,14 @@ export const deleteQuotation = async (requestId: number | string, quotationId: n
   await api.delete(`${BASE}/requests/${requestId}/quotations/${quotationId}`);
 };
 
-export const updateQuotation = async (requestId: number | string, quotationId: number, data: Partial<ProcQuotation>): Promise<void> => {
-  await api.put(`${BASE}/requests/${requestId}/quotations/${quotationId}`, data);
+export const updateQuotation = async (requestId: number | string, quotationId: number, data: FormData | Partial<ProcQuotation>): Promise<void> => {
+  if (data instanceof FormData) {
+    await api.put(`${BASE}/requests/${requestId}/quotations/${quotationId}`, data, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  } else {
+    await api.put(`${BASE}/requests/${requestId}/quotations/${quotationId}`, data);
+  }
 };
 
 export const downloadQuotationFile = async (requestId: number | string, quotationId: number, fileName?: string): Promise<void> => {
@@ -201,7 +215,7 @@ export const getRequestAttachments = async (requestId: number | string) => {
 
 export const downloadRequestAttachment = async (attachmentId: number, fileName?: string): Promise<void> => {
   const res = await api.get(`${BASE}/attachments/${attachmentId}/download`, { responseType: 'blob' });
-  const contentType = res.headers['content-type'] || 'application/octet-stream';
+  const contentType = (res.headers['content-type'] as string | undefined) || 'application/octet-stream';
   let url: string | null = null;
   try {
     url = window.URL.createObjectURL(new Blob([res.data], { type: contentType }));
@@ -227,7 +241,7 @@ export const reverseDeptApproval = async (id: number | string): Promise<void> =>
 export const downloadPOP = async (requestId: number | string, fileName?: string): Promise<void> => {
   const res = await api.get(`${BASE}/requests/${requestId}/pop/download`, { responseType: 'blob' });
 
-  const contentType = res.headers['content-type'] || '';
+  const contentType = (res.headers['content-type'] as string | undefined) || '';
 
   // Surface server-side JSON errors that arrive as blobs
   if (contentType.includes('application/json')) {

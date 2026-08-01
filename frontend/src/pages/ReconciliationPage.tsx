@@ -113,7 +113,6 @@ const ReconciliationPage: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── HARDCODED BRANDING ─────────────────────────────────────────────────
-  const POWERED_BY = 'Powered By Kudakwashe C Marufu' as const;
   const DOC_TITLE  = 'Reconciliation' as const;
   // ───────────────────────────────────────────────────────────────────────
 
@@ -187,10 +186,8 @@ const ReconciliationPage: React.FC = () => {
   tbody tr:nth-child(even) td {background:#f7f7f7;}
   .total-row td {font-weight:bold;background:#e0f2f1 !important;border-top:1.5px solid #006064;font-size:13px;}
   .act-APPROVED {color:#2e7d32;font-weight:bold;} .act-REJECTED {color:#c62828;font-weight:bold;} .act-SUBMITTED {color:#1565c0;font-weight:bold;}
-  .sig-block {display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:28px;}
-  .sig-col {text-align:center;} .sig-line {border-top:1px solid #333;margin-top:40px;padding-top:6px;font-size:11px;color:#555;}
-  .page-footer {margin-top:24px;padding-top:8px;border-top:2px solid #e0e0e0;display:flex;justify-content:space-between;}
-  .footer-left {font-size:10px;color:#999;} .footer-right {font-size:10px;font-weight:bold;color:#006064;}
+  .page-footer {margin-top:24px;padding-top:8px;border-top:2px solid #e0e0e0;}
+  .footer-left {font-size:10px;color:#999;}
 </style></head><body>
 <div class="doc-header">
   <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
@@ -230,14 +227,8 @@ ${reconItems.length > 0 ? `
   <td></td>
 </tr></tbody></table>` : ''}
 ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By</th><th>Role</th><th>Comments</th><th>Date</th></tr></thead><tbody>${trailRows}</tbody></table>`:''}
-<div class="sig-block">
-  <div class="sig-col"><div class="sig-line">Requester: ${req.requester_first_name||''} ${req.requester_last_name||''}</div></div>
-  <div class="sig-col"><div class="sig-line">Programme Lead / HOP</div></div>
-  <div class="sig-col"><div class="sig-line">Finance Clerk</div></div>
-</div>
 <div class="page-footer">
   <div class="footer-left"><div>Generated: ${format(new Date(),'dd MMM yyyy HH:mm')}</div><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div></div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 </body></html>`;
       downloadHTMLAsPDF(html, `reconciliation-${requestCode}-${format(new Date(), 'yyyy-MM-dd')}`);
@@ -275,8 +266,8 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
   tbody td{padding:5px 8px;border-bottom:1px solid #e0e0e0;}
   tbody tr:nth-child(even) td{background:#f7f7f7;}
   .total-row td{font-weight:bold;background:#e0f2f1 !important;border-top:1.5px solid #006064;}
-  .page-footer{margin-top:24px;padding-top:8px;border-top:1.5px solid #e0e0e0;display:flex;justify-content:space-between;}
-  .footer-left{font-size:9px;color:#999;} .footer-right{font-size:9px;font-weight:bold;color:#006064;}
+  .page-footer{margin-top:24px;padding-top:8px;border-top:1.5px solid #e0e0e0;}
+  .footer-left{font-size:9px;color:#999;}
 </style></head><body>
 <div class="doc-header">
   <div><div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div><h1>${DOC_TITLE} History Report</h1><p>Records: <strong>${history.length}</strong> &nbsp;|&nbsp; Total Spent: <strong>$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; Total Returned: <strong>$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong></p></div>
@@ -292,7 +283,6 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
 ${buildDigitalStamp('')}
 <div class="page-footer">
   <div class="footer-left"><div>Generated: ${format(new Date(),'dd MMM yyyy HH:mm')}</div><div>ERP Connect - Zimbabwe Council of Churches | CONFIDENTIAL</div></div>
-  <div class="footer-right">${POWERED_BY}</div>
 </div>
 </body></html>`;
     downloadHTMLAsPDF(html, `reconciliation-history-${format(new Date(), 'yyyy-MM-dd')}`);
@@ -334,6 +324,7 @@ ${buildDigitalStamp('')}
   const [leadHistory, setLeadHistory] = useState<any[]>([]);
   const [pendingReviews, setPendingReviews] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
+  const [financeReviewHistory, setFinanceReviewHistory] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Department & project filter state (shared across tabs)
@@ -448,10 +439,19 @@ ${buildDigitalStamp('')}
           console.error('Error fetching reconciliation history:', err);
         }
       }
+      // Finance Clerk: fetch their personal review history
+      if (isFinance) {
+        try {
+          const frHistRes = await reconciliationService.getFinanceReviewHistory();
+          if (frHistRes.success && frHistRes.data) setFinanceReviewHistory(frHistRes.data);
+        } catch (err) {
+          console.error('Error fetching finance review history:', err);
+        }
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [isFinanceOrAdmin, canReviewLead]);
+  }, [isFinanceOrAdmin, canReviewLead, isFinance]);
 
   useEffect(() => {
     fetchData();
@@ -968,6 +968,7 @@ ${buildDigitalStamp('')}
           {isAdmin && !isLeadOrHOP && <Tab icon={<ReconcileIcon />} label={`Lead Review (${pendingLeadReviews.length})`} iconPosition="start" />}
           {isAdmin && !isLeadOrHOP && <Tab icon={<HistoryIcon />} label={`My Approvals History (${leadHistory.length})`} iconPosition="start" />}
           {isFinanceOrAdmin && <Tab icon={<ReconcileIcon />} label={`Finance Review (${pendingReviews.length})`} iconPosition="start" />}
+          {isFinance && <Tab icon={<HistoryIcon />} label={`My Review History (${financeReviewHistory.length})`} iconPosition="start" />}
           {isFinanceOrAdmin && <Tab icon={<HistoryIcon />} label="All History" iconPosition="start" />}
         </Tabs>
       </Paper>
@@ -1468,7 +1469,16 @@ ${buildDigitalStamp('')}
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
                       <TableCell align="center">
-                        <Button size="small" variant="outlined" startIcon={<ViewIcon />} onClick={() => openReviewDialog(req, 'finance')}>Review</Button>
+                        {req.status === 'RECON_PENDING_FINANCE' ? (
+                          <Button size="small" variant="outlined" startIcon={<ViewIcon />} onClick={() => openReviewDialog(req, 'finance')}>Review</Button>
+                        ) : (
+                          <>
+                            <Chip label="Awaiting Lead" color="warning" size="small" sx={{ mr: 0.5 }} />
+                            <Tooltip title="View Details">
+                              <IconButton size="small" color="primary" onClick={() => openViewDialog(req)}><ViewIcon /></IconButton>
+                            </Tooltip>
+                          </>
+                        )}
                         <Tooltip title="Download PDF">
                           <IconButton size="small" color="error" sx={{ ml: 0.5 }} onClick={() => handleDownloadReconPDF(req)}><PdfIcon /></IconButton>
                         </Tooltip>
@@ -1482,8 +1492,64 @@ ${buildDigitalStamp('')}
         </Paper>
       )}
 
+      {/* Tab: Finance Clerk My Review History (index 3 for Finance Clerk) */}
+      {activeTab === 3 && isFinance && (
+        <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
+          {financeReviewHistory.length === 0 ? (
+            <Box py={6} textAlign="center">
+              <HistoryIcon sx={{ fontSize: 64, color: 'text.disabled', mb: 2 }} />
+              <Typography color="text.secondary">No reconciliations reviewed yet</Typography>
+            </Box>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow sx={{ backgroundColor: 'grey.50' }}>
+                    <TableCell sx={{ fontWeight: 600 }}>Request #</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Requester</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Dept</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Spent</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Decision</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Reviewed</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }} align="center">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {financeReviewHistory.map((rec: any, idx: number) => (
+                    <TableRow key={idx} hover>
+                      <TableCell><Typography fontWeight={500}>{rec.request_code}</Typography></TableCell>
+                      <TableCell>{rec.requester_first_name} {rec.requester_last_name}</TableCell>
+                      <TableCell><Chip label={rec.department_code || '—'} size="small" variant="outlined" /></TableCell>
+                      <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(rec.total_spent || 0).toLocaleString()}</TableCell>
+                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(rec.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell>
+                        <Chip
+                          label={rec.finance_action === 'APPROVED' ? 'Approved' : rec.finance_action === 'REJECTED' ? 'Rejected' : rec.reconciliation_status}
+                          color={rec.finance_action === 'APPROVED' ? 'success' : 'error'}
+                          size="small"
+                        />
+                      </TableCell>
+                      <TableCell>{rec.reviewed_at ? format(new Date(rec.reviewed_at), 'MMM d, yyyy') : '—'}</TableCell>
+                      <TableCell align="center">
+                        <Tooltip title="View Details">
+                          <IconButton size="small" color="primary" onClick={() => openViewDialog(rec)}><ViewIcon /></IconButton>
+                        </Tooltip>
+                        <Tooltip title="Download PDF">
+                          <IconButton size="small" color="error" onClick={() => handleDownloadReconPDF(rec)}><PdfIcon /></IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Paper>
+      )}
+
       {/* Tab: History (index depends on whether lead tab exists) */}
-      {activeTab === (canReviewLead ? 5 : 3) && isFinanceOrAdmin && (
+      {activeTab === (canReviewLead ? 5 : (isFinance ? 4 : 3)) && isFinanceOrAdmin && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {history.length === 0 ? (
             <Box py={6} textAlign="center">

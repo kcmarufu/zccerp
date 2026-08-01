@@ -136,6 +136,7 @@ export interface ApprovalLog {
   approver_email: string;
   actor_name?: string;
   actor_role?: string;
+  actor_department_code?: string | null;
   comment?: string;
   approver_role: UserRole;
   action: ApprovalAction;
