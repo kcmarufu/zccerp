@@ -449,6 +449,8 @@ export interface Reconciliation {
   status: ReconciliationStatus;
   total_spent: number;
   total_returned: number;
+  /** Derived server-side: amount actual spend exceeded the budgeted float by (0 when none). */
+  total_overspend?: number;
   notes: string | null;
   overspend_notes?: string | null;
   finance_reviewer_id: number | null;

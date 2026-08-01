@@ -71,6 +71,14 @@ exports.uploadSingle = upload.single('file');
 // Middleware for multiple files upload (max 5)
 exports.uploadMultiple = upload.array('files', 5);
 
+// Proof of Payment upload at final finance approval. Accepts either the legacy
+// single `file` field or several `files` — a payment is often settled in tranches,
+// each with its own POP.
+exports.uploadPOPFiles = upload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'files', maxCount: 10 }
+]);
+
 // Error handling middleware
 exports.handleUploadError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -78,7 +86,7 @@ exports.handleUploadError = (err, req, res, next) => {
       return res.status(400).json({ error: 'File size exceeds 8MB limit' });
     }
     if (err.code === 'LIMIT_FILE_COUNT') {
-      return res.status(400).json({ error: 'Too many files. Maximum 5 files allowed' });
+      return res.status(400).json({ error: 'Too many files uploaded for this request' });
     }
     return res.status(400).json({ error: err.message });
   } else if (err) {

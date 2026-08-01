@@ -46,6 +46,39 @@ const VARIANCE_COLORS: Record<string, string> = {
   OVER_BUDGET: '#c62828'
 };
 
+// Expense categories captured on request items. Anything not listed falls back to
+// a title-cased version of the raw code so new categories still read sensibly.
+const CATEGORY_LABELS: Record<string, string> = {
+  PROCUREMENT: 'Procurement / Items',
+  TRANSPORT: 'Transport',
+  ACCOMMODATION: 'Accommodation',
+  REIMBURSEMENT: 'Reimbursement',
+  PER_DIEM: 'Per Diem / Allowances',
+  TRAINING: 'Training / Workshop',
+  MAINTENANCE: 'Maintenance / Repairs',
+  CAPACITY_BUILDING: 'Capacity Building',
+  COMMUNITY_OUTREACH: 'Community Outreach',
+  FIELD_OPERATIONS: 'Field Operations & Logistics',
+  MEAL: 'Monitoring, Evaluation & Learning',
+  RESEARCH: 'Research & Documentation',
+  ADVOCACY: 'Advocacy & Communications',
+  BENEFICIARY_SUPPORT: 'Beneficiary Support',
+  IT_SYSTEMS: 'IT & Systems',
+  OFFICE_SUPPLIES: 'Office Supplies',
+  UTILITIES: 'Utilities',
+  VEHICLE_FLEET: 'Vehicle & Fleet',
+  SECURITY: 'Security',
+  STAFF_WELFARE: 'Staff Welfare',
+  AUDIT_COMPLIANCE: 'Audit & Compliance',
+  LEGAL_CONSULTANCY: 'Legal & Consultancy',
+  SUBSCRIPTIONS: 'Subscriptions',
+  OTHER: 'Other'
+};
+
+const categoryLabel = (code: string) =>
+  CATEGORY_LABELS[code] ||
+  String(code || 'Other').replace(/_/g, ' ').replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
+
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
@@ -177,11 +210,17 @@ const FinancialReportsPage: React.FC = () => {
   const { totals, variance, donorSummary, projectSummary, departmentSummary, categorySummary, requestSummary, spendingWeekly, spendingMonthly, spendingQuarterly, spendingYearly, reconciliationSummary } = data;
 
   // Prepare chart data
-  const categoryChartData = categorySummary?.map((c: any) => ({
-    name: c.category,
-    allocated: parseFloat(c.total_allocated) || 0,
+  const categoryRows = (categorySummary || []).map((c: any) => ({
+    ...c,
+    label: categoryLabel(c.category),
     spent: parseFloat(c.total_spent) || 0
-  })) || [];
+  }));
+  const categorySpendTotal = categoryRows.reduce((sum: number, c: any) => sum + c.spent, 0);
+
+  const categoryChartData = categoryRows.map((c: any) => ({
+    name: c.label,
+    spent: c.spent
+  }));
 
   const donorChartData = donorSummary?.map((d: any) => ({
     name: d.donor_code || d.donor_name,
@@ -285,9 +324,9 @@ const FinancialReportsPage: React.FC = () => {
 
   const exportVarianceToExcel = () => {
     const wb = XLSX.utils.book_new();
-    const headers = ['Budget Code', 'Budget Name', 'Donor', 'Department', 'Category', 'Allocated ($)', 'Spent ($)', 'Variance ($)', 'Utilization %', 'Status'];
+    const headers = ['Budget Code', 'Budget Name', 'Donor', 'Department', 'Project', 'Allocated ($)', 'Spent ($)', 'Variance ($)', 'Utilization %', 'Status'];
     const rows = filteredVariance.map((v: any) => [
-      v.budget_code, v.budget_name, v.donor_code || '', v.department_code || '', v.category || '',
+      v.budget_code, v.budget_name, v.donor_code || '', v.department_code || '', v.project_code || v.category || '',
       Number(v.allocated_amount || 0), Number(v.spent_amount || 0), Number(v.variance_amount || 0),
       Number(v.utilization_pct || 0).toFixed(1) + '%', v.variance_status
     ]);
@@ -716,7 +755,7 @@ const FinancialReportsPage: React.FC = () => {
                         <TableCell sx={{ fontWeight: 700 }}>Budget Line</TableCell>
                         <TableCell sx={{ fontWeight: 700 }}>Donor</TableCell>
                         <TableCell sx={{ fontWeight: 700 }}>Department</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Category</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Project</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>Allocated</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>Spent</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>Variance</TableCell>
@@ -738,7 +777,7 @@ const FinancialReportsPage: React.FC = () => {
                             <Chip label={row.donor_code || 'N/A'} size="small" variant="outlined" />
                           </TableCell>
                           <TableCell>{row.department_code || 'N/A'}</TableCell>
-                          <TableCell>{row.category || '-'}</TableCell>
+                          <TableCell>{row.project_code || row.category || '-'}</TableCell>
                           <TableCell align="right">{formatCurrency(row.allocated_amount)}</TableCell>
                           <TableCell align="right">{formatCurrency(row.spent_amount)}</TableCell>
                           <TableCell align="right">
@@ -1131,33 +1170,45 @@ const FinancialReportsPage: React.FC = () => {
                 <Divider sx={{ my: 3 }} />
 
                 {/* Category breakdown */}
-                <Typography variant="subtitle1" fontWeight={700} gutterBottom>Spending by Category</Typography>
+                <Typography variant="subtitle1" fontWeight={700}>Spending by Category</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+                  Approved spend grouped by the expense category on each request item
+                </Typography>
                 <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2, overflowX: 'auto' }}>
                   <Table size="small" sx={{ minWidth: 450 }}>
                     <TableHead>
                       <TableRow sx={{ bgcolor: '#f5f5f5' }}>
                         <TableCell sx={{ fontWeight: 700 }}>Category</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 700 }}>Lines</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 700 }}>Allocated</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 700 }}>Requests</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 700 }}>Items</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>Spent</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 700 }}>Utilization</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 700 }}>% of Spend</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {categorySummary?.map((cat: any, i: number) => (
-                        <TableRow key={i} hover>
+                      {categoryRows.map((cat: any, i: number) => (
+                        <TableRow key={cat.category} hover>
                           <TableCell>
                             <Box display="flex" alignItems="center" gap={1}>
                               <Box sx={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: COLORS[i % COLORS.length] }} />
-                              {cat.category}
+                              {cat.label}
                             </Box>
                           </TableCell>
-                          <TableCell align="center">{cat.budget_line_count}</TableCell>
-                          <TableCell align="right">{formatCurrency(cat.total_allocated)}</TableCell>
-                          <TableCell align="right">{formatCurrency(cat.total_spent)}</TableCell>
-                          <TableCell align="center">{Number(cat.avg_utilization || 0).toFixed(0)}%</TableCell>
+                          <TableCell align="center">{cat.request_count}</TableCell>
+                          <TableCell align="center">{cat.item_count}</TableCell>
+                          <TableCell align="right">{formatCurrency(cat.spent)}</TableCell>
+                          <TableCell align="center">
+                            {categorySpendTotal > 0 ? `${((cat.spent / categorySpendTotal) * 100).toFixed(0)}%` : '—'}
+                          </TableCell>
                         </TableRow>
                       ))}
+                      {categoryRows.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={5} align="center">
+                            <Typography variant="body2" color="text.secondary">No approved spending to categorise yet</Typography>
+                          </TableCell>
+                        </TableRow>
+                      )}
                     </TableBody>
                   </Table>
                 </TableContainer>
@@ -1166,17 +1217,19 @@ const FinancialReportsPage: React.FC = () => {
               <Grid item xs={12} md={5}>
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mb: 2 }}>
                   <Typography variant="subtitle2" fontWeight={600} align="center" gutterBottom>
-                    Allocated vs Spent by Category
+                    Spend by Category
                   </Typography>
-                  <ResponsiveContainer width="100%" height={Math.max(260, categoryChartData.length * 48)}>
+                  <ResponsiveContainer width="100%" height={Math.max(260, categoryChartData.length * 40)}>
                     <BarChart data={categoryChartData} layout="vertical" margin={{ left: 8, right: 32, top: 4, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis type="number" tickFormatter={(v) => formatCompact(v)} tick={{ fontSize: 11 }} />
-                      <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11 }} />
+                      <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} />
                       <RechartsTooltip formatter={(value: number) => formatCurrency(value)} />
-                      <Legend />
-                      <Bar dataKey="allocated" fill="#1976d2" name="Allocated" radius={[0, 2, 2, 0]} />
-                      <Bar dataKey="spent" fill="#d32f2f" name="Spent" radius={[0, 2, 2, 0]} />
+                      <Bar dataKey="spent" fill="#1976d2" name="Spent" radius={[0, 2, 2, 0]}>
+                        {categoryChartData.map((_: any, i: number) => (
+                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                        ))}
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </Paper>

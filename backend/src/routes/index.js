@@ -25,7 +25,7 @@ const notificationService = require('../services/notification.service');
 
 // Middleware
 const { authenticateToken, requireRole, requirePermission, requireSameDepartment, requireFinanceManager, requirePartnerManager } = require('../middleware/auth.middleware');
-const { uploadSingle, uploadMultiple, handleUploadError } = require('../middleware/upload.middleware');
+const { uploadSingle, uploadMultiple, uploadPOPFiles, handleUploadError } = require('../middleware/upload.middleware');
 const {
   createRequestValidator,
   updateRequestValidator,
@@ -189,7 +189,7 @@ router.post('/procurement/requests/:id/reverse-dept-approval', authenticateToken
 router.post('/procurement/requests/:id/finance-approve', authenticateToken, procurementController.approveFinanceLevel.bind(procurementController));
 router.post('/procurement/requests/:id/submit-committee', authenticateToken, procurementController.submitToCommittee.bind(procurementController));
 router.post('/procurement/requests/:id/committee-decision', authenticateToken, procurementController.committeeDecision.bind(procurementController));
-router.post('/procurement/requests/:id/final-approve', authenticateToken, uploadSingle, handleUploadError, procurementController.finalFinanceApproval.bind(procurementController));
+router.post('/procurement/requests/:id/final-approve', authenticateToken, uploadPOPFiles, handleUploadError, procurementController.finalFinanceApproval.bind(procurementController));
 router.post('/procurement/requests/:id/reverse-final-approval', authenticateToken, procurementController.reverseFinalApproval.bind(procurementController));
 router.get('/procurement/requests/:id/approval-trail', authenticateToken, procurementController.getApprovalTrail.bind(procurementController));
 router.get('/procurement/requests/:id/committee-votes', authenticateToken, procurementController.getCommitteeVotes.bind(procurementController));
@@ -203,7 +203,9 @@ router.post('/procurement/requests/:id/quotations', authenticateToken, uploadSin
 router.put('/procurement/requests/:id/quotations/:quotationId', authenticateToken, procurementController.updateQuotation.bind(procurementController));
 router.delete('/procurement/requests/:id/quotations/:quotationId', authenticateToken, procurementController.deleteQuotation.bind(procurementController));
 router.get('/procurement/requests/:id/quotations/:quotationId/download', authenticateToken, procurementController.downloadQuotation.bind(procurementController));
+router.get('/procurement/requests/:id/pop', authenticateToken, procurementController.getPOPDocuments.bind(procurementController));
 router.get('/procurement/requests/:id/pop/download', authenticateToken, procurementController.downloadPOP.bind(procurementController));
+router.get('/procurement/requests/:id/pop/:popId/download', authenticateToken, procurementController.downloadPOP.bind(procurementController));
 router.get('/procurement/vendors', authenticateToken, procurementController.getVendors.bind(procurementController));
 router.get('/procurement/vendors/:id', authenticateToken, procurementController.getVendorById.bind(procurementController));
 router.post('/procurement/vendors', authenticateToken, procurementController.createVendor.bind(procurementController));

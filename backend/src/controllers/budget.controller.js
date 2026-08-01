@@ -1008,17 +1008,23 @@ class BudgetController {
       );
 
       // 4. Spending by category
+      // Driven by the expense category captured on each request item (Transport,
+      // Accommodation, Per Diem, ...). budget_lines.category holds the project code
+      // for backward compatibility, not an expense category — grouping on it is what
+      // produced project codes and "Uncategorized" rows in this report.
       const categorySummary = await query(
-        `SELECT 
-          COALESCE(bl.category, 'Uncategorized') as category,
-          COUNT(bl.id) as budget_line_count,
-          COALESCE(SUM(bl.allocated_amount), 0) as total_allocated,
-          COALESCE(SUM(bl.spent_amount), 0) as total_spent,
-          COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
-          ROUND(COALESCE(AVG(COALESCE((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 0)), 0), 2) as avg_utilization
-        FROM budget_lines bl
-        WHERE bl.is_active = TRUE ${scopedYearFilter}
-        GROUP BY bl.category
+        `SELECT
+          COALESCE(NULLIF(ri.category, ''), 'OTHER') as category,
+          COUNT(DISTINCT ri.request_id) as request_count,
+          COUNT(ri.id) as item_count,
+          COALESCE(SUM(ri.quantity * ri.unit_price), 0) as total_spent
+        FROM request_items ri
+        JOIN requests r ON r.id = ri.request_id
+        JOIN budget_lines bl ON bl.id = ri.budget_line_id
+        WHERE bl.is_active = TRUE
+          AND r.status IN ('APPROVED','DISPATCHED','PENDING_RECONCILIATION','RECON_PENDING_LEAD','RECON_PENDING_FINANCE','RECONCILED')
+          ${scopedYearFilter}
+        GROUP BY category
         ORDER BY total_spent DESC`,
         scopedYearParam
       );

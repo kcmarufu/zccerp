@@ -76,6 +76,32 @@ const SubmissionTimeliness: React.FC<{ timeliness?: string | null; days?: number
   );
 };
 
+/**
+ * Renders the "Returned" figure for a reconciliation.
+ *
+ * A reconciliation either returns a surplus or overspends — never both. When the
+ * actual spend exceeded the float, `total_returned` is 0, so showing it alone
+ * hides the over-expenditure. In that case show the amount overspent in red.
+ */
+const ReturnedAmount: React.FC<{ record: any; hideCaption?: boolean }> = ({ record, hideCaption }) => {
+  const overspend = Number(record?.total_overspend || 0);
+  if (overspend > 0) {
+    return (
+      <Box display="flex" flexDirection="column" alignItems="flex-start">
+        <Typography variant="body2" fontWeight={600} color="error.main">
+          -${overspend.toLocaleString()}
+        </Typography>
+        {!hideCaption && <Typography variant="caption" color="error.main">Overspent</Typography>}
+      </Box>
+    );
+  }
+  return (
+    <Typography variant="body2" fontWeight={500} color="success.main">
+      ${Number(record?.total_returned || 0).toLocaleString()}
+    </Typography>
+  );
+};
+
 /** Count Mon–Fri working days from day after startDate to today (or endDate). */
 function calcWorkingDaysFromNow(startDate: string | Date | null | undefined): number | null {
   if (!startDate) return null;
@@ -196,7 +222,9 @@ const ReconciliationPage: React.FC = () => {
   <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
   <h1>${DOC_TITLE}</h1>
   <p><strong>${requestCode}</strong> &nbsp;|&nbsp; ${req.department_name || ''} &nbsp;|&nbsp; ${req.requester_first_name || ''} ${req.requester_last_name || ''}</p>
-  <p>Status: <strong>${req.status?.replace(/_/g,' ')}</strong>${reconDetail ? ` &nbsp;|&nbsp; Spent: <strong>$${Number(reconDetail.total_spent||0).toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; Returned: <strong>$${Number(reconDetail.total_returned||0).toLocaleString(undefined,{minimumFractionDigits:2})}</strong>` : ''}</p>
+  <p>Status: <strong>${req.status?.replace(/_/g,' ')}</strong>${reconDetail ? ` &nbsp;|&nbsp; Spent: <strong>$${Number(reconDetail.total_spent||0).toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; ${Number(reconDetail.total_overspend||0) > 0
+    ? `<span style="color:#c62828">Overspent: <strong>$${Number(reconDetail.total_overspend).toLocaleString(undefined,{minimumFractionDigits:2})}</strong></span>`
+    : `Returned: <strong>$${Number(reconDetail.total_returned||0).toLocaleString(undefined,{minimumFractionDigits:2})}</strong>`}` : ''}</p>
 </div>
 <div class="meta-grid">
   <div class="meta-item"><label>Reference</label><span>${requestCode}</span></div>
@@ -206,7 +234,9 @@ const ReconciliationPage: React.FC = () => {
   <div class="meta-item"><label>Partner / Donor</label><span>${req.donor_name || '—'}${req.donor_code ? ` (${req.donor_code})` : ''}</span></div>
   <div class="meta-item"><label>Project</label><span>${req.project_name ? `${req.project_code} — ${req.project_name}` : '—'}</span></div>
   ${reconDetail ? `<div class="meta-item"><label>Total Spent</label><span style="color:#c62828">$${Number(reconDetail.total_spent||0).toLocaleString(undefined,{minimumFractionDigits:2})}</span></div>
-  <div class="meta-item"><label>Total Returned</label><span style="color:#2e7d32">$${Number(reconDetail.total_returned||0).toLocaleString(undefined,{minimumFractionDigits:2})}</span></div>` : ''}
+  ${Number(reconDetail.total_overspend||0) > 0
+    ? `<div class="meta-item"><label>Total Overspent</label><span style="color:#c62828">$${Number(reconDetail.total_overspend).toLocaleString(undefined,{minimumFractionDigits:2})}</span></div>`
+    : `<div class="meta-item"><label>Total Returned</label><span style="color:#2e7d32">$${Number(reconDetail.total_returned||0).toLocaleString(undefined,{minimumFractionDigits:2})}</span></div>`}` : ''}
   ${reconDetail?.notes ? `<div class="meta-item meta-full"><label>Notes</label><span>${reconDetail.notes}</span></div>` : ''}
   <div class="meta-item meta-full"><label>Purpose of Float</label><span>${req.justification||'—'}</span></div>
   ${(req.is_activity_request || req.activity_start_date || req.activity_end_date) ? `
@@ -252,13 +282,16 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
     if (history.length === 0) { toast.warning('No records to print'); return; }
     const totalSpentAll = history.reduce((s: number, r: any) => s + Number(r.total_spent || 0), 0);
     const totalReturnedAll = history.reduce((s: number, r: any) => s + Number(r.total_returned || 0), 0);
+    const totalOverspendAll = history.reduce((s: number, r: any) => s + Number(r.total_overspend || 0), 0);
     const tableRows = history.map((rec: any, i: number) => `
       <tr>
         <td>${i + 1}</td>
         <td><strong>${rec.request_code}</strong></td>
         <td>${`${rec.requester_first_name || ''} ${rec.requester_last_name || ''}`.trim()}</td>
         <td align="right">$${Number(rec.total_spent || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
-        <td align="right">$${Number(rec.total_returned || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+        <td align="right"${Number(rec.total_overspend || 0) > 0 ? ' style="color:#c62828;font-weight:bold"' : ''}>${Number(rec.total_overspend || 0) > 0
+          ? `-$${Number(rec.total_overspend).toLocaleString(undefined, {minimumFractionDigits:2})} overspent`
+          : `$${Number(rec.total_returned || 0).toLocaleString(undefined, {minimumFractionDigits:2})}`}</td>
         <td>${rec.reconciliation_status || '—'}</td>
         <td>${`${rec.reviewer_first_name || ''} ${rec.reviewer_last_name || ''}`.trim()}</td>
         <td>${rec.reviewed_at ? format(new Date(rec.reviewed_at), 'dd MMM yyyy') : '—'}</td>
@@ -279,7 +312,7 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
   .footer-left{font-size:9px;color:#999;} .footer-right{font-size:9px;font-weight:bold;color:#006064;}
 </style></head><body>
 <div class="doc-header">
-  <div><div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div><h1>${DOC_TITLE} History Report</h1><p>Records: <strong>${history.length}</strong> &nbsp;|&nbsp; Total Spent: <strong>$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; Total Returned: <strong>$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong></p></div>
+  <div><div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div><h1>${DOC_TITLE} History Report</h1><p>Records: <strong>${history.length}</strong> &nbsp;|&nbsp; Total Spent: <strong>$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; Total Returned: <strong>$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong>${totalOverspendAll > 0 ? ` &nbsp;|&nbsp; <span style="color:#c62828">Total Overspent: <strong>$${totalOverspendAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong></span>` : ''}</p></div>
   <div style="font-size:10px;color:#666">Generated: ${format(new Date(), 'dd MMM yyyy HH:mm')}</div>
 </div>
 <h3>Reconciliation History (${history.length} records)</h3>
@@ -302,17 +335,17 @@ ${buildDigitalStamp('')}
   const handleHistoryBulkExcel = () => {
     if (history.length === 0) { toast.warning('No records to export'); return; }
     const wb = XLSX.utils.book_new();
-    const headers = ['#', 'Request #', 'Requester', 'Spent ($)', 'Returned ($)', 'Status', 'Reviewed By', 'Reviewed Date'];
+    const headers = ['#', 'Request #', 'Requester', 'Spent ($)', 'Returned ($)', 'Overspent ($)', 'Status', 'Reviewed By', 'Reviewed Date'];
     const rows = history.map((rec: any, i: number) => [
       i + 1, rec.request_code,
       `${rec.requester_first_name || ''} ${rec.requester_last_name || ''}`.trim(),
-      Number(rec.total_spent || 0), Number(rec.total_returned || 0),
+      Number(rec.total_spent || 0), Number(rec.total_returned || 0), Number(rec.total_overspend || 0),
       rec.reconciliation_status || '',
       `${rec.reviewer_first_name || ''} ${rec.reviewer_last_name || ''}`.trim(),
       rec.reviewed_at ? format(new Date(rec.reviewed_at), 'dd MMM yyyy') : ''
     ]);
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws['!cols'] = [4, 16, 22, 14, 14, 16, 22, 14].map(w => ({ wch: w }));
+    ws['!cols'] = [4, 16, 22, 14, 14, 14, 16, 22, 14].map(w => ({ wch: w }));
     XLSX.utils.book_append_sheet(wb, ws, 'Reconciliation History');
     XLSX.writeFile(wb, `reconciliation-history-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
     toast.success(`Exported ${history.length} records to Excel`);
@@ -1138,7 +1171,7 @@ ${buildDigitalStamp('')}
                     <TableRow key={recon.id} hover>
                       <TableCell><Typography fontWeight={500}>{recon.request_code}</Typography></TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(recon.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(recon.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount record={recon} /></TableCell>
                       <TableCell>
                         <Chip
                           label={getStatusLabel(recon.status)}
@@ -1281,7 +1314,7 @@ ${buildDigitalStamp('')}
                       <TableCell><Chip label={req.department_code} size="small" variant="outlined" /></TableCell>
                       <TableCell>${Number(req.total_amount || 0).toLocaleString()}</TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(req.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(req.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount record={req} /></TableCell>
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
                       <TableCell align="center">
@@ -1331,7 +1364,7 @@ ${buildDigitalStamp('')}
                       <TableCell><Typography fontWeight={500}>{rec.request_code}</Typography></TableCell>
                       <TableCell>{rec.requester_first_name} {rec.requester_last_name}</TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(rec.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(rec.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount record={rec} /></TableCell>
                       <TableCell>
                         <Chip label={rec.status?.replace(/_/g, ' ') || '—'} color={getStatusColor(rec.status)} size="small" />
                       </TableCell>
@@ -1464,7 +1497,7 @@ ${buildDigitalStamp('')}
                       <TableCell><Chip label={req.department_code} size="small" variant="outlined" /></TableCell>
                       <TableCell>${Number(req.total_amount || 0).toLocaleString()}</TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(req.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(req.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount record={req} /></TableCell>
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
                       <TableCell align="center">
@@ -1619,7 +1652,7 @@ ${buildDigitalStamp('')}
                             <TableCell>{rec.requester_first_name} {rec.requester_last_name}</TableCell>
                             <TableCell><Chip label={rec.department_code || '—'} size="small" variant="outlined" /></TableCell>
                             <TableCell>{rec.total_spent != null ? `$${Number(rec.total_spent).toLocaleString()}` : <Typography variant="body2" color="text.disabled">—</Typography>}</TableCell>
-                            <TableCell>{rec.total_returned != null ? `$${Number(rec.total_returned).toLocaleString()}` : <Typography variant="body2" color="text.disabled">—</Typography>}</TableCell>
+                            <TableCell>{rec.total_returned != null ? <ReturnedAmount record={rec} /> : <Typography variant="body2" color="text.disabled">—</Typography>}</TableCell>
                             <TableCell>{statusChip}</TableCell>
                             <TableCell>
                               {rec.reconciliation_id
@@ -2015,8 +2048,10 @@ ${buildDigitalStamp('')}
                   <Typography fontWeight={500} color="error.main">${Number(reviewRequest.total_spent || 0).toLocaleString()}</Typography>
                 </Grid>
                 <Grid item xs={6} sm={2}>
-                  <Typography variant="caption" color="text.secondary">To Return</Typography>
-                  <Typography fontWeight={500} color="success.main">${Number(reviewRequest.total_returned || 0).toLocaleString()}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {Number(reviewRequest.total_overspend || 0) > 0 ? 'Overspent' : 'To Return'}
+                  </Typography>
+                  <ReturnedAmount record={reviewRequest} hideCaption />
                 </Grid>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Submission Timeliness</Typography>
@@ -2189,8 +2224,10 @@ ${buildDigitalStamp('')}
                   <Typography fontWeight={500} color="error.main">${Number(viewReconciliation.total_spent || 0).toLocaleString()}</Typography>
                 </Grid>
                 <Grid item xs={6} sm={3}>
-                  <Typography variant="caption" color="text.secondary">Returned</Typography>
-                  <Typography fontWeight={500} color="success.main">${Number(viewReconciliation.total_returned || 0).toLocaleString()}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {Number(viewReconciliation.total_overspend || 0) > 0 ? 'Overspent' : 'Returned'}
+                  </Typography>
+                  <ReturnedAmount record={viewReconciliation} hideCaption />
                 </Grid>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Submitted</Typography>

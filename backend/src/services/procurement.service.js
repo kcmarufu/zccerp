@@ -239,7 +239,42 @@ class ProcurementService {
       );
     } catch (_) { /* table may not exist yet — safe to ignore */ }
 
-    return { ...request, items, approvalTrail: logs, quotations, committeeVotes };
+    const popDocuments = await this.getPOPDocuments(requestId);
+
+    return { ...request, items, approvalTrail: logs, quotations, committeeVotes, popDocuments };
+  }
+
+  /**
+   * Proof of Payment documents attached at final finance approval.
+   * Falls back to the legacy single-POP columns on proc_requests for requests
+   * approved before multi-POP support (and if the table is not migrated yet).
+   */
+  async getPOPDocuments(requestId) {
+    try {
+      const docs = await query(
+        `SELECT pd.id, pd.file_name, pd.file_size, pd.mime_type, pd.created_at,
+           u.first_name AS uploaded_by_first_name, u.last_name AS uploaded_by_last_name
+         FROM proc_pop_documents pd
+         LEFT JOIN users u ON pd.uploaded_by = u.id
+         WHERE pd.request_id = ?
+         ORDER BY pd.id ASC`,
+        [requestId]
+      );
+      if (docs.length) return docs;
+    } catch (_) { /* table may not exist yet — fall through to legacy columns */ }
+
+    const legacy = await query(
+      `SELECT pop_file_name, pop_file_size, final_finance_approved_at
+       FROM proc_requests WHERE id = ? AND pop_file_path IS NOT NULL`,
+      [requestId]
+    );
+    return legacy.map((row) => ({
+      id: null,
+      file_name: row.pop_file_name || 'proof-of-payment',
+      file_size: row.pop_file_size,
+      mime_type: null,
+      created_at: row.final_finance_approved_at
+    }));
   }
 
   async updatePurchaseRequest(requestId, data, user) {
@@ -656,7 +691,14 @@ class ProcurementService {
   // FINAL FINANCE APPROVAL
   // ============================================================
 
-  async finalFinanceApproval(requestId, user, comments = '', popFilePath = null, popFileName = null, popFileSize = null) {
+  /**
+   * Grant final finance approval.
+   *
+   * @param {Array<{path: string, originalname: string, size: number, mimetype: string}>} popFiles
+   *   One or more Proof of Payment documents. At least one is required — payments
+   *   settled in tranches can attach a POP per tranche.
+   */
+  async finalFinanceApproval(requestId, user, comments = '', popFiles = []) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
     if (req.status !== 'PENDING_FINAL_FINANCE') {
@@ -665,16 +707,27 @@ class ProcurementService {
     if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
       throw new Error('Only Finance Clerk can give final approval');
     }
-    if (!popFilePath) {
+    if (!popFiles.length) {
       throw new Error('Proof of Payment (POP) document must be uploaded before final approval');
     }
 
     return transaction(async (conn) => {
+      // The legacy pop_file_* columns mirror the first document so older screens
+      // and reports keep working.
+      const [primary] = popFiles;
       await conn.execute(
         `UPDATE proc_requests SET status='COMPLETED', final_finance_approved_at=NOW(), completed_at=NOW(),
           pop_file_path=?, pop_file_name=?, pop_file_size=?, updated_at=NOW() WHERE id=?`,
-        [popFilePath, popFileName, popFileSize, requestId]
+        [primary.path, primary.originalname, primary.size, requestId]
       );
+
+      for (const file of popFiles) {
+        await conn.execute(
+          `INSERT INTO proc_pop_documents (request_id, file_path, file_name, file_size, mime_type, uploaded_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+          [requestId, file.path, file.originalname, file.size || null, file.mimetype || null, user.id]
+        );
+      }
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
          VALUES (?, ?, ?, 'FINAL_APPROVED', 'PENDING_FINAL_FINANCE', 'COMPLETED', ?)`,
@@ -712,6 +765,7 @@ class ProcurementService {
         pop_file_path=NULL, pop_file_name=NULL, pop_file_size=NULL, updated_at=NOW() WHERE id=?`,
       [requestId]
     );
+    await query('DELETE FROM proc_pop_documents WHERE request_id = ?', [requestId]);
     await query(
       `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
        VALUES (?, ?, ?, 'REVERSED', 'COMPLETED', 'PENDING_FINAL_FINANCE', ?)`,

@@ -32,6 +32,22 @@ function calcWorkingDays(startDate, endDate) {
   return count;
 }
 
+/**
+ * SQL fragment for the over-expenditure on a reconciliation.
+ *
+ * `total_returned` only ever holds a surplus, so it reads 0 whenever actual spend
+ * exceeded the float — which hides over-expenditure entirely. This derives the
+ * amount spent above the budgeted total so the UI can show it (in red) instead.
+ *
+ * @param {string} alias - table alias of the `reconciliations` row
+ */
+function overspendSql(alias) {
+  return `GREATEST(0, COALESCE(${alias}.total_spent, 0) - COALESCE((
+                SELECT SUM(ri_ov.budgeted_amount) FROM reconciliation_items ri_ov
+                WHERE ri_ov.reconciliation_id = ${alias}.id
+              ), 0)) as total_overspend`;
+}
+
 class ReconciliationService {
 
   /**
@@ -839,6 +855,7 @@ class ReconciliationService {
               rec.id as reconciliation_id,
               rec.total_spent,
               rec.total_returned,
+              ${overspendSql('rec')},
               rec.notes as reconciliation_notes,
               rec.created_at as reconciliation_submitted_at,
               rec.submission_timeliness,
@@ -876,6 +893,7 @@ class ReconciliationService {
               rec.id as reconciliation_id,
               rec.total_spent,
               rec.total_returned,
+              ${overspendSql('rec')},
               rec.status as reconciliation_status,
               rec.notes as reconciliation_notes,
               rec.created_at as reconciliation_submitted_at,
@@ -904,6 +922,7 @@ class ReconciliationService {
   async getReconciliation(requestId) {
     const reconciliations = await query(
       `SELECT r.*,
+              ${overspendSql('r')},
               u.first_name as reconciled_by_first_name,
               u.last_name as reconciled_by_last_name,
               fr.first_name as reviewer_first_name,
@@ -1004,6 +1023,7 @@ class ReconciliationService {
               rec.id as reconciliation_id,
               rec.total_spent,
               rec.total_returned,
+              ${overspendSql('rec')},
               rec.notes as reconciliation_notes,
               rec.created_at as reconciliation_submitted_at,
               rec.submission_timeliness,
@@ -1024,6 +1044,7 @@ class ReconciliationService {
   async getMyReconciliations(userId) {
     return await query(
       `SELECT rec.*,
+              ${overspendSql('rec')},
               r.request_code,
               r.total_amount as request_amount,
               d.department_name, d.department_code,
@@ -1064,6 +1085,7 @@ class ReconciliationService {
               rec.id as reconciliation_id,
               rec.total_spent,
               rec.total_returned,
+              ${overspendSql('rec')},
               rec.status as reconciliation_status,
               rec.reviewed_at,
               rec.submission_timeliness,
