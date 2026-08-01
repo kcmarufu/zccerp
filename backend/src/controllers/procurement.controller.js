@@ -174,12 +174,14 @@ class ProcurementController {
 
   async finalFinanceApproval(req, res) {
     try {
-      const popFilePath = req.file ? req.file.path : null;
-      const popFileName = req.file ? req.file.originalname : null;
-      const popFileSize = req.file ? req.file.size : null;
+      // Accepts several POPs under `files`, plus the legacy single `file` field.
+      const popFiles = [
+        ...(req.files?.file || []),
+        ...(req.files?.files || []),
+        ...(req.file ? [req.file] : [])
+      ];
       const result = await procurementService.finalFinanceApproval(
-        req.params.id, req.user, req.body.comments || '',
-        popFilePath, popFileName, popFileSize
+        req.params.id, req.user, req.body.comments || '', popFiles
       );
       res.json({ success: true, data: result, message: 'Final finance approval granted. Procurement completed.' });
     } catch (err) {
@@ -321,15 +323,44 @@ class ProcurementController {
     }
   }
 
+  async getPOPDocuments(req, res) {
+    try {
+      const docs = await procurementService.getPOPDocuments(req.params.id);
+      res.json({ success: true, data: docs });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
+   * Download a Proof of Payment. With a :popId it serves that specific document;
+   * without one it serves the request's first/legacy POP.
+   */
   async downloadPOP(req, res) {
     try {
-      const rows = await query('SELECT pop_file_path, pop_file_name FROM proc_requests WHERE id = ?', [req.params.id]);
-      if (!rows.length) return res.status(404).json({ success: false, error: 'Request not found' });
-      const { pop_file_path, pop_file_name } = rows[0];
-      if (!pop_file_path) return res.status(404).json({ success: false, error: 'No POP document uploaded for this request' });
-      const filePath = path.resolve(pop_file_path);
+      const { id, popId } = req.params;
+      let filePathRaw = null;
+      let fileName = null;
+
+      if (popId) {
+        const docs = await query(
+          'SELECT file_path, file_name FROM proc_pop_documents WHERE id = ? AND request_id = ?',
+          [popId, id]
+        );
+        if (!docs.length) return res.status(404).json({ success: false, error: 'POP document not found' });
+        filePathRaw = docs[0].file_path;
+        fileName = docs[0].file_name;
+      } else {
+        const rows = await query('SELECT pop_file_path, pop_file_name FROM proc_requests WHERE id = ?', [id]);
+        if (!rows.length) return res.status(404).json({ success: false, error: 'Request not found' });
+        filePathRaw = rows[0].pop_file_path;
+        fileName = rows[0].pop_file_name;
+      }
+
+      if (!filePathRaw) return res.status(404).json({ success: false, error: 'No POP document uploaded for this request' });
+      const filePath = path.resolve(filePathRaw);
       if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'POP file not found on server' });
-      res.download(filePath, pop_file_name || 'proof-of-payment');
+      res.download(filePath, fileName || 'proof-of-payment');
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }

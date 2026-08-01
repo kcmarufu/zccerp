@@ -224,8 +224,34 @@ export const reverseDeptApproval = async (id: number | string): Promise<void> =>
   await api.post(`${BASE}/requests/${id}/reverse-dept-approval`);
 };
 
-export const downloadPOP = async (requestId: number | string, fileName?: string): Promise<void> => {
-  const res = await api.get(`${BASE}/requests/${requestId}/pop/download`, { responseType: 'blob' });
+export interface ProcPOPDocument {
+  id: number | null;
+  file_name: string;
+  file_size?: number | null;
+  mime_type?: string | null;
+  created_at?: string | null;
+  uploaded_by_first_name?: string | null;
+  uploaded_by_last_name?: string | null;
+}
+
+export const getPOPDocuments = async (requestId: number | string): Promise<ProcPOPDocument[]> => {
+  const res = await api.get(`${BASE}/requests/${requestId}/pop`);
+  return res.data.data || [];
+};
+
+/**
+ * Downloads a Proof of Payment. Pass a popId to fetch a specific document;
+ * omit it to fetch the request's first (or legacy single) POP.
+ */
+export const downloadPOP = async (
+  requestId: number | string,
+  fileName?: string,
+  popId?: number | null
+): Promise<void> => {
+  const url = popId
+    ? `${BASE}/requests/${requestId}/pop/${popId}/download`
+    : `${BASE}/requests/${requestId}/pop/download`;
+  const res = await api.get(url, { responseType: 'blob' });
 
   const contentType = res.headers['content-type'] || '';
 
