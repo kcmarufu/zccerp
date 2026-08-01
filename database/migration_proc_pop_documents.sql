@@ -7,6 +7,26 @@
 --
 -- Run this once on the target database.
 
+-- The legacy pop_file_* columns were added to proc_requests by hand and appear in
+-- no earlier migration, so a database may or may not have them. Add them only if
+-- absent — the backfill below and the existing single-POP code both read them.
+SET @pop_cols_missing := (
+  SELECT COUNT(*) = 0 FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'proc_requests'
+    AND COLUMN_NAME = 'pop_file_path'
+);
+SET @add_pop_cols := IF(@pop_cols_missing,
+  'ALTER TABLE proc_requests
+     ADD COLUMN pop_file_path VARCHAR(500) NULL,
+     ADD COLUMN pop_file_name VARCHAR(255) NULL,
+     ADD COLUMN pop_file_size BIGINT NULL',
+  'DO 0'
+);
+PREPARE stmt FROM @add_pop_cols;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 CREATE TABLE IF NOT EXISTS proc_pop_documents (
   id INT AUTO_INCREMENT PRIMARY KEY,
   request_id INT NOT NULL,
