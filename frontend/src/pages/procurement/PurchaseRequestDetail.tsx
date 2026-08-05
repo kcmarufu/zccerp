@@ -49,7 +49,10 @@ import {
   deleteQuotation,
   updateQuotation,
   downloadQuotationFile,
-  downloadPOP,
+  getProofOfPayments,
+  addProofOfPayments,
+  deleteProofOfPayment,
+  downloadProofOfPayment,
   getRequestAttachments,
   downloadRequestAttachment,
   reverseFinalApproval,
@@ -101,7 +104,8 @@ const PurchaseRequestDetail: React.FC = () => {
   const [resubmitQuotId, setResubmitQuotId] = useState<number | null>(null);
 
   // POP upload state (for final finance approval)
-  const [popFile, setPopFile] = useState<File | null>(null);
+  const [popFile, setPopFile] = useState<File[]>([]);
+  const [popUploading, setPopUploading] = useState(false);
 
   // Post-action confirmation dialogs
   const [deptConfirmData, setDeptConfirmData] = useState<{
@@ -141,10 +145,19 @@ const PurchaseRequestDetail: React.FC = () => {
     enabled: Boolean(id)
   });
 
+  // Proof of payment documents — several per request, since payments are often
+  // made in batches over time.
+  const { data: pops = [], refetch: loadPops } = useQuery({
+    queryKey: ['proc-pops', id],
+    queryFn: () => getProofOfPayments(id!),
+    enabled: Boolean(id)
+  });
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['proc-request', id] });
     qc.invalidateQueries({ queryKey: ['proc-committee-votes', id] });
     qc.invalidateQueries({ queryKey: ['proc-attachments', id] });
+    qc.invalidateQueries({ queryKey: ['proc-pops', id] });
   };
 
   const currentStepIndex = PROC_WORKFLOW_STEPS.findIndex(s => s.status === request?.status);
@@ -173,6 +186,10 @@ const PurchaseRequestDetail: React.FC = () => {
   const canResubmitToCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_COMMITTEE';
   const canCommitteeDecide = hasPermission('committee_review') && request?.status === 'PENDING_COMMITTEE';
   const canFinalApprove = hasPermission('proc_finance_approve') && request?.status === 'PENDING_FINAL_FINANCE';
+  // Finance can keep attaching payment batches after completion — that is the
+  // whole point of supporting more than one POP per request.
+  const canManagePOP = (hasPermission('proc_finance_approve') || hasRole('ADMIN')) &&
+    ['PENDING_FINAL_FINANCE', 'COMPLETED'].includes(request?.status || '');
   const canEdit = ['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
   const canSubmit = ['DRAFT', 'REJECTED'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
 
@@ -209,15 +226,15 @@ const PurchaseRequestDetail: React.FC = () => {
           return;
         }
         case 'final_finance': {
-          if (!popFile) { toast.error('Proof of Payment (POP) document is required'); setActionLoading(false); return; }
+          if (!popFile.length) { toast.error('At least one Proof of Payment (POP) document is required'); setActionLoading(false); return; }
           const fd = new FormData();
-          fd.append('file', popFile);
+          popFile.forEach(f => fd.append('files', f));
           if (comments) fd.append('comments', comments);
           await finalFinanceApproval(id!, fd);
           toast.success('Final approval granted — Procurement completed!');
-          const capturedFileName = popFile.name;
+          const capturedFileName = popFile.map(f => f.name).join(', ');
           const capturedComments = comments;
-          setPopFile(null);
+          setPopFile([]);
           setActionDialog(null);
           setComments('');
           invalidate();
@@ -833,23 +850,97 @@ ${allCommitteeApproved ? `
                     ${Number(request.total_estimated_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                   </Typography>
                 </Box>
-                {(request as any).pop_file_name && (
-                  <Box mt={2} textAlign="right">
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      startIcon={<DownloadIcon />}
-                      onClick={async () => {
-                        try {
-                          await downloadPOP(id!, (request as any).pop_file_name);
-                        } catch (err: any) {
-                          toast.error(err?.message || 'Failed to download POP document');
-                        }
-                      }}
-                    >
-                      Download POP
-                    </Button>
-                  </Box>
+                {/* Proof of Payment — a request may carry several, because
+                    payments are often settled in batches rather than at once. */}
+                {(pops.length > 0 || canManagePOP) && (
+                  <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
+                    <Box display="flex" alignItems="center" justifyContent="space-between" mb={1} gap={1}>
+                      <Typography variant="subtitle2" fontWeight={700}>
+                        Proof of Payment {pops.length > 0 ? `(${pops.length})` : ''}
+                      </Typography>
+                      {canManagePOP && (
+                        <Button
+                          component="label"
+                          size="small"
+                          variant="outlined"
+                          startIcon={popUploading ? <CircularProgress size={14} /> : <UploadIcon />}
+                          disabled={popUploading}
+                        >
+                          Attach payment batch
+                          <input
+                            type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                            onChange={async e => {
+                              const files = Array.from(e.target.files || []);
+                              e.target.value = '';
+                              if (!files.length) return;
+                              setPopUploading(true);
+                              try {
+                                await addProofOfPayments(id!, files);
+                                toast.success(`${files.length} document(s) attached`);
+                                await loadPops();
+                              } catch (err: any) {
+                                toast.error(err?.response?.data?.error || 'Failed to attach proof of payment');
+                              } finally {
+                                setPopUploading(false);
+                              }
+                            }}
+                          />
+                        </Button>
+                      )}
+                    </Box>
+
+                    {pops.length === 0 ? (
+                      <Typography variant="caption" color="text.secondary">
+                        No proof of payment attached yet.
+                      </Typography>
+                    ) : (
+                      <Stack spacing={0.75}>
+                        {pops.map(pop => (
+                          <Box key={pop.id} display="flex" alignItems="center" gap={1}>
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>{pop.file_name}</Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {formatDate(pop.created_at)}
+                                {pop.first_name ? ` · ${pop.first_name} ${pop.last_name || ''}` : ''}
+                              </Typography>
+                            </Box>
+                            <Tooltip title="Download">
+                              <IconButton
+                                size="small"
+                                onClick={async () => {
+                                  try {
+                                    await downloadProofOfPayment(id!, pop.id, pop.file_name);
+                                  } catch (err: any) {
+                                    toast.error(err?.message || 'Failed to download proof of payment');
+                                  }
+                                }}
+                              >
+                                <DownloadIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                            {canManagePOP && (
+                              <Tooltip title="Remove">
+                                <IconButton
+                                  size="small" color="error"
+                                  onClick={async () => {
+                                    try {
+                                      await deleteProofOfPayment(id!, pop.id);
+                                      toast.success('Proof of payment removed');
+                                      await loadPops();
+                                    } catch (err: any) {
+                                      toast.error(err?.response?.data?.error || 'Failed to remove proof of payment');
+                                    }
+                                  }}
+                                >
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </Box>
+                        ))}
+                      </Stack>
+                    )}
+                  </Paper>
                 )}
               </Grid>
             </Grid>
@@ -1134,22 +1225,45 @@ ${allCommitteeApproved ? `
           )}
           {actionDialog === 'final_finance' && (
             <Alert severity="warning" sx={{ mb: 2, mt: 1 }}>
-              A Proof of Payment (POP) document is <strong>required</strong> to complete this approval.
+              At least one Proof of Payment (POP) document is <strong>required</strong> to complete this approval.
+              Attach several at once if the payment was made in batches — more can be added afterwards.
             </Alert>
           )}
           {actionDialog === 'final_finance' && (
-            <Button
-              variant={popFile ? 'outlined' : 'contained'}
-              component="label"
-              startIcon={<UploadIcon />}
-              fullWidth
-              color={popFile ? 'success' : 'primary'}
-              sx={{ mb: 2 }}
-            >
-              {popFile ? `✓ ${popFile.name}` : 'Upload Proof of Payment (POP) *'}
-              <input type="file" hidden accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                onChange={e => setPopFile(e.target.files?.[0] || null)} />
-            </Button>
+            <Box sx={{ mb: 2 }}>
+              <Button
+                variant={popFile.length ? 'outlined' : 'contained'}
+                component="label"
+                startIcon={<UploadIcon />}
+                fullWidth
+                color={popFile.length ? 'success' : 'primary'}
+              >
+                {popFile.length
+                  ? `✓ ${popFile.length} document${popFile.length === 1 ? '' : 's'} selected — add more`
+                  : 'Upload Proof of Payment (POP) *'}
+                <input type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                  onChange={e => {
+                    const picked = Array.from(e.target.files || []);
+                    setPopFile(prev => [
+                      ...prev,
+                      ...picked.filter(f => !prev.some(p => p.name === f.name && p.size === f.size))
+                    ].slice(0, 10));
+                    e.target.value = '';
+                  }} />
+              </Button>
+              {popFile.length > 0 && (
+                <Stack spacing={0.5} sx={{ mt: 1 }}>
+                  {popFile.map((f, i) => (
+                    <Chip
+                      key={`${f.name}-${i}`}
+                      label={`${f.name} (${(f.size / 1024).toFixed(0)} KB)`}
+                      size="small"
+                      onDelete={() => setPopFile(prev => prev.filter((_, idx) => idx !== i))}
+                    />
+                  ))}
+                </Stack>
+              )}
+            </Box>
           )}
           <TextField
             fullWidth multiline rows={3}
@@ -1159,15 +1273,15 @@ ${allCommitteeApproved ? `
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setActionDialog(null); setPopFile(null); }} disabled={actionLoading}>Cancel</Button>
+          <Button onClick={() => { setActionDialog(null); setPopFile([]); }} disabled={actionLoading}>Cancel</Button>
           <Button
             variant="contained"
             color={actionDialog === 'reject' ? 'error' : 'primary'}
             onClick={doAction}
-            disabled={actionLoading || (actionDialog === 'final_finance' && !popFile)}
+            disabled={actionLoading || (actionDialog === 'final_finance' && popFile.length === 0)}
             startIcon={actionLoading ? <CircularProgress size={16} /> : undefined}
           >
-            {actionDialog === 'final_finance' && !popFile ? 'Upload POP to Continue' : 'Confirm'}
+            {actionDialog === 'final_finance' && popFile.length === 0 ? 'Upload POP to Continue' : 'Confirm'}
           </Button>
         </DialogActions>
       </Dialog>

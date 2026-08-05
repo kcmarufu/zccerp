@@ -1203,7 +1203,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                           </ListItemIcon>
                           <ListItemText
                             primary={att.original_name || att.file_name}
-                            secondary={`${att.attachment_type} • ${attachmentService.formatFileSize(att.file_size || 0)} • Uploaded by ${att.first_name || ''} ${att.last_name || ''}`}
+                            secondary={`${attachmentService.typeLabel(att.attachment_type)} • ${attachmentService.formatFileSize(att.file_size || 0)} • Uploaded by ${att.first_name || ''} ${att.last_name || ''}`}
                             primaryTypographyProps={{ variant: 'body2', fontWeight: 500 }}
                             secondaryTypographyProps={{ variant: 'caption' }}
                           />

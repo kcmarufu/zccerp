@@ -63,7 +63,7 @@ import attachmentService, { Attachment } from '../services/attachmentService';
 import perDiemService from '../services/perDiemService';
 import { Request, RequestItem, ApprovalLog, RequestStatus, PerDiemClaim } from '../types';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
-import { buildTravelClaimPageHTML } from '../utils/pdfUtils';
+import { buildTravelClaimPageHTML, downloadHTMLAsPDF } from '../utils/pdfUtils';
 import { formatDate as formatCalendarDate, formatDateTime } from '../utils/datetime';
 import { formatRoleLabel } from '../utils/roleUtils';
 import * as XLSX from 'xlsx';
@@ -196,8 +196,15 @@ const RequestDetailPage: React.FC = () => {
       } else {
         setError(response.message || 'Failed to submit request');
       }
-    } catch (err) {
-      setError('An error occurred while submitting');
+    } catch (err: any) {
+      // The server rejects submissions for real business reasons (e.g. overdue
+      // reconciliations). Show its explanation instead of a generic message the
+      // user can do nothing with.
+      setError(
+        err?.response?.data?.error ||
+        err?.response?.data?.message ||
+        'An error occurred while submitting'
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -427,8 +434,10 @@ const RequestDetailPage: React.FC = () => {
 
   const getStatusLabel = (status: string) => status.replace(/_/g, ' ');
 
-  const printFloatRequisitionPDF = () => {
-    if (!request) return;
+  // Builds the printable/downloadable document once, so the Print and Download
+  // actions can never drift apart.
+  const buildFloatRequisitionHTML = (): string | null => {
+    if (!request) return null;
 
     // Use the shared travel-claim builder so PDF stays consistent across modules
     const buildClaimPage = () => perDiemClaim
@@ -565,11 +574,29 @@ ${approvalLogs.length > 0 ? `
 </div>
 ${buildClaimPage()}
 </body></html>`;
+    return html;
+  };
+
+  const printFloatRequisitionPDF = () => {
+    const html = buildFloatRequisitionHTML();
+    if (!html) return;
     const w = window.open('', '_blank', 'width=960,height=750');
     if (w) {
       w.document.write(html);
       w.document.close();
       setTimeout(() => { w.focus(); w.print(); }, 600);
+    }
+  };
+
+  // Saves a real PDF file. Print only offered the browser's print dialog, which
+  // left requesters dependent on a "Save as PDF" printer they may not have.
+  const downloadFloatRequisitionPDF = () => {
+    const html = buildFloatRequisitionHTML();
+    if (!html || !request) return;
+    try {
+      downloadHTMLAsPDF(html, `float-requisition-${request.request_code}`);
+    } catch (err) {
+      setError('Failed to generate the PDF. You can still use Print.');
     }
   };
 
@@ -719,7 +746,12 @@ ${buildClaimPage()}
           color={getStatusColor(request.status)}
           size="medium"
         />
-        <Tooltip title="Print / Save as PDF">
+        <Tooltip title="Download PDF">
+          <IconButton color="primary" onClick={downloadFloatRequisitionPDF}>
+            <PdfIcon />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Print">
           <IconButton color="primary" onClick={printFloatRequisitionPDF}>
             <PrintIcon />
           </IconButton>
@@ -939,7 +971,7 @@ ${buildClaimPage()}
                         </Typography>
                       </TableCell>
                       <TableCell>
-                        <Chip label={att.attachment_type} size="small" variant="outlined" />
+                        <Chip label={attachmentService.typeLabel(att.attachment_type)} size="small" variant="outlined" />
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2" noWrap>
@@ -1051,14 +1083,22 @@ ${buildClaimPage()}
                   <Typography variant="subtitle2" color="text.secondary">
                     Export Documents
                   </Typography>
-                  <Box display="flex" gap={1}>
+                  <Box display="flex" gap={1} flexWrap="wrap">
+                    <Button
+                      variant="contained"
+                      startIcon={<DownloadIcon />}
+                      onClick={downloadFloatRequisitionPDF}
+                      sx={{ flex: 1 }}
+                    >
+                      Download PDF
+                    </Button>
                     <Button
                       variant="outlined"
                       startIcon={<PrintIcon />}
                       onClick={printFloatRequisitionPDF}
                       sx={{ flex: 1 }}
                     >
-                      Print PDF
+                      Print
                     </Button>
                     <Button
                       variant="outlined"

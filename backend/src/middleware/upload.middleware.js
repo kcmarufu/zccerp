@@ -57,7 +57,9 @@ const upload = multer({
 exports.uploadSingle = upload.single('file');
 
 // Middleware for multiple files upload (max 5)
-exports.uploadMultiple = upload.array('files', 5);
+// 10 rather than 5: a purchase request settled in several payment batches can
+// legitimately carry that many proof-of-payment documents.
+exports.uploadMultiple = upload.array('files', 10);
 
 // Error handling middleware
 exports.handleUploadError = (err, req, res, next) => {

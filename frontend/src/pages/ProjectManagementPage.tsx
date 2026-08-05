@@ -34,7 +34,7 @@ import {
   ClearAll as ClearIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { format } from '../utils/datetime';
+import { format, toDateInputValue } from '../utils/datetime';
 import { useAuthStore } from '../store/authStore';
 import { downloadHTMLAsPDF } from '../utils/pdfUtils';
 import projectService from '../services/projectService';
@@ -338,6 +338,71 @@ const ProjectDetailPanel: React.FC<ProjectDetailPanelProps> = ({ project, onClos
 
   useEffect(() => { fetchActivity(); }, [fetchActivity]);
 
+  // ── Filters & pagination for the activity tabs ────────────────────────────
+  // These lists grow without bound on a long-running project, so each tab gets a
+  // search box, the filters that make sense for its columns, and a date range.
+  const [search, setSearch]       = useState('');
+  const [dateFrom, setDateFrom]   = useState('');
+  const [dateTo, setDateTo]       = useState('');
+  const [blStatus, setBlStatus]   = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [txTypeFilter, setTxType] = useState('ALL');
+  const [reqStatus, setReqStatus] = useState('ALL');
+  const [page, setPage]           = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
+  // Any change of tab or filter invalidates the current page offset.
+  useEffect(() => { setPage(0); }, [tab, search, dateFrom, dateTo, blStatus, txTypeFilter, reqStatus]);
+
+  const matches = (needle: string, ...fields: any[]) =>
+    !needle || fields.some(f => String(f ?? '').toLowerCase().includes(needle.toLowerCase()));
+
+  // Compare on the organisation-timezone calendar date so a range filter selects
+  // the days the user actually sees in the Date column.
+  const inDateRange = (value: any) => {
+    if (!dateFrom && !dateTo) return true;
+    const d = toDateInputValue(value);
+    if (!d) return false;
+    if (dateFrom && d < dateFrom) return false;
+    if (dateTo   && d > dateTo)   return false;
+    return true;
+  };
+
+  const filteredBudgetLines = useMemo(() => (activity?.budget_lines ?? []).filter(bl =>
+    matches(search, bl.budget_code, bl.budget_name, bl.department_name) &&
+    (blStatus === 'ALL' || (blStatus === 'ACTIVE' ? bl.is_active : !bl.is_active))
+  ), [activity, search, blStatus]);
+
+  const filteredTransactions = useMemo(() => (activity?.budget_transactions ?? []).filter(tx =>
+    matches(search, tx.budget_code, tx.budget_name, tx.description, tx.request_code,
+            `${tx.performed_by_first ?? ''} ${tx.performed_by_last ?? ''}`) &&
+    (txTypeFilter === 'ALL' || tx.transaction_type === txTypeFilter) &&
+    inDateRange(tx.created_at)
+  ), [activity, search, txTypeFilter, dateFrom, dateTo]);
+
+  const filteredRequests = useMemo(() => (activity?.requests ?? []).filter(rq =>
+    matches(search, rq.request_code, rq.department_name,
+            `${rq.requester_first ?? ''} ${rq.requester_last ?? ''}`) &&
+    (reqStatus === 'ALL' || rq.status === reqStatus) &&
+    inDateRange(rq.created_at)
+  ), [activity, search, reqStatus, dateFrom, dateTo]);
+
+  const txTypes  = useMemo(() => Array.from(new Set((activity?.budget_transactions ?? []).map(t => t.transaction_type).filter(Boolean))).sort(), [activity]);
+  const reqStatuses = useMemo(() => Array.from(new Set((activity?.requests ?? []).map(r => r.status).filter(Boolean))).sort(), [activity]);
+
+  const activeList  = tab === 0 ? filteredBudgetLines : tab === 1 ? filteredTransactions : filteredRequests;
+  const totalForTab = tab === 0 ? (activity?.budget_lines?.length ?? 0)
+                    : tab === 1 ? (activity?.budget_transactions?.length ?? 0)
+                    : (activity?.requests?.length ?? 0);
+  const pageSlice = <T,>(rows: T[]): T[] => rows.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  const showDateFilter = tab !== 0; // budget lines carry no date column
+  const filtersActive = Boolean(search || dateFrom || dateTo ||
+    blStatus !== 'ALL' || txTypeFilter !== 'ALL' || reqStatus !== 'ALL');
+
+  const clearFilters = () => {
+    setSearch(''); setDateFrom(''); setDateTo('');
+    setBlStatus('ALL'); setTxType('ALL'); setReqStatus('ALL');
+  };
+
   const allocated = parseFloat(String(project.total_allocated ?? 0));
   const spent = parseFloat(String(project.total_spent ?? 0));
   const budgetTotal = parseFloat(String(project.total_budget ?? 0));
@@ -495,6 +560,83 @@ const ProjectDetailPanel: React.FC<ProjectDetailPanelProps> = ({ project, onClos
         <Alert severity="error">Failed to load activity data</Alert>
       ) : (
         <>
+          {/* ── Filter bar ── */}
+          <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5 }}>
+            <Grid container spacing={1.5} alignItems="center">
+              <Grid item xs={12} md={showDateFilter ? 3 : 5}>
+                <TextField
+                  fullWidth size="small" placeholder="Search…"
+                  value={search} onChange={e => setSearch(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+                />
+              </Grid>
+
+              {showDateFilter && (
+                <>
+                  <Grid item xs={6} md={2}>
+                    <TextField
+                      fullWidth size="small" type="date" label="From"
+                      InputLabelProps={{ shrink: true }}
+                      value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                    />
+                  </Grid>
+                  <Grid item xs={6} md={2}>
+                    <TextField
+                      fullWidth size="small" type="date" label="To"
+                      InputLabelProps={{ shrink: true }}
+                      value={dateTo} onChange={e => setDateTo(e.target.value)}
+                    />
+                  </Grid>
+                </>
+              )}
+
+              <Grid item xs={12} md={3}>
+                {tab === 0 && (
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Status</InputLabel>
+                    <Select label="Status" value={blStatus} onChange={e => setBlStatus(e.target.value as any)}>
+                      <MenuItem value="ALL">All statuses</MenuItem>
+                      <MenuItem value="ACTIVE">Active</MenuItem>
+                      <MenuItem value="INACTIVE">Suspended</MenuItem>
+                    </Select>
+                  </FormControl>
+                )}
+                {tab === 1 && (
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Type</InputLabel>
+                    <Select label="Type" value={txTypeFilter} onChange={e => setTxType(e.target.value)}>
+                      <MenuItem value="ALL">All types</MenuItem>
+                      {txTypes.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                )}
+                {tab === 2 && (
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Status</InputLabel>
+                    <Select label="Status" value={reqStatus} onChange={e => setReqStatus(e.target.value)}>
+                      <MenuItem value="ALL">All statuses</MenuItem>
+                      {reqStatuses.map(s => <MenuItem key={s} value={s}>{String(s).replace(/_/g, ' ')}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                )}
+              </Grid>
+
+              <Grid item xs={12} md={2}>
+                <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end">
+                  <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                    {activeList.length} of {totalForTab}
+                  </Typography>
+                  <Button
+                    size="small" startIcon={<ClearIcon />} onClick={clearFilters}
+                    disabled={!filtersActive}
+                  >
+                    Clear
+                  </Button>
+                </Stack>
+              </Grid>
+            </Grid>
+          </Paper>
+
           {/* ── Tab 0: Budget Lines ── */}
           {tab === 0 && (
             <TableContainer component={Paper} variant="outlined">
@@ -511,9 +653,11 @@ const ProjectDetailPanel: React.FC<ProjectDetailPanelProps> = ({ project, onClos
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {activity.budget_lines.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} align="center" sx={{ py: 3, color: 'text.secondary' }}>No budget lines</TableCell></TableRow>
-                  ) : activity.budget_lines.map(bl => {
+                  {filteredBudgetLines.length === 0 ? (
+                    <TableRow><TableCell colSpan={7} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                      {filtersActive ? 'No budget lines match the current filters' : 'No budget lines'}
+                    </TableCell></TableRow>
+                  ) : pageSlice(filteredBudgetLines).map(bl => {
                     const alloc = parseFloat(bl.allocated_amount);
                     const sp = parseFloat(bl.spent_amount);
                     const bal = parseFloat(bl.balance);
@@ -558,9 +702,11 @@ const ProjectDetailPanel: React.FC<ProjectDetailPanelProps> = ({ project, onClos
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {activity.budget_transactions.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} align="center" sx={{ py: 3, color: 'text.secondary' }}>No transactions</TableCell></TableRow>
-                  ) : activity.budget_transactions.map(tx => (
+                  {filteredTransactions.length === 0 ? (
+                    <TableRow><TableCell colSpan={7} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                      {filtersActive ? 'No transactions match the current filters' : 'No transactions'}
+                    </TableCell></TableRow>
+                  ) : pageSlice(filteredTransactions).map(tx => (
                     <TableRow key={tx.id} hover>
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>{fmtDate(tx.created_at)}</TableCell>
                       <TableCell>
@@ -608,9 +754,11 @@ const ProjectDetailPanel: React.FC<ProjectDetailPanelProps> = ({ project, onClos
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {activity.requests.length === 0 ? (
-                    <TableRow><TableCell colSpan={6} align="center" sx={{ py: 3, color: 'text.secondary' }}>No requests found</TableCell></TableRow>
-                  ) : activity.requests.map(rq => (
+                  {filteredRequests.length === 0 ? (
+                    <TableRow><TableCell colSpan={6} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                      {filtersActive ? 'No requests match the current filters' : 'No requests found'}
+                    </TableCell></TableRow>
+                  ) : pageSlice(filteredRequests).map(rq => (
                     <TableRow key={rq.id} hover>
                       <TableCell>
                         <Chip label={rq.request_code} size="small" color="primary" variant="outlined" />
@@ -628,6 +776,16 @@ const ProjectDetailPanel: React.FC<ProjectDetailPanelProps> = ({ project, onClos
               </Table>
             </TableContainer>
           )}
+
+          <TablePagination
+            component="div"
+            count={activeList.length}
+            page={page}
+            onPageChange={(_, p) => setPage(p)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={e => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            rowsPerPageOptions={[10, 25, 50, 100]}
+          />
         </>
       )}
     </Box>

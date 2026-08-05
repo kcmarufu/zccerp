@@ -8,13 +8,16 @@
 
 const { query, transaction, pool } = require('../config/database');
 const notificationService = require('./notification.service');
-const { 
-  REQUEST_STATUS, 
-  ROLES, 
+const reconciliationService = require('./reconciliation.service');
+const {
+  REQUEST_STATUS,
+  ROLES,
   getNextApprovalStatus,
   getRequiredApprovalRole,
-  isValidTransition 
+  isValidTransition
 } = require('../config/roles');
+
+const { OVERDUE_RECON_LIMIT } = reconciliationService;
 
 class ApprovalService {
   
@@ -60,6 +63,27 @@ class ApprovalService {
       }
 
       const isResubmission = request.status === REQUEST_STATUS.REJECTED;
+
+      // ── Overdue reconciliation gate ──────────────────────────────────────
+      // A user with 2+ overdue unsubmitted reconciliations may not put a new
+      // request into the approval pipeline. This has to be enforced server-side:
+      // the UI only disables the submit button on the create screen, so saving a
+      // draft and submitting it later bypassed the rule completely.
+      //
+      // Resubmissions are deliberately exempt — a rejected request predates the
+      // block, and refusing to let the user act on reviewer feedback would leave
+      // it permanently stuck.
+      if (!isResubmission) {
+        const overdueCount = await reconciliationService.getOverdueCount(
+          request.requester_id, connection
+        );
+        if (overdueCount >= OVERDUE_RECON_LIMIT) {
+          throw new Error(
+            `You have ${overdueCount} overdue reconciliations that have not been submitted ` +
+            `for approval. Submit them before raising a new request.`
+          );
+        }
+      }
 
       // For resubmissions, route back to the level that last rejected the request
       // so the user doesn't have to go through already-approved levels again.

@@ -208,15 +208,17 @@ const RequestForm: React.FC = () => {
   }, []);
 
   // Check overdue reconciliation compliance (only for new requests, not edit mode)
+  // Check overdue reconciliations in edit mode too: a draft saved earlier is
+  // still a new request when it is submitted, and the server will refuse it.
+  // Warning here means the user finds out before filling the form in, not after.
+  // The server gate is authoritative — this is only the courtesy warning.
   useEffect(() => {
-    if (!isEditMode) {
-      reconciliationService.getOverdueCheck()
-        .then(res => {
-          setOverdueCount(res.overdueCount);
-          setOverdueBlocked(res.isBlocked);
-        })
-        .catch(() => { /* allow creation if check fails */ });
-    }
+    reconciliationService.getOverdueCheck()
+      .then(res => {
+        setOverdueCount(res.overdueCount);
+        setOverdueBlocked(res.isBlocked);
+      })
+      .catch(() => { /* server still enforces the rule on submit */ });
   }, [isEditMode]);
 
   // When "Requesting from Admin" is toggled, auto-select the Admin partner
@@ -639,7 +641,7 @@ const RequestForm: React.FC = () => {
 
   return (
     <Box>
-      {overdueBlocked && (
+      {overdueBlocked && existingStatus !== 'REJECTED' && (
         <Alert severity="error" sx={{ mb: 2 }} icon={<WarningIcon />}>
           <Typography variant="subtitle2" fontWeight={700}>
             Float Request Blocked — Overdue Reconciliations
@@ -1255,7 +1257,7 @@ const RequestForm: React.FC = () => {
                   color="primary"
                   startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
                   onClick={handleSubmit(handleSaveAndSubmit)}
-                  disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item)) || (overdueBlocked && !isEditMode)}
+                  disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item)) || (overdueBlocked && existingStatus !== 'REJECTED')}
                 >
                   {isEditMode ? (existingStatus === 'REJECTED' ? 'Save & Resubmit' : 'Save & Submit') : 'Save & Submit for Approval'}
                 </Button>

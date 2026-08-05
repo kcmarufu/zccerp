@@ -998,9 +998,13 @@ class ReconciliationService {
    * Get all requests pending reconciliation review (for Finance)
    */
   async getPendingReconciliations(role) {
-    // Finance pending tab shows RECON_PENDING_FINANCE (actionable by Finance Clerk) and
-    // RECON_PENDING_LEAD (read-only visibility) so Finance Clerks can track the full pipeline.
-    const statuses = [REQUEST_STATUS.RECON_PENDING_FINANCE, REQUEST_STATUS.RECON_PENDING_LEAD];
+    // The Finance Review tab is a work queue: it must contain only what the
+    // Finance desk can actually act on. It previously also included
+    // RECON_PENDING_LEAD for "pipeline visibility", which meant the queue was
+    // mostly items still sitting with the Lead — indistinguishable on screen
+    // from the ones awaiting Finance. Pipeline-wide visibility belongs in the
+    // All History tab, which already provides it.
+    const statuses = [REQUEST_STATUS.RECON_PENDING_FINANCE];
     const placeholders = statuses.map(() => '?').join(', ');
 
     return await query(
@@ -1110,8 +1114,14 @@ class ReconciliationService {
    * = 2026-07-15 08:04:06, which is NOT <= CURDATE() (midnight) and therefore
    * the final working day is missed, under-counting by 1.
    */
-  async getOverdueCount(userId) {
-    const rows = await query(
+  async getOverdueCount(userId, connection = null) {
+    // When a connection is supplied the count runs inside the caller's
+    // transaction, so the submit gate sees the same consistent snapshot as the
+    // row it has locked.
+    const run = connection
+      ? async (sql, params) => (await connection.execute(sql, params))[0]
+      : query;
+    const rows = await run(
       `SELECT COUNT(*) AS cnt
        FROM requests r
        WHERE r.requester_id = ?
@@ -1184,3 +1194,9 @@ class ReconciliationService {
 }
 
 module.exports = new ReconciliationService();
+
+// A requester with this many overdue unsubmitted reconciliations is barred from
+// raising new requests. Shared by the /reconciliations/overdue-check endpoint
+// (which drives the UI warning) and the server-side submit gate, so the warning
+// the user sees and the rule that is enforced can never drift apart.
+module.exports.OVERDUE_RECON_LIMIT = 2;

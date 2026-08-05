@@ -137,6 +137,25 @@ class AttachmentService {
   }
 
   /**
+   * Human label for an attachment type.
+   *
+   * Files attached to a float request are stored under the 'QUOTATION' type for
+   * upload-routing reasons, but they are not quotations — they are whatever the
+   * requester attached in support of the request. Showing approvers the raw
+   * storage type was misleading, so the UI shows the plain-English meaning.
+   */
+  typeLabel(type?: string): string {
+    switch (type) {
+      case 'RECEIPT':        return 'Receipt';
+      case 'INVOICE':        return 'Invoice';
+      case 'RECONCILIATION': return 'Reconciliation document';
+      case 'PHOTO':          return 'Photo';
+      case 'SPECIFICATION':  return 'Specification';
+      default:               return 'Supporting document';
+    }
+  }
+
+  /**
    * Format file size for display
    */
   formatFileSize(bytes: number): string {

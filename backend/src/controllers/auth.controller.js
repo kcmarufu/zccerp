@@ -7,6 +7,10 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/database');
 
+// The organisation operates in Zimbabwe; the server runs on UTC. Any time shown
+// to a user must be converted, or it reads two hours out.
+const ORG_TIME_ZONE = 'Africa/Harare';
+
 class AuthController {
 
   /**
@@ -39,10 +43,20 @@ class AuthController {
       const LOCK_MINUTES = 30; // locked for 30 minutes
 
       if (user && user.locked_until && new Date(user.locked_until) > new Date()) {
-        const unlockAt = new Date(user.locked_until).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        // Format in the organisation's timezone, not the server's. The server
+        // runs on UTC, so this used to quote an unlock time two hours behind the
+        // user's own clock — which reads as "already passed" or "much longer
+        // than it is" and made a 30-minute lock look indefinite.
+        const unlockAt = new Date(user.locked_until).toLocaleTimeString('en-GB', {
+          timeZone: ORG_TIME_ZONE, hour: '2-digit', minute: '2-digit'
+        });
+        const minutesLeft = Math.max(
+          1, Math.ceil((new Date(user.locked_until) - new Date()) / 60000)
+        );
         return res.status(423).json({
           success: false,
-          error: `Account temporarily locked due to too many failed attempts. Try again after ${unlockAt}.`
+          error: `Account temporarily locked due to too many failed attempts. ` +
+                 `Try again in ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'} (after ${unlockAt}).`
         });
       }
 

@@ -5,17 +5,39 @@
 const { query } = require('../config/database');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const { resolveStoredPath } = require('../config/uploads');
 
-// In-memory one-time download tokens: token -> { attachmentId, expiresAt }
-const _downloadTokens = new Map();
-setInterval(() => {
-  const now = Date.now();
-  for (const [t, e] of _downloadTokens.entries()) {
-    if (now > e.expiresAt) _downloadTokens.delete(t);
+/**
+ * Short-lived download tokens.
+ *
+ * These were previously single-use entries in an in-memory Map with a 60-second
+ * life. That failed for real users in three ways: any browser that issues the
+ * request twice (link prefetch, antivirus scanning, the download manager
+ * retrying) consumed the token on the first hit and showed "Invalid or expired
+ * download token" on the real one; a slow connection could outlive 60 seconds;
+ * and every backend restart invalidated every outstanding token.
+ *
+ * A signed, self-describing token fixes all three: nothing is stored, repeat
+ * requests succeed, and restarts are irrelevant. It stays unforgeable and
+ * time-limited, and now also records who asked for it.
+ */
+const DOWNLOAD_TOKEN_TTL = '10m';
+const DOWNLOAD_TOKEN_PURPOSE = 'attachment-download';
+
+const signDownloadToken = (attachmentId, userId) => jwt.sign(
+  { attachmentId, userId, purpose: DOWNLOAD_TOKEN_PURPOSE },
+  process.env.JWT_SECRET,
+  { expiresIn: DOWNLOAD_TOKEN_TTL }
+);
+
+const verifyDownloadToken = (token) => {
+  const payload = jwt.verify(token, process.env.JWT_SECRET);
+  if (payload.purpose !== DOWNLOAD_TOKEN_PURPOSE) {
+    throw new Error('Token is not a download token');
   }
-}, 60000);
+  return payload;
+};
 
 /**
  * Upload single attachment
@@ -160,32 +182,35 @@ exports.getAttachmentById = async (req, res) => {
 };
 
 /**
- * Generate a short-lived one-time download token for an attachment
+ * Generate a short-lived download token for an attachment
  */
 exports.generateDownloadToken = async (req, res) => {
   try {
     const attachmentId = parseInt(req.params.id);
-    const token = crypto.randomBytes(32).toString('hex');
-    _downloadTokens.set(token, { attachmentId, expiresAt: Date.now() + 60000 });
-    res.json({ token });
+    res.json({ token: signDownloadToken(attachmentId, req.user.id) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to generate download token' });
   }
 };
 
 /**
- * Serve attachment file using a one-time token (no auth middleware — token IS the auth)
+ * Serve attachment file using a signed token (no auth middleware — token IS the auth)
  */
 exports.downloadByToken = async (req, res) => {
   try {
-    const entry = _downloadTokens.get(req.params.token);
-    if (!entry || Date.now() > entry.expiresAt) {
-      _downloadTokens.delete(req.params.token);
-      return res.status(401).send('Invalid or expired download token');
+    let payload;
+    try {
+      payload = verifyDownloadToken(req.params.token);
+    } catch (err) {
+      const expired = err.name === 'TokenExpiredError';
+      return res.status(401).send(
+        expired
+          ? 'This download link has expired. Please click download again.'
+          : 'Invalid download token'
+      );
     }
-    _downloadTokens.delete(req.params.token); // one-time use
 
-    const attachments = await query('SELECT * FROM attachments WHERE id = ?', [entry.attachmentId]);
+    const attachments = await query('SELECT * FROM attachments WHERE id = ?', [payload.attachmentId]);
     if (!attachments.length) return res.status(404).send('Attachment not found');
     const attachment = attachments[0];
     if (!attachment.is_active) return res.status(410).send('Attachment deleted');

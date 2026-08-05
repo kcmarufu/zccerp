@@ -158,7 +158,9 @@ const ProcurementApprovalsPage: React.FC = () => {
   const [committeeDecisionVal, setCommitteeDecisionVal] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
   const [selectedQuotId, setSelectedQuotId] = useState<number | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
-  const [popFileQueue, setPopFileQueue] = useState<File | null>(null);
+  // Payments are often settled in batches, so several POP documents may be
+  // attached in one go; more can be added later from the request detail page.
+  const [popFileQueue, setPopFileQueue] = useState<File[]>([]);
   const [committeeVotes, setCommitteeVotes] = useState<any[]>([]);
   const [votesLoading, setVotesLoading] = useState(false);
 
@@ -266,8 +268,8 @@ const ProcurementApprovalsPage: React.FC = () => {
       toast.error('Rejection reason is required');
       return;
     }
-    if (action.type === 'final_finance' && !popFileQueue) {
-      toast.error('Proof of Payment (POP) document is required for final approval');
+    if (action.type === 'final_finance' && popFileQueue.length === 0) {
+      toast.error('At least one Proof of Payment (POP) document is required for final approval');
       return;
     }
     setActionLoading(true);
@@ -291,14 +293,14 @@ const ProcurementApprovalsPage: React.FC = () => {
           break;
         case 'final_finance': {
           const fd = new FormData();
-          fd.append('file', popFileQueue!);
+          popFileQueue.forEach(f => fd.append('files', f));
           if (comments) fd.append('comments', comments);
           await finalFinanceApproval(id, fd);
           toast.success('Final approval granted — Procurement COMPLETED!');
-          const capturedFile = popFileQueue!.name;
+          const capturedFile = popFileQueue.map(f => f.name).join(', ');
           const capturedComments = comments;
           const capturedId = id;
-          setPopFileQueue(null);
+          setPopFileQueue([]);
           setAction(null);
           setComments('');
           invalidate();
@@ -799,22 +801,48 @@ const ProcurementApprovalsPage: React.FC = () => {
 
             {action?.type === 'final_finance' && (
               <Alert severity="warning" sx={{ mb: 2 }}>
-                A Proof of Payment (POP) document is <strong>required</strong> to complete final approval.
+                At least one Proof of Payment (POP) document is <strong>required</strong> to complete final approval.
+                You can attach several at once if the payment was made in batches, and add more later from the request detail page.
               </Alert>
             )}
             {action?.type === 'final_finance' && (
-              <Button
-                variant={popFileQueue ? 'outlined' : 'contained'}
-                component="label"
-                startIcon={<UploadIcon />}
-                fullWidth
-                color={popFileQueue ? 'success' : 'primary'}
-                sx={{ mb: 2 }}
-              >
-                {popFileQueue ? `✓ ${popFileQueue.name}` : 'Upload Proof of Payment (POP) *'}
-                <input type="file" hidden accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                  onChange={e => setPopFileQueue(e.target.files?.[0] || null)} />
-              </Button>
+              <Box sx={{ mb: 2 }}>
+                <Button
+                  variant={popFileQueue.length ? 'outlined' : 'contained'}
+                  component="label"
+                  startIcon={<UploadIcon />}
+                  fullWidth
+                  color={popFileQueue.length ? 'success' : 'primary'}
+                >
+                  {popFileQueue.length
+                    ? `✓ ${popFileQueue.length} document${popFileQueue.length === 1 ? '' : 's'} selected — add more`
+                    : 'Upload Proof of Payment (POP) *'}
+                  <input type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                    onChange={e => {
+                      const picked = Array.from(e.target.files || []);
+                      // Append rather than replace so batches can be chosen in
+                      // separate passes, skipping duplicates.
+                      setPopFileQueue(prev => [
+                        ...prev,
+                        ...picked.filter(f => !prev.some(p => p.name === f.name && p.size === f.size))
+                      ].slice(0, 10));
+                      e.target.value = '';
+                    }} />
+                </Button>
+                {popFileQueue.length > 0 && (
+                  <Stack spacing={0.5} sx={{ mt: 1 }}>
+                    {popFileQueue.map((f, i) => (
+                      <Chip
+                        key={`${f.name}-${i}`}
+                        label={`${f.name} (${(f.size / 1024).toFixed(0)} KB)`}
+                        size="small"
+                        onDelete={() => setPopFileQueue(prev => prev.filter((_, idx) => idx !== i))}
+                        sx={{ justifyContent: 'space-between' }}
+                      />
+                    ))}
+                  </Stack>
+                )}
+              </Box>
             )}
 
             <TextField
@@ -826,15 +854,15 @@ const ProcurementApprovalsPage: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setAction(null); setPopFileQueue(null); }} disabled={actionLoading}>Cancel</Button>
+          <Button onClick={() => { setAction(null); setPopFileQueue([]); }} disabled={actionLoading}>Cancel</Button>
           <Button
             variant="contained"
             color={action?.type === 'reject' ? 'error' : 'primary'}
             onClick={doAction}
-            disabled={actionLoading || (action?.type === 'final_finance' && !popFileQueue)}
+            disabled={actionLoading || (action?.type === 'final_finance' && popFileQueue.length === 0)}
             startIcon={actionLoading ? <CircularProgress size={16} /> : undefined}
           >
-            {action?.type === 'final_finance' && !popFileQueue ? 'Upload POP to Continue' : 'Confirm'}
+            {action?.type === 'final_finance' && popFileQueue.length === 0 ? 'Upload POP to Continue' : 'Confirm'}
           </Button>
         </DialogActions>
       </Dialog>

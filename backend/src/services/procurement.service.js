@@ -904,7 +904,14 @@ class ProcurementService {
   // FINAL FINANCE APPROVAL
   // ============================================================
 
-  async finalFinanceApproval(requestId, user, comments = '', popFilePath = null, popFileName = null, popFileSize = null) {
+  /**
+   * Final finance approval.
+   *
+   * `popFiles` is a list of uploaded Proof of Payment documents — payments are
+   * often settled in batches, so more than one may be attached here, and further
+   * batches can be added afterwards via addProofOfPayment().
+   */
+  async finalFinanceApproval(requestId, user, comments = '', popFiles = []) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
     if (req.status !== 'PENDING_FINAL_FINANCE') {
@@ -913,16 +920,26 @@ class ProcurementService {
     if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
       throw new Error('Only Finance Clerk can give final approval');
     }
-    if (!popFilePath) {
-      throw new Error('Proof of Payment (POP) document must be uploaded before final approval');
+    if (!popFiles.length) {
+      throw new Error('At least one Proof of Payment (POP) document must be uploaded before final approval');
     }
 
     return transaction(async (conn) => {
+      // The legacy single-POP columns still mirror the first document so older
+      // reads (the /pop/download endpoint, exports) keep working unchanged.
+      const [first] = popFiles;
       await conn.execute(
         `UPDATE proc_requests SET status='COMPLETED', final_finance_approved_at=NOW(), completed_at=NOW(),
           pop_file_path=?, pop_file_name=?, pop_file_size=?, updated_at=NOW() WHERE id=?`,
-        [popFilePath, popFileName, popFileSize, requestId]
+        [first.path, first.originalname, first.size, requestId]
       );
+      for (const f of popFiles) {
+        await conn.execute(
+          `INSERT INTO proc_request_pops (request_id, file_path, file_name, file_size, uploaded_by)
+           VALUES (?, ?, ?, ?, ?)`,
+          [requestId, f.path, f.originalname, f.size, user.id]
+        );
+      }
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
          VALUES (?, ?, ?, 'FINAL_APPROVED', 'PENDING_FINAL_FINANCE', 'COMPLETED', ?)`,
@@ -946,6 +963,91 @@ class ProcurementService {
     });
   }
 
+  // ============================================================
+  // PROOF OF PAYMENT (multiple documents per request)
+  // ============================================================
+
+  async getProofOfPayments(requestId) {
+    return query(
+      `SELECT p.*, u.first_name, u.last_name
+       FROM proc_request_pops p
+       LEFT JOIN users u ON u.id = p.uploaded_by
+       WHERE p.request_id = ?
+       ORDER BY p.created_at ASC, p.id ASC`,
+      [requestId]
+    );
+  }
+
+  /**
+   * Attach further POP documents after final approval — used when a payment is
+   * settled in batches and the later instalments are paid separately.
+   */
+  async addProofOfPayment(requestId, user, files = [], note = null) {
+    if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
+      throw new Error('Only Finance Clerk or Admin can attach proof of payment');
+    }
+    if (!files.length) throw new Error('No files were uploaded');
+
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req) throw new Error('Request not found');
+    if (!['PENDING_FINAL_FINANCE', 'COMPLETED'].includes(req.status)) {
+      throw new Error('Proof of payment can only be attached once a request has reached final finance approval');
+    }
+
+    return transaction(async (conn) => {
+      for (const f of files) {
+        await conn.execute(
+          `INSERT INTO proc_request_pops (request_id, file_path, file_name, file_size, note, uploaded_by)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [requestId, f.path, f.originalname, f.size, note || null, user.id]
+        );
+      }
+      // Keep the legacy mirror populated if it was empty.
+      await conn.execute(
+        `UPDATE proc_requests SET pop_file_path=COALESCE(pop_file_path, ?),
+           pop_file_name=COALESCE(pop_file_name, ?), pop_file_size=COALESCE(pop_file_size, ?),
+           updated_at=NOW() WHERE id=?`,
+        [files[0].path, files[0].originalname, files[0].size, requestId]
+      );
+      await conn.execute(
+        `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+         VALUES (?, ?, ?, 'POP_ATTACHED', ?, ?, ?)`,
+        [requestId, user.id, user.role, req.status, req.status,
+         `${files.length} proof of payment document(s) attached${note ? `: ${note}` : ''}`]
+      );
+      return { success: true, added: files.length };
+    });
+  }
+
+  async deleteProofOfPayment(requestId, popId, user) {
+    if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
+      throw new Error('Only Finance Clerk or Admin can remove proof of payment');
+    }
+    const rows = await query(
+      'SELECT * FROM proc_request_pops WHERE id = ? AND request_id = ?', [popId, requestId]
+    );
+    if (!rows.length) throw new Error('Proof of payment not found');
+
+    const remaining = await query(
+      'SELECT COUNT(*) AS cnt FROM proc_request_pops WHERE request_id = ?', [requestId]
+    );
+    const req = await this.getPurchaseRequestById(requestId);
+    if (req && req.status === 'COMPLETED' && Number(remaining[0].cnt) <= 1) {
+      throw new Error('A completed request must keep at least one proof of payment');
+    }
+
+    await query('DELETE FROM proc_request_pops WHERE id = ?', [popId]);
+
+    // If the legacy mirror pointed at the deleted file, repoint it at whatever remains.
+    const [next] = await this.getProofOfPayments(requestId);
+    await query(
+      `UPDATE proc_requests SET pop_file_path=?, pop_file_name=?, pop_file_size=?, updated_at=NOW()
+       WHERE id=? AND pop_file_path=?`,
+      [next?.file_path ?? null, next?.file_name ?? null, next?.file_size ?? null, requestId, rows[0].file_path]
+    );
+    return { success: true };
+  }
+
   async reverseFinalApproval(requestId, user, reason = '') {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
@@ -960,6 +1062,8 @@ class ProcurementService {
         pop_file_path=NULL, pop_file_name=NULL, pop_file_size=NULL, updated_at=NOW() WHERE id=?`,
       [requestId]
     );
+    // The uploaded documents themselves are kept: reversing an approval does not
+    // unmake a payment that was already proven, and Finance needs the history.
     await query(
       `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
        VALUES (?, ?, ?, 'REVERSED', 'COMPLETED', 'PENDING_FINAL_FINANCE', ?)`,

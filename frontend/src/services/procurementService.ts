@@ -117,6 +117,70 @@ export const getApprovalTrail = async (id: number | string) => {
   return res.data.data || [];
 };
 
+// ── Proof of Payment ────────────────────────────────────────────────────────
+// A request may carry several POP documents: payments are frequently settled in
+// batches rather than as a single transfer.
+
+export interface ProofOfPayment {
+  id: number;
+  request_id: number;
+  file_name: string;
+  file_size?: number;
+  note?: string | null;
+  uploaded_by: number;
+  first_name?: string;
+  last_name?: string;
+  created_at: string;
+}
+
+export const getProofOfPayments = async (requestId: number | string): Promise<ProofOfPayment[]> => {
+  const res = await api.get(`${BASE}/requests/${requestId}/pops`);
+  return res.data.data || [];
+};
+
+export const addProofOfPayments = async (
+  requestId: number | string, files: File[], note?: string
+): Promise<void> => {
+  const formData = new FormData();
+  files.forEach(f => formData.append('files', f));
+  if (note) formData.append('note', note);
+  await api.post(`${BASE}/requests/${requestId}/pops`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+};
+
+export const deleteProofOfPayment = async (
+  requestId: number | string, popId: number | string
+): Promise<void> => {
+  await api.delete(`${BASE}/requests/${requestId}/pops/${popId}`);
+};
+
+export const downloadProofOfPayment = async (
+  requestId: number | string, popId: number | string, fileName?: string
+): Promise<void> => {
+  const res = await api.get(`${BASE}/requests/${requestId}/pops/${popId}/download`, { responseType: 'blob' });
+  const contentType = (res.headers['content-type'] as string | undefined) || '';
+
+  // Server-side JSON errors arrive as blobs; surface their message.
+  if (contentType.includes('application/json')) {
+    const text = await (res.data as Blob).text();
+    let msg = 'Failed to download proof of payment';
+    try { msg = JSON.parse(text)?.error || msg; } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+
+  const url = window.URL.createObjectURL(
+    new Blob([res.data], { type: contentType || 'application/octet-stream' })
+  );
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', fileName || 'proof-of-payment');
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
+
 // ============================================================================
 // QUOTATIONS
 // ============================================================================

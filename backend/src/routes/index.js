@@ -197,7 +197,13 @@ router.post('/procurement/requests/:id/finance-approve', authenticateToken, proc
 router.post('/procurement/requests/:id/submit-committee', authenticateToken, procurementController.submitToCommittee.bind(procurementController));
 router.post('/procurement/requests/:id/resubmit-committee', authenticateToken, procurementController.resubmitToCommittee.bind(procurementController));
 router.post('/procurement/requests/:id/committee-decision', authenticateToken, procurementController.committeeDecision.bind(procurementController));
-router.post('/procurement/requests/:id/final-approve', authenticateToken, uploadSingle, handleUploadError, procurementController.finalFinanceApproval.bind(procurementController));
+// Payments are often settled in batches, so final approval accepts several POP
+// documents at once and further batches can be attached afterwards.
+router.post('/procurement/requests/:id/final-approve', authenticateToken, uploadMultiple, handleUploadError, procurementController.finalFinanceApproval.bind(procurementController));
+router.get('/procurement/requests/:id/pops', authenticateToken, procurementController.getProofOfPayments.bind(procurementController));
+router.post('/procurement/requests/:id/pops', authenticateToken, uploadMultiple, handleUploadError, procurementController.addProofOfPayment.bind(procurementController));
+router.get('/procurement/requests/:id/pops/:popId/download', authenticateToken, procurementController.downloadProofOfPayment.bind(procurementController));
+router.delete('/procurement/requests/:id/pops/:popId', authenticateToken, procurementController.deleteProofOfPayment.bind(procurementController));
 router.post('/procurement/requests/:id/reverse-final-approval', authenticateToken, procurementController.reverseFinalApproval.bind(procurementController));
 router.get('/procurement/requests/:id/approval-trail', authenticateToken, procurementController.getApprovalTrail.bind(procurementController));
 router.get('/procurement/requests/:id/committee-votes', authenticateToken, procurementController.getCommitteeVotes.bind(procurementController));

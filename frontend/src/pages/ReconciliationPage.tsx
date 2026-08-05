@@ -56,6 +56,36 @@ interface ReconciliationFormItem {
 }
 
 /** Shows a coloured chip indicating whether a reconciliation was submitted on time or late */
+// ── Over-expenditure ─────────────────────────────────────────────────────────
+// The float advanced is the request total; anything spent beyond it is an
+// over-expenditure. Only the surplus was ever stored (total_returned), so an
+// overspent reconciliation showed "Returned $0.00" in green — visually identical
+// to a trip that simply returned nothing, with the amount overspent nowhere on
+// screen. The overspend is derived from the figures every query already carries.
+const advanceOf   = (row: any) => Number(row?.total_amount ?? row?.request_amount ?? 0);
+const spentOf     = (row: any) => Number(row?.total_spent ?? 0);
+const returnedOf  = (row: any) => Number(row?.total_returned ?? 0);
+const overspendOf = (row: any) => Math.max(0, spentOf(row) - advanceOf(row));
+
+const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** Renders the Returned column: surplus in green, or the amount overspent in red. */
+const ReturnedAmount: React.FC<{ row: any }> = ({ row }) => {
+  const over = overspendOf(row);
+  if (over > 0) {
+    return (
+      <Typography component="span" variant="body2" sx={{ color: 'error.main', fontWeight: 700 }}>
+        {money(over)} over
+      </Typography>
+    );
+  }
+  return (
+    <Typography component="span" variant="body2" sx={{ color: 'success.main', fontWeight: 500 }}>
+      {money(returnedOf(row))}
+    </Typography>
+  );
+};
+
 const SubmissionTimeliness: React.FC<{ timeliness?: string | null; days?: number | null }> = ({ timeliness, days }) => {
   if (!timeliness) return null;
   const isLate = timeliness === 'LATE';
@@ -193,7 +223,7 @@ const ReconciliationPage: React.FC = () => {
   <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
   <h1>${DOC_TITLE}</h1>
   <p><strong>${requestCode}</strong> &nbsp;|&nbsp; ${req.department_name || ''} &nbsp;|&nbsp; ${req.requester_first_name || ''} ${req.requester_last_name || ''}</p>
-  <p>Status: <strong>${req.status?.replace(/_/g,' ')}</strong>${reconDetail ? ` &nbsp;|&nbsp; Spent: <strong>$${Number(reconDetail.total_spent||0).toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; Returned: <strong>$${Number(reconDetail.total_returned||0).toLocaleString(undefined,{minimumFractionDigits:2})}</strong>` : ''}</p>
+  <p>Status: <strong>${req.status?.replace(/_/g,' ')}</strong>${reconDetail ? ` &nbsp;|&nbsp; Spent: <strong>$${Number(reconDetail.total_spent||0).toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; ${overspendOf({ ...req, ...reconDetail }) > 0 ? `Over-expenditure: <strong style="color:#c62828">${money(overspendOf({ ...req, ...reconDetail }))}</strong>` : `Returned: <strong>${money(Number(reconDetail.total_returned||0))}</strong>`}` : ''}</p>
 </div>
 <div class="meta-grid">
   <div class="meta-item"><label>Reference</label><span>${requestCode}</span></div>
@@ -203,7 +233,7 @@ const ReconciliationPage: React.FC = () => {
   <div class="meta-item"><label>Partner / Donor</label><span>${req.donor_name || '—'}${req.donor_code ? ` (${req.donor_code})` : ''}</span></div>
   <div class="meta-item"><label>Project</label><span>${req.project_name ? `${req.project_code} — ${req.project_name}` : '—'}</span></div>
   ${reconDetail ? `<div class="meta-item"><label>Total Spent</label><span style="color:#c62828">$${Number(reconDetail.total_spent||0).toLocaleString(undefined,{minimumFractionDigits:2})}</span></div>
-  <div class="meta-item"><label>Total Returned</label><span style="color:#2e7d32">$${Number(reconDetail.total_returned||0).toLocaleString(undefined,{minimumFractionDigits:2})}</span></div>` : ''}
+  ${overspendOf({ ...req, ...reconDetail }) > 0 ? `<div class="meta-item"><label>Over-expenditure</label><span style="color:#c62828;font-weight:bold">${money(overspendOf({ ...req, ...reconDetail }))}</span></div>` : `<div class="meta-item"><label>Total Returned</label><span style="color:#2e7d32">${money(Number(reconDetail.total_returned||0))}</span></div>`}` : ''}
   ${reconDetail?.notes ? `<div class="meta-item meta-full"><label>Notes</label><span>${reconDetail.notes}</span></div>` : ''}
   <div class="meta-item meta-full"><label>Purpose of Float</label><span>${req.justification||'—'}</span></div>
   ${(req.is_activity_request || req.activity_start_date || req.activity_end_date) ? `
@@ -249,7 +279,7 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
         <td><strong>${rec.request_code}</strong></td>
         <td>${`${rec.requester_first_name || ''} ${rec.requester_last_name || ''}`.trim()}</td>
         <td align="right">$${Number(rec.total_spent || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
-        <td align="right">$${Number(rec.total_returned || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+        <td align="right">${overspendOf(rec) > 0 ? `<span style="color:#c62828;font-weight:bold">${money(overspendOf(rec))} over</span>` : money(Number(rec.total_returned || 0))}</td>
         <td>${rec.reconciliation_status || '—'}</td>
         <td>${`${rec.reviewer_first_name || ''} ${rec.reviewer_last_name || ''}`.trim()}</td>
         <td>${rec.reviewed_at ? format(new Date(rec.reviewed_at), 'dd MMM yyyy') : '—'}</td>
@@ -1139,7 +1169,7 @@ ${buildDigitalStamp('')}
                     <TableRow key={recon.id} hover>
                       <TableCell><Typography fontWeight={500}>{recon.request_code}</Typography></TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(recon.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(recon.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount row={recon} /></TableCell>
                       <TableCell>
                         <Chip
                           label={getStatusLabel(recon.status)}
@@ -1282,7 +1312,7 @@ ${buildDigitalStamp('')}
                       <TableCell><Chip label={req.department_code} size="small" variant="outlined" /></TableCell>
                       <TableCell>${Number(req.total_amount || 0).toLocaleString()}</TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(req.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(req.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount row={req} /></TableCell>
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
                       <TableCell align="center">
@@ -1332,7 +1362,7 @@ ${buildDigitalStamp('')}
                       <TableCell><Typography fontWeight={500}>{rec.request_code}</Typography></TableCell>
                       <TableCell>{rec.requester_first_name} {rec.requester_last_name}</TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(rec.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(rec.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount row={rec} /></TableCell>
                       <TableCell>
                         <Chip label={rec.status?.replace(/_/g, ' ') || '—'} color={getStatusColor(rec.status)} size="small" />
                       </TableCell>
@@ -1465,7 +1495,7 @@ ${buildDigitalStamp('')}
                       <TableCell><Chip label={req.department_code} size="small" variant="outlined" /></TableCell>
                       <TableCell>${Number(req.total_amount || 0).toLocaleString()}</TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(req.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(req.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount row={req} /></TableCell>
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
                       <TableCell align="center">
@@ -1522,7 +1552,7 @@ ${buildDigitalStamp('')}
                       <TableCell>{rec.requester_first_name} {rec.requester_last_name}</TableCell>
                       <TableCell><Chip label={rec.department_code || '—'} size="small" variant="outlined" /></TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(rec.total_spent || 0).toLocaleString()}</TableCell>
-                      <TableCell sx={{ color: 'success.main', fontWeight: 500 }}>${Number(rec.total_returned || 0).toLocaleString()}</TableCell>
+                      <TableCell><ReturnedAmount row={rec} /></TableCell>
                       <TableCell>
                         <Chip
                           label={rec.finance_action === 'APPROVED' ? 'Approved' : rec.finance_action === 'REJECTED' ? 'Rejected' : rec.reconciliation_status}
@@ -1685,7 +1715,7 @@ ${buildDigitalStamp('')}
                             <TableCell>{rec.requester_first_name} {rec.requester_last_name}</TableCell>
                             <TableCell><Chip label={rec.department_code || '—'} size="small" variant="outlined" /></TableCell>
                             <TableCell>{rec.total_spent != null ? `$${Number(rec.total_spent).toLocaleString()}` : <Typography variant="body2" color="text.disabled">—</Typography>}</TableCell>
-                            <TableCell>{rec.total_returned != null ? `$${Number(rec.total_returned).toLocaleString()}` : <Typography variant="body2" color="text.disabled">—</Typography>}</TableCell>
+                            <TableCell>{rec.total_returned != null ? <ReturnedAmount row={rec} /> : <Typography variant="body2" color="text.disabled">—</Typography>}</TableCell>
                             <TableCell>{statusChip}</TableCell>
                             <TableCell>
                               {rec.reconciliation_id
@@ -2082,7 +2112,7 @@ ${buildDigitalStamp('')}
                 </Grid>
                 <Grid item xs={6} sm={2}>
                   <Typography variant="caption" color="text.secondary">To Return</Typography>
-                  <Typography fontWeight={500} color="success.main">${Number(reviewRequest.total_returned || 0).toLocaleString()}</Typography>
+                  <Typography fontWeight={500}><ReturnedAmount row={reviewRequest} /></Typography>
                 </Grid>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Submission Timeliness</Typography>
@@ -2190,7 +2220,7 @@ ${buildDigitalStamp('')}
                         </ListItemIcon>
                         <ListItemText
                           primary={att.original_name || att.file_name}
-                          secondary={`${att.attachment_type} • ${attachmentService.formatFileSize(att.file_size || 0)}`}
+                          secondary={`${attachmentService.typeLabel(att.attachment_type)} • ${attachmentService.formatFileSize(att.file_size || 0)}`}
                           primaryTypographyProps={{ variant: 'body2' }}
                           secondaryTypographyProps={{ variant: 'caption' }}
                         />
@@ -2256,7 +2286,7 @@ ${buildDigitalStamp('')}
                 </Grid>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Returned</Typography>
-                  <Typography fontWeight={500} color="success.main">${Number(viewReconciliation.total_returned || 0).toLocaleString()}</Typography>
+                  <Typography fontWeight={500}><ReturnedAmount row={viewReconciliation} /></Typography>
                 </Grid>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Submitted</Typography>
@@ -2362,7 +2392,7 @@ ${buildDigitalStamp('')}
                         </ListItemIcon>
                         <ListItemText
                           primary={att.original_name || att.file_name}
-                          secondary={`${att.attachment_type} • ${attachmentService.formatFileSize(att.file_size || 0)}`}
+                          secondary={`${attachmentService.typeLabel(att.attachment_type)} • ${attachmentService.formatFileSize(att.file_size || 0)}`}
                           primaryTypographyProps={{ variant: 'body2' }}
                           secondaryTypographyProps={{ variant: 'caption' }}
                         />

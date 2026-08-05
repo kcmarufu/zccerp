@@ -321,7 +321,7 @@ class ReconciliationController {
         success: true,
         data: {
           overdueCount: count,
-          isBlocked: count >= 2
+          isBlocked: count >= reconciliationService.OVERDUE_RECON_LIMIT
         }
       });
     } catch (error) {

@@ -186,16 +186,65 @@ class ProcurementController {
 
   async finalFinanceApproval(req, res) {
     try {
-      const popFilePath = req.file ? req.file.path : null;
-      const popFileName = req.file ? req.file.originalname : null;
-      const popFileSize = req.file ? req.file.size : null;
+      // Accepts one or many POP documents (uploadMultiple sets req.files; the
+      // single-file field is still honoured so older clients keep working).
+      const popFiles = req.files && req.files.length ? req.files : (req.file ? [req.file] : []);
       const result = await procurementService.finalFinanceApproval(
-        req.params.id, req.user, req.body.comments || '',
-        popFilePath, popFileName, popFileSize
+        req.params.id, req.user, req.body.comments || '', popFiles
       );
       res.json({ success: true, data: result, message: 'Final finance approval granted. Procurement completed.' });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  // ===== PROOF OF PAYMENT =====
+
+  async getProofOfPayments(req, res) {
+    try {
+      const pops = await procurementService.getProofOfPayments(req.params.id);
+      res.json({ success: true, data: pops });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async addProofOfPayment(req, res) {
+    try {
+      const files = req.files && req.files.length ? req.files : (req.file ? [req.file] : []);
+      const result = await procurementService.addProofOfPayment(
+        req.params.id, req.user, files, req.body.note
+      );
+      res.json({
+        success: true, data: result,
+        message: `${result.added} proof of payment document(s) attached`
+      });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async deleteProofOfPayment(req, res) {
+    try {
+      const result = await procurementService.deleteProofOfPayment(req.params.id, req.params.popId, req.user);
+      res.json({ success: true, data: result, message: 'Proof of payment removed' });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async downloadProofOfPayment(req, res) {
+    try {
+      const rows = await query(
+        'SELECT * FROM proc_request_pops WHERE id = ? AND request_id = ?',
+        [req.params.popId, req.params.id]
+      );
+      if (!rows.length) return res.status(404).json({ success: false, error: 'Proof of payment not found' });
+      const filePath = resolveStoredPath(rows[0].file_path);
+      if (!filePath) return res.status(404).json({ success: false, error: 'POP file not found on server' });
+      res.download(filePath, rows[0].file_name || 'proof-of-payment');
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
     }
   }
 
