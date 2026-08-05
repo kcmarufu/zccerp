@@ -117,6 +117,38 @@ export const getApprovalTrail = async (id: number | string) => {
   return res.data.data || [];
 };
 
+// ── High-value approval (selected quotation >= USD 5,000) ───────────────────
+// The committee recommends; the Super Admin and the Lead/HOP of the department
+// that owns the selected project must then both approve before Finance.
+
+export interface HighValueApproval {
+  id: number;
+  request_id: number;
+  seat: 'SUPER_ADMIN' | 'DEPARTMENT';
+  approver_id: number;
+  approver_role: string;
+  decision: 'APPROVED' | 'REJECTED';
+  comments?: string | null;
+  first_name?: string;
+  last_name?: string;
+  department_code?: string | null;
+  created_at: string;
+}
+
+export const getHighValueApprovals = async (id: number | string): Promise<HighValueApproval[]> => {
+  const res = await api.get(`${BASE}/requests/${id}/high-value-approvals`);
+  return res.data.data || [];
+};
+
+export const highValueDecision = async (
+  id: number | string,
+  decision: 'APPROVED' | 'REJECTED',
+  comments?: string
+): Promise<{ status: string; message: string }> => {
+  const res = await api.post(`${BASE}/requests/${id}/high-value-decision`, { decision, comments });
+  return res.data.data || res.data;
+};
+
 // ── Proof of Payment ────────────────────────────────────────────────────────
 // A request may carry several POP documents: payments are frequently settled in
 // batches rather than as a single transfer.
@@ -339,6 +371,7 @@ export const PROC_STATUS_LABELS: Record<string, string> = {
   PENDING_FINANCE_APPROVAL: 'Pending Finance Approval',
   PENDING_PROCUREMENT: 'In Procurement',
   PENDING_COMMITTEE: 'Pending Committee',
+  PENDING_HIGH_VALUE_APPROVAL: 'Pending Super Admin & Dept Approval',
   PENDING_FINAL_FINANCE: 'Pending Final Approval',
   COMPLETED: 'Completed',
   REJECTED: 'Rejected',
@@ -351,6 +384,7 @@ export const PROC_STATUS_COLORS: Record<string, string> = {
   PENDING_FINANCE_APPROVAL: 'warning',
   PENDING_PROCUREMENT: 'info',
   PENDING_COMMITTEE: 'secondary',
+  PENDING_HIGH_VALUE_APPROVAL: 'secondary',
   PENDING_FINAL_FINANCE: 'warning',
   COMPLETED: 'success',
   REJECTED: 'error',
@@ -362,6 +396,7 @@ export const PROC_WORKFLOW_STEPS = [
   { label: 'Dept. Approval', status: 'PENDING_DEPT_APPROVAL' },
   { label: 'Procurement', status: 'PENDING_PROCUREMENT' },
   { label: 'Committee', status: 'PENDING_COMMITTEE' },
+  { label: 'Super Admin + Dept', status: 'PENDING_HIGH_VALUE_APPROVAL' },
   { label: 'Final Finance', status: 'PENDING_FINAL_FINANCE' },
   { label: 'Completed', status: 'COMPLETED' }
 ];

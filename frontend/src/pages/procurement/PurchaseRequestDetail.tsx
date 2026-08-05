@@ -49,6 +49,7 @@ import {
   deleteQuotation,
   updateQuotation,
   downloadQuotationFile,
+  highValueDecision,
   getProofOfPayments,
   addProofOfPayments,
   deleteProofOfPayment,
@@ -82,7 +83,8 @@ const PurchaseRequestDetail: React.FC = () => {
   const qc = useQueryClient();
 
   const [tab, setTab] = useState(0);
-  const [actionDialog, setActionDialog] = useState<null | 'approve_dept' | 'reject' | 'submit_committee' | 'committee' | 'final_finance'>(null);
+  const [actionDialog, setActionDialog] = useState<null | 'approve_dept' | 'reject' | 'submit_committee' | 'committee' | 'final_finance' | 'high_value'>(null);
+  const [highValueDecisionVal, setHighValueDecisionVal] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
   const [comments, setComments] = useState('');
   const [committeeDecisionVal, setCommitteeDecisionVal] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
   const [selectedQuotId, setSelectedQuotId] = useState<number | null>(null);
@@ -186,6 +188,13 @@ const PurchaseRequestDetail: React.FC = () => {
   const canResubmitToCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_COMMITTEE';
   const canCommitteeDecide = hasPermission('committee_review') && request?.status === 'PENDING_COMMITTEE';
   const canFinalApprove = hasPermission('proc_finance_approve') && request?.status === 'PENDING_FINAL_FINANCE';
+  // High-value stage: the Super Admin seat (ADMIN) and the department seat
+  // (Lead/HOP of the project's owning department). The server verifies the
+  // department match and records which seat the decision fills.
+  const isOwningDeptApprover = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS') &&
+    Number(user?.department_id) === Number((request as any)?.routing_department_id || request?.department_id);
+  const canHighValueDecide = request?.status === 'PENDING_HIGH_VALUE_APPROVAL' &&
+    (hasRole('ADMIN') || isOwningDeptApprover);
   // Finance can keep attaching payment batches after completion — that is the
   // whole point of supporting more than one POP per request.
   const canManagePOP = (hasPermission('proc_finance_approve') || hasRole('ADMIN')) &&
@@ -224,6 +233,16 @@ const PurchaseRequestDetail: React.FC = () => {
           invalidate();
           setCommitteeConfirmData({ decision: committeeDecisionVal, comments, result });
           return;
+        }
+        case 'high_value': {
+          if (highValueDecisionVal === 'REJECTED' && !comments.trim()) {
+            toast.error('A reason is required when rejecting');
+            setActionLoading(false);
+            return;
+          }
+          const hv = await highValueDecision(id!, highValueDecisionVal, comments);
+          toast.success(hv.message);
+          break;
         }
         case 'final_finance': {
           if (!popFile.length) { toast.error('At least one Proof of Payment (POP) document is required'); setActionLoading(false); return; }
@@ -688,7 +707,7 @@ ${allCommitteeApproved ? `
       </Paper>
 
       {/* Action Buttons */}
-      {(canApproveDept || canReverseDept || canReject || canSubmitCommittee || canResubmitToCommittee || canCommitteeDecide || canFinalApprove) && (
+      {(canApproveDept || canReverseDept || canReject || canSubmitCommittee || canResubmitToCommittee || canCommitteeDecide || canHighValueDecide || canFinalApprove) && (
         <Paper elevation={0} sx={{ p: 2, mb: 2, borderRadius: 2, bgcolor: alpha(theme.palette.primary.main, 0.04), border: `1px solid ${theme.palette.primary.light}` }}>
           <Typography variant="body2" fontWeight={600} mb={1}>Actions Available:</Typography>
           <Stack direction="row" spacing={1} flexWrap="wrap">
@@ -716,6 +735,18 @@ ${allCommitteeApproved ? `
               <Button variant="contained" color="primary" startIcon={<CommitteeIcon />} size="small" onClick={() => { setSelectedQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); setActionDialog('committee'); }}>
                 Record Committee Decision
               </Button>
+            )}
+            {canHighValueDecide && (
+              <>
+                <Button variant="contained" color="success" startIcon={<ApproveIcon />} size="small"
+                  onClick={() => { setHighValueDecisionVal('APPROVED'); setActionDialog('high_value'); }}>
+                  Approve (High-Value)
+                </Button>
+                <Button variant="outlined" color="error" startIcon={<RejectIcon />} size="small"
+                  onClick={() => { setHighValueDecisionVal('REJECTED'); setActionDialog('high_value'); }}>
+                  Reject
+                </Button>
+              </>
             )}
             {canFinalApprove && (
               <Button variant="contained" color="success" startIcon={<ApproveIcon />} size="small" onClick={() => setActionDialog('final_finance')}>
@@ -850,6 +881,49 @@ ${allCommitteeApproved ? `
                     ${Number(request.total_estimated_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                   </Typography>
                 </Box>
+                {/* High-value approval — the committee recommends, then the
+                    Super Admin and the owning department's Lead/HOP must both
+                    approve before the request reaches Finance. */}
+                {Number((request as any).is_high_value) === 1 && (
+                  <Paper variant="outlined" sx={{ mt: 2, p: 1.5, borderColor: 'secondary.main' }}>
+                    <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+                      High-Value Approval
+                      <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                        (selected quotation ${Number((request as any).selected_quotation_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        {' '}— threshold ${Number((request as any).high_value_threshold || 5000).toLocaleString()})
+                      </Typography>
+                    </Typography>
+                    <Stack spacing={0.75}>
+                      {(['SUPER_ADMIN', 'DEPARTMENT'] as const).map(seat => {
+                        const rec = ((request as any).high_value_approvals || [])
+                          .find((a: any) => a.seat === seat);
+                        const seatName = seat === 'SUPER_ADMIN'
+                          ? 'Super Admin'
+                          : 'Department Lead / Head of Programs';
+                        return (
+                          <Box key={seat} display="flex" alignItems="center" gap={1}>
+                            <Chip
+                              size="small"
+                              label={rec ? (rec.decision === 'APPROVED' ? 'Approved' : 'Rejected') : 'Awaiting'}
+                              color={rec ? (rec.decision === 'APPROVED' ? 'success' : 'error') : 'default'}
+                              sx={{ minWidth: 88 }}
+                            />
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="body2">{seatName}</Typography>
+                              {rec && (
+                                <Typography variant="caption" color="text.secondary">
+                                  {rec.first_name} {rec.last_name} · {formatDate(rec.created_at)}
+                                  {rec.comments ? ` · ${rec.comments}` : ''}
+                                </Typography>
+                              )}
+                            </Box>
+                          </Box>
+                        );
+                      })}
+                    </Stack>
+                  </Paper>
+                )}
+
                 {/* Proof of Payment — a request may carry several, because
                     payments are often settled in batches rather than at once. */}
                 {(pops.length > 0 || canManagePOP) && (
@@ -1196,6 +1270,7 @@ ${allCommitteeApproved ? `
           {actionDialog === 'reject' && 'Reject Request'}
           {actionDialog === 'submit_committee' && 'Submit to Procurement Committee'}
           {actionDialog === 'committee' && 'Record Committee Decision'}
+          {actionDialog === 'high_value' && 'High-Value Approval'}
           {actionDialog === 'final_finance' && 'Final Finance Approval'}
         </DialogTitle>
         <DialogContent>
@@ -1222,6 +1297,24 @@ ${allCommitteeApproved ? `
                 </MenuItem>
               ))}
             </TextField>
+          )}
+          {actionDialog === 'high_value' && (
+            <>
+              <Alert severity="info" sx={{ mb: 2, mt: 1 }}>
+                The Procurement Committee has <strong>recommended</strong> this request.
+                It proceeds to Finance only once <strong>both</strong> the Super Admin and the
+                Lead/Head of Programs of the owning department have approved.
+                A rejection by either returns it to be amended and resubmitted.
+              </Alert>
+              <TextField
+                select fullWidth label="Your Decision" value={highValueDecisionVal}
+                onChange={e => setHighValueDecisionVal(e.target.value as any)}
+                sx={{ mb: 2 }}
+              >
+                <MenuItem value="APPROVED">Approve</MenuItem>
+                <MenuItem value="REJECTED">Reject</MenuItem>
+              </TextField>
+            </>
           )}
           {actionDialog === 'final_finance' && (
             <Alert severity="warning" sx={{ mb: 2, mt: 1 }}>
@@ -1267,7 +1360,12 @@ ${allCommitteeApproved ? `
           )}
           <TextField
             fullWidth multiline rows={3}
-            label={actionDialog === 'reject' ? 'Rejection Reason *' : 'Comments (optional)'}
+            label={
+              actionDialog === 'reject' ||
+              (actionDialog === 'high_value' && highValueDecisionVal === 'REJECTED')
+                ? 'Rejection Reason *'
+                : 'Comments (optional)'
+            }
             value={comments} onChange={e => setComments(e.target.value)}
             sx={{ mt: 1 }}
           />

@@ -198,6 +198,28 @@ class ProcurementController {
     }
   }
 
+  // ===== HIGH-VALUE DUAL APPROVAL =====
+
+  async highValueDecision(req, res) {
+    try {
+      const result = await procurementService.highValueDecision(
+        req.params.id, req.body.decision, req.user, req.body.comments || ''
+      );
+      res.json({ success: true, data: result, message: result.message });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async getHighValueApprovals(req, res) {
+    try {
+      const approvals = await procurementService.getHighValueApprovals(req.params.id);
+      res.json({ success: true, data: approvals });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
   // ===== PROOF OF PAYMENT =====
 
   async getProofOfPayments(req, res) {

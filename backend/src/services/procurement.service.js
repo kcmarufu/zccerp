@@ -14,6 +14,7 @@ const PROC_STATUS = {
   PENDING_FINANCE_APPROVAL: 'PENDING_FINANCE_APPROVAL',
   PENDING_PROCUREMENT: 'PENDING_PROCUREMENT',
   PENDING_COMMITTEE: 'PENDING_COMMITTEE',
+  PENDING_HIGH_VALUE_APPROVAL: 'PENDING_HIGH_VALUE_APPROVAL',
   PENDING_FINAL_FINANCE: 'PENDING_FINAL_FINANCE',
   COMPLETED: 'COMPLETED',
   REJECTED: 'REJECTED',
@@ -21,13 +22,26 @@ const PROC_STATUS = {
 };
 
 // ── High-value procurement rule ──────────────────────────────────────────────
-// A selected quotation at or above this USD amount is voted on by the Super
-// Admin (ADMIN) and the head of the HIGH_VALUE_SEAT department ONLY — the
-// regular "any 3 committee members" rule does not apply to it.
-// Both constants are deliberately here so the threshold or the department can
-// be changed in one place.
+// When the SELECTED quotation is at or above this USD amount, the Procurement
+// Committee does not decide the request — it recommends it. The request then
+// needs two further approvals, granted independently and in either order:
+//
+//   SUPER_ADMIN  — any ADMIN account
+//   DEPARTMENT   — the Lead OR Head of Programs of the department that owns the
+//                  selected project (routing_department_id); either one suffices
+//
+// Only when BOTH have approved does it move to Finance. A rejection by either
+// sends it back to be amended; on resubmission it returns to this same stage.
+//
+// Everything below the threshold keeps the ordinary "any 3 committee members"
+// flow, decided by the committee alone.
 const HIGH_VALUE_THRESHOLD_USD = 5000;
-const HIGH_VALUE_SEAT = 'FOS';
+
+// Approving committee votes required to recommend a request onward. Applies to
+// both the ordinary flow and the high-value recommendation stage.
+const COMMITTEE_APPROVALS_REQUIRED = 3;
+
+const HV_SEAT = { SUPER_ADMIN: 'SUPER_ADMIN', DEPARTMENT: 'DEPARTMENT' };
 
 class ProcurementService {
 
@@ -234,10 +248,10 @@ class ProcurementService {
       }
     } else if (user.role === ROLES.PROCUREMENT_OFFICER) {
       // Procurement officer sees everything from finance-approved stage onwards + rejected
-      where = "WHERE pr.status IN ('PENDING_PROCUREMENT','PENDING_COMMITTEE','PENDING_FINAL_FINANCE','COMPLETED','REJECTED')";
+      where = "WHERE pr.status IN ('PENDING_PROCUREMENT','PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_FINAL_FINANCE','COMPLETED','REJECTED')";
     } else if (user.role === ROLES.PROCUREMENT_COMMITTEE) {
       // Committee sees requests sent to them + completed/rejected for reference
-      where = "WHERE pr.status IN ('PENDING_COMMITTEE','PENDING_FINAL_FINANCE','COMPLETED','REJECTED')";
+      where = "WHERE pr.status IN ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_FINAL_FINANCE','COMPLETED','REJECTED')";
     } else {
       // ADMIN, FINANCE_CLERK see all
       where = 'WHERE 1=1';
@@ -307,7 +321,10 @@ class ProcurementService {
     request.is_high_value = highValue.isHighValue ? 1 : 0;
     request.selected_quotation_amount = highValue.amount || null;
     request.high_value_threshold = HIGH_VALUE_THRESHOLD_USD;
-    request.high_value_seat = HIGH_VALUE_SEAT;
+    // Who must approve a high-value request, and what each has decided so far.
+    request.high_value_approvals = highValue.isHighValue
+      ? await this.getHighValueApprovals(requestId)
+      : [];
 
     const [items, logs, quotations] = await Promise.all([
       query(
@@ -447,26 +464,45 @@ class ProcurementService {
       // first-time submission starts at department approval.
       let targetStatus = PROC_STATUS.PENDING_DEPT_APPROVAL;
       if (isResubmission) {
-        const [rejectionLogs] = await conn.execute(
-          `SELECT previous_status FROM proc_approval_logs
-           WHERE request_id = ? AND action = 'REJECTED'
-           ORDER BY created_at DESC, id DESC LIMIT 1`,
-          [requestId]
-        );
-        const rejectedFrom = rejectionLogs[0]?.previous_status;
+        // rejected_from_status is recorded when a high-value approver rejects;
+        // fall back to the approval trail for rejections logged before it existed.
+        let rejectedFrom = existing.rejected_from_status;
+        if (!rejectedFrom) {
+          const [rejectionLogs] = await conn.execute(
+            `SELECT previous_status FROM proc_approval_logs
+             WHERE request_id = ? AND action IN ('REJECTED', 'HIGH_VALUE_REJECTED')
+             ORDER BY created_at DESC, id DESC LIMIT 1`,
+            [requestId]
+          );
+          rejectedFrom = rejectionLogs[0]?.previous_status;
+        }
         const resumable = [
           PROC_STATUS.PENDING_DEPT_APPROVAL,
           PROC_STATUS.PENDING_PROCUREMENT,
           PROC_STATUS.PENDING_COMMITTEE,
+          PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
           PROC_STATUS.PENDING_FINAL_FINANCE
         ];
         if (resumable.includes(rejectedFrom)) {
           targetStatus = rejectedFrom;
         }
+
+        // Returning to the high-value stage means both approvers assess the
+        // amended request afresh — an approval given for the old version says
+        // nothing about the new one. If the revision dropped the selected
+        // quotation below the threshold, it is no longer a high-value request
+        // and rejoins the ordinary flow at Finance.
+        if (targetStatus === PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL) {
+          await conn.execute('DELETE FROM proc_high_value_approvals WHERE request_id = ?', [requestId]);
+          const stillHighValue = await this.isHighValueRequest(requestId);
+          if (!stillHighValue.isHighValue) {
+            targetStatus = PROC_STATUS.PENDING_FINAL_FINANCE;
+          }
+        }
       }
 
       await conn.execute(
-        `UPDATE proc_requests SET status=?, routing_department_id=?, submitted_at=IF(submitted_at IS NULL, NOW(), submitted_at), rejection_reason=NULL, updated_at=NOW() WHERE id=?`,
+        `UPDATE proc_requests SET status=?, routing_department_id=?, submitted_at=IF(submitted_at IS NULL, NOW(), submitted_at), rejection_reason=NULL, rejected_from_status=NULL, updated_at=NOW() WHERE id=?`,
         [targetStatus, routingDepartmentId, requestId]
       );
       await conn.execute(
@@ -734,23 +770,10 @@ class ProcurementService {
     );
     const seat = userRow?.department_code || null;
 
-    // ── High-value gate ──────────────────────────────────────────────────────
-    // Quotations at or above the threshold are voted on by the Super Admin and
-    // the head of the HIGH_VALUE_SEAT department ONLY. Everything below the
-    // threshold keeps the normal "any 3 committee members" flow untouched.
+    // High-value requests are no longer decided here — the committee recommends
+    // them onward to the Super Admin and the owning department's Lead/HOP. Every
+    // committee member may therefore vote regardless of the amount.
     const highValue = await this.isHighValueRequest(requestId);
-
-    if (highValue.isHighValue) {
-      const isSuperAdmin = user.role === ROLES.ADMIN;
-      const isHighValueSeat = seat === HIGH_VALUE_SEAT;
-      if (!isSuperAdmin && !isHighValueSeat) {
-        throw new Error(
-          `This request is USD ${highValue.amount.toFixed(2)}, at or above the USD ${HIGH_VALUE_THRESHOLD_USD} threshold. ` +
-          `Only the Super Admin and the ${HIGH_VALUE_SEAT} head of department may vote on it.`
-        );
-      }
-    }
-    // Below the threshold: any Procurement Committee member may vote.
 
     return transaction(async (conn) => {
       // Check if this voter has already cast a vote on this request
@@ -794,96 +817,205 @@ class ProcurementService {
       const totalRejected = allVotes.filter(v => v.vote === 'REJECTED').length;
       const totalVotes = allVotes.length;
 
-      // ── High-value tally: needs BOTH the Super Admin AND the high-value seat ──
-      if (highValue.isHighValue) {
-        const [voterRows] = await conn.execute(
-          `SELECT cv.vote, u.role, d.department_code
-             FROM proc_committee_votes cv
-             JOIN users u ON cv.voter_id = u.id
-             LEFT JOIN departments d ON u.department_id = d.id
-            WHERE cv.request_id = ?`,
-          [requestId]
-        );
-        const adminApproved = voterRows.some(v => v.vote === 'APPROVED' && v.role === ROLES.ADMIN);
-        const seatApproved  = voterRows.some(v => v.vote === 'APPROVED' && v.department_code === HIGH_VALUE_SEAT);
+      // Where the request goes once the committee has spoken. Below the
+      // threshold the committee's approval is the decision, so it goes straight
+      // to Finance. At or above it, the committee only recommends: the request
+      // still needs the Super Admin and the owning department's Lead/HOP.
+      const onwardStatus = highValue.isHighValue
+        ? PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL
+        : PROC_STATUS.PENDING_FINAL_FINANCE;
 
-        if (adminApproved && seatApproved) {
-          await conn.execute(
-            `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
-            [requestId]
-          );
-          await conn.execute(
-            `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-             VALUES (?, ?, ?, 'COMMITTEE_APPROVED', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', ?)`,
-            [requestId, user.id, user.role,
-             `High-value approval (USD ${highValue.amount.toFixed(2)}): Super Admin and ${HIGH_VALUE_SEAT} head both approved — forwarded to Finance`]
-          );
-          return {
-            success: true,
-            status: 'PENDING_FINAL_FINANCE',
-            highValue: true,
-            message: `High-value request approved by both the Super Admin and the ${HIGH_VALUE_SEAT} head. Forwarded to Finance for final approval.`
-          };
-        }
-
-        const waitingOn = [];
-        if (!adminApproved) waitingOn.push('Super Admin');
-        if (!seatApproved) waitingOn.push(`${HIGH_VALUE_SEAT} head of department`);
-        return {
-          success: true,
-          status: 'PENDING_COMMITTEE',
-          highValue: true,
-          votedCount: (adminApproved ? 1 : 0) + (seatApproved ? 1 : 0),
-          totalRequired: 2,
-          message: `Vote recorded. High-value request (USD ${highValue.amount.toFixed(2)}) still awaiting: ${waitingOn.join(' and ')}.`
-        };
-      }
-
-      // For ADMIN override — immediately advance
-      if (user.role === ROLES.ADMIN && decision === 'APPROVED') {
+      const advance = async (logComment, resultMessage) => {
         await conn.execute(
-          `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
-          [requestId]
+          `UPDATE proc_requests SET status=?, committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
+          [onwardStatus, requestId]
         );
         await conn.execute(
           `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-           VALUES (?, ?, ?, 'COMMITTEE_APPROVED', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', ?)`,
-          [requestId, user.id, user.role, 'Admin override — forwarded to finance for final approval']
-        );
-        return { success: true, status: 'PENDING_FINAL_FINANCE', message: 'Admin override approved. Forwarded to Finance for final approval.' };
-      }
-
-      // 3 total APPROVED votes reached → advance to final finance
-      if (totalApproved >= 3) {
-        await conn.execute(
-          `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
-          [requestId]
-        );
-        await conn.execute(
-          `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-           VALUES (?, ?, ?, 'COMMITTEE_APPROVED', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', ?)`,
+           VALUES (?, ?, ?, ?, 'PENDING_COMMITTEE', ?, ?)`,
           [requestId, user.id, user.role,
-            '3 Procurement Committee votes received — forwarded to Finance for final approval']
+           highValue.isHighValue ? 'COMMITTEE_RECOMMENDED' : 'COMMITTEE_APPROVED',
+           onwardStatus, logComment]
         );
-        return {
-          success: true,
-          status: 'PENDING_FINAL_FINANCE',
-          message: '3 Procurement Committee approvals received. Request forwarded to Finance for final approval.'
-        };
+        if (highValue.isHighValue) {
+          // Fire-and-forget: a notification failure must not roll back the vote.
+          notificationService.onProcurementHighValuePending(
+            requestId, req.request_code, highValue.amount,
+            req.routing_department_id || req.department_id
+          ).catch(() => {});
+        }
+        return { success: true, status: onwardStatus, highValue: highValue.isHighValue, message: resultMessage };
+      };
+
+      const onwardLabel = highValue.isHighValue
+        ? 'the Super Admin and the owning department Lead/HOP for approval'
+        : 'Finance for final approval';
+
+      // An ADMIN acting at the committee stage carries the committee outright.
+      if (user.role === ROLES.ADMIN && decision === 'APPROVED') {
+        return advance(
+          `Admin override — forwarded to ${onwardLabel}`,
+          `Admin override approved. Forwarded to ${onwardLabel}.`
+        );
       }
 
-      // Fewer than 3 approved — stay at PENDING_COMMITTEE
-      const remaining = 3 - totalApproved;
+      if (totalApproved >= COMMITTEE_APPROVALS_REQUIRED) {
+        return advance(
+          `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee votes received — forwarded to ${onwardLabel}`,
+          highValue.isHighValue
+            ? `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. This request is USD ${highValue.amount.toFixed(2)} — recommended for approval and forwarded to the Super Admin and the owning department Lead/HOP.`
+            : `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. Request forwarded to Finance for final approval.`
+        );
+      }
+
+      // Not enough approvals yet — stay at PENDING_COMMITTEE
+      const remaining = COMMITTEE_APPROVALS_REQUIRED - totalApproved;
       return {
         success: true,
-        status: 'PENDING_COMMITTEE',
+        status: PROC_STATUS.PENDING_COMMITTEE,
+        highValue: highValue.isHighValue,
         votedCount: totalApproved,
-        totalRequired: 3,
+        totalRequired: COMMITTEE_APPROVALS_REQUIRED,
         totalVotes,
         totalRejected,
         message: decision === 'REJECTED'
-          ? `Vote recorded as REJECTED. You may update your vote to Approve when ready. (${totalApproved}/3 approved)`
-          : `Vote recorded (${totalApproved}/3 approved). ${remaining} more approval${remaining > 1 ? 's' : ''} needed.`
+          ? `Vote recorded as REJECTED. You may update your vote to Approve when ready. (${totalApproved}/${COMMITTEE_APPROVALS_REQUIRED} approved)`
+          : `Vote recorded (${totalApproved}/${COMMITTEE_APPROVALS_REQUIRED} approved). ${remaining} more approval${remaining > 1 ? 's' : ''} needed.`
+      };
+    });
+  }
+
+  // ============================================================
+  // HIGH-VALUE DUAL APPROVAL (Super Admin + owning department Lead/HOP)
+  // ============================================================
+
+  /**
+   * Which seat, if any, this user occupies for the given request.
+   * Returns null when the user has no standing to act at this stage.
+   */
+  _highValueSeatFor(user, request) {
+    if (user.role === ROLES.ADMIN) return HV_SEAT.SUPER_ADMIN;
+
+    if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role)) {
+      // Either the Lead or the Head of Programs may fill the department seat —
+      // whichever acts first settles it.
+      const owningDepartmentId = Number(request.routing_department_id || request.department_id);
+      if (owningDepartmentId && Number(user.department_id) === owningDepartmentId) {
+        return HV_SEAT.DEPARTMENT;
+      }
+    }
+    return null;
+  }
+
+  async getHighValueApprovals(requestId) {
+    return query(
+      `SELECT a.*, u.first_name, u.last_name, u.email, d.department_code
+         FROM proc_high_value_approvals a
+         JOIN users u ON u.id = a.approver_id
+         LEFT JOIN departments d ON d.id = a.department_id
+        WHERE a.request_id = ?
+        ORDER BY a.created_at ASC`,
+      [requestId]
+    );
+  }
+
+  /**
+   * Record one of the two parallel high-value approvals.
+   * Both seats must approve before the request reaches Finance; a rejection by
+   * either sends it back to be amended and resubmitted.
+   */
+  async highValueDecision(requestId, decision, user, comments = '') {
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req) throw new Error('Request not found');
+    if (req.status !== PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL) {
+      throw new Error('Request is not pending high-value approval');
+    }
+    if (!['APPROVED', 'REJECTED'].includes(decision)) {
+      throw new Error('Decision must be APPROVED or REJECTED');
+    }
+
+    const seat = this._highValueSeatFor(user, req);
+    if (!seat) {
+      throw new Error(
+        'Only the Super Admin or the Lead/Head of Programs of the department that owns the selected project may approve this request'
+      );
+    }
+    if (decision === 'REJECTED' && !String(comments || '').trim()) {
+      throw new Error('A reason is required when rejecting');
+    }
+
+    return transaction(async (conn) => {
+      await conn.execute(
+        `INSERT INTO proc_high_value_approvals
+           (request_id, seat, approver_id, approver_role, department_id, decision, comments)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           approver_id=VALUES(approver_id), approver_role=VALUES(approver_role),
+           department_id=VALUES(department_id), decision=VALUES(decision),
+           comments=VALUES(comments), updated_at=NOW()`,
+        [requestId, seat, user.id, user.role, user.department_id || null, decision, comments || null]
+      );
+
+      const seatLabel = seat === HV_SEAT.SUPER_ADMIN ? 'Super Admin' : 'Department Lead/HOP';
+
+      // ── Rejection: stop here. The request goes back to be amended. ──────────
+      if (decision === 'REJECTED') {
+        await conn.execute(
+          `UPDATE proc_requests
+              SET status=?, rejection_reason=?, rejected_from_status=?, updated_at=NOW()
+            WHERE id=?`,
+          [PROC_STATUS.REJECTED, comments, PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL, requestId]
+        );
+        await conn.execute(
+          `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+           VALUES (?, ?, ?, 'HIGH_VALUE_REJECTED', ?, 'REJECTED', ?)`,
+          [requestId, user.id, user.role, PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
+           `${seatLabel} rejected: ${comments}`]
+        );
+        return {
+          success: true,
+          status: PROC_STATUS.REJECTED,
+          message: 'Request rejected and returned for amendment. Once corrected and resubmitted it will come back to this approval stage.'
+        };
+      }
+
+      // ── Approval: advance only when BOTH seats have approved. ──────────────
+      const [rows] = await conn.execute(
+        `SELECT seat, decision FROM proc_high_value_approvals WHERE request_id = ?`,
+        [requestId]
+      );
+      const approvedSeats = new Set(rows.filter(r => r.decision === 'APPROVED').map(r => r.seat));
+      const bothApproved = approvedSeats.has(HV_SEAT.SUPER_ADMIN) && approvedSeats.has(HV_SEAT.DEPARTMENT);
+
+      await conn.execute(
+        `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+         VALUES (?, ?, ?, 'HIGH_VALUE_APPROVED', ?, ?, ?)`,
+        [requestId, user.id, user.role, PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
+         bothApproved ? PROC_STATUS.PENDING_FINAL_FINANCE : PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
+         `${seatLabel} approved${comments ? `: ${comments}` : ''}`]
+      );
+
+      if (!bothApproved) {
+        const waitingOn = approvedSeats.has(HV_SEAT.SUPER_ADMIN)
+          ? 'the department Lead/Head of Programs'
+          : 'the Super Admin';
+        return {
+          success: true,
+          status: PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
+          approvedSeats: [...approvedSeats],
+          message: `Approval recorded. Still awaiting ${waitingOn}.`
+        };
+      }
+
+      await conn.execute(
+        `UPDATE proc_requests SET status=?, updated_at=NOW() WHERE id=?`,
+        [PROC_STATUS.PENDING_FINAL_FINANCE, requestId]
+      );
+      return {
+        success: true,
+        status: PROC_STATUS.PENDING_FINAL_FINANCE,
+        approvedSeats: [...approvedSeats],
+        message: 'Both the Super Admin and the department Lead/HOP have approved. Forwarded to Finance for final approval.'
       };
     });
   }
@@ -1375,9 +1507,9 @@ class ProcurementService {
         params.push(user.department_id, user.department_id);
       }
     } else if (user.role === ROLES.PROCUREMENT_OFFICER) {
-      requestFilter = "WHERE pr.status IN ('PENDING_PROCUREMENT','PENDING_COMMITTEE','PENDING_FINAL_FINANCE','COMPLETED')";
+      requestFilter = "WHERE pr.status IN ('PENDING_PROCUREMENT','PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_FINAL_FINANCE','COMPLETED')";
     } else if (user.role === ROLES.PROCUREMENT_COMMITTEE) {
-      requestFilter = "WHERE pr.status IN ('PENDING_COMMITTEE','COMPLETED')";
+      requestFilter = "WHERE pr.status IN ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','COMPLETED')";
     } else {
       requestFilter = 'WHERE 1=1';
     }

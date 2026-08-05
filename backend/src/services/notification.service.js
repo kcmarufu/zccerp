@@ -261,6 +261,34 @@ class NotificationService {
     }
   }
 
+  /**
+   * A high-value procurement request has been recommended by the committee and
+   * now needs the Super Admin and the owning department's Lead/HOP to approve.
+   * Both are notified at once — they approve independently, in either order.
+   */
+  async onProcurementHighValuePending(requestId, requestCode, amount, owningDepartmentId) {
+    const link = `/procurement/requests/${requestId}`;
+    const title = `High-Value Approval Needed: ${requestCode}`;
+    const message = `The Procurement Committee has recommended this USD ${Number(amount || 0).toFixed(2)} request. ` +
+                    `It needs approval from both the Super Admin and the owning department's Lead/Head of Programs.`;
+    try {
+      await this._notifyByRole(['ADMIN'], title, message, 'approval_pending', 'proc_request', requestId, link);
+      if (owningDepartmentId) {
+        const deptApprovers = await query(
+          `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id
+            WHERE r.role_name IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS')
+              AND u.department_id = ? AND u.is_active = 1`,
+          [owningDepartmentId]
+        );
+        for (const u of deptApprovers) {
+          await this._create(u.id, title, message, 'approval_pending', 'proc_request', requestId, link);
+        }
+      }
+    } catch (err) {
+      console.error('[NotificationService] onProcurementHighValuePending error:', err.message);
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────
   // QUERY METHODS
   // ─────────────────────────────────────────────────────────────────

@@ -197,6 +197,10 @@ router.post('/procurement/requests/:id/finance-approve', authenticateToken, proc
 router.post('/procurement/requests/:id/submit-committee', authenticateToken, procurementController.submitToCommittee.bind(procurementController));
 router.post('/procurement/requests/:id/resubmit-committee', authenticateToken, procurementController.resubmitToCommittee.bind(procurementController));
 router.post('/procurement/requests/:id/committee-decision', authenticateToken, procurementController.committeeDecision.bind(procurementController));
+// High-value requests (selected quotation >= USD 5,000) need the Super Admin and
+// the owning department's Lead/HOP to approve, independently, before Finance.
+router.post('/procurement/requests/:id/high-value-decision', authenticateToken, procurementController.highValueDecision.bind(procurementController));
+router.get('/procurement/requests/:id/high-value-approvals', authenticateToken, procurementController.getHighValueApprovals.bind(procurementController));
 // Payments are often settled in batches, so final approval accepts several POP
 // documents at once and further batches can be attached afterwards.
 router.post('/procurement/requests/:id/final-approve', authenticateToken, uploadMultiple, handleUploadError, procurementController.finalFinanceApproval.bind(procurementController));

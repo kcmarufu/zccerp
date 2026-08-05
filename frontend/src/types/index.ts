@@ -787,6 +787,9 @@ export type ProcurementStatus =
   | 'PENDING_FINANCE_APPROVAL'
   | 'PENDING_PROCUREMENT'
   | 'PENDING_COMMITTEE'
+  // Selected quotation >= USD 5,000: recommended by the committee, awaiting the
+  // Super Admin and the owning department's Lead/HOP (both required).
+  | 'PENDING_HIGH_VALUE_APPROVAL'
   | 'PENDING_FINAL_FINANCE'
   | 'COMPLETED'
   | 'REJECTED'

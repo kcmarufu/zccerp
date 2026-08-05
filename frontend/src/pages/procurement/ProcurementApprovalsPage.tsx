@@ -48,6 +48,7 @@ import {
   approveFinanceLevel,
   rejectProcurementRequest,
   finalFinanceApproval,
+  highValueDecision,
   committeeDecision,
   getCommitteeVotes,
   submitToCommittee,
@@ -69,7 +70,8 @@ type ActionType =
   | 'final_finance'
   | 'reject'
   | 'committee'
-  | 'submit_committee';
+  | 'submit_committee'
+  | 'high_value';
 
 interface ActionState {
   type: ActionType;
@@ -88,6 +90,7 @@ const getRoleTabs = (role: string, isAdminHr: boolean = false) => {
         // Admin/HR LEAD/HOD: dept approval + full org-wide procurement view
         return [
           { label: 'Awaiting My Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
+          { label: 'High-Value Approval',   status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false },
           { label: 'Procurement Queue',     status: 'PENDING_PROCUREMENT',   actedOn: false },
           { label: 'At Committee',          status: 'PENDING_COMMITTEE',     actedOn: false },
           { label: 'Final Finance',         status: 'PENDING_FINAL_FINANCE', actedOn: false },
@@ -96,6 +99,7 @@ const getRoleTabs = (role: string, isAdminHr: boolean = false) => {
       }
       return [
         { label: 'Awaiting My Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
+        { label: 'High-Value Approval', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false },
         { label: 'All Records', status: '', actedOn: true }
       ];
     case 'FINANCE_CLERK':
@@ -111,11 +115,13 @@ const getRoleTabs = (role: string, isAdminHr: boolean = false) => {
     case 'PROCUREMENT_COMMITTEE':
       return [
         { label: 'Committee Review', status: 'PENDING_COMMITTEE', actedOn: false },
+        { label: 'Recommended', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false },
         { label: 'All Records', status: '', actedOn: true }
       ];
     case 'ADMIN':
       return [
         { label: 'Dept Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
+        { label: 'High-Value Approval', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false },
         { label: 'Procurement', status: 'PENDING_PROCUREMENT', actedOn: false },
         { label: 'Committee', status: 'PENDING_COMMITTEE', actedOn: false },
         { label: 'Final Finance', status: 'PENDING_FINAL_FINANCE', actedOn: false },
@@ -156,6 +162,7 @@ const ProcurementApprovalsPage: React.FC = () => {
   const [action, setAction] = useState<ActionState | null>(null);
   const [comments, setComments] = useState('');
   const [committeeDecisionVal, setCommitteeDecisionVal] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
+  const [highValueDecisionVal, setHighValueDecisionVal] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
   const [selectedQuotId, setSelectedQuotId] = useState<number | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   // Payments are often settled in batches, so several POP documents may be
@@ -325,6 +332,16 @@ const ProcurementApprovalsPage: React.FC = () => {
           await submitToCommittee(id, selectedQuotId ?? undefined, comments);
           toast.success('Submitted to Procurement Committee');
           break;
+        case 'high_value': {
+          if (highValueDecisionVal === 'REJECTED' && !comments.trim()) {
+            toast.error('A reason is required when rejecting');
+            setActionLoading(false);
+            return;
+          }
+          const hv = await highValueDecision(id, highValueDecisionVal, comments);
+          toast.success(hv.message);
+          break;
+        }
       }
       setAction(null);
       setComments('');
@@ -434,6 +451,21 @@ const ProcurementApprovalsPage: React.FC = () => {
       }
     }
 
+    // The Lead/HOP of the department that owns the project fills one of the two
+    // seats on a high-value request. The server verifies the department match.
+    if (['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS'].includes(role) && req.status === 'PENDING_HIGH_VALUE_APPROVAL') {
+      btns.push(
+        <Button key="hv-approve" size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
+          onClick={() => { setAction({ type: 'high_value', request: req }); setComments(''); setHighValueDecisionVal('APPROVED'); }}>
+          Approve
+        </Button>,
+        <Button key="hv-reject" size="small" variant="outlined" color="error" startIcon={<RejectIcon />}
+          onClick={() => { setAction({ type: 'high_value', request: req }); setComments(''); setHighValueDecisionVal('REJECTED'); }}>
+          Reject
+        </Button>
+      );
+    }
+
     if (role === 'PROCUREMENT_COMMITTEE') {
       if (req.status === 'PENDING_COMMITTEE') {
         btns.push(
@@ -465,6 +497,14 @@ const ProcurementApprovalsPage: React.FC = () => {
         btns.push(
           <Button key="decision" size="small" variant="contained" color="primary" startIcon={<CommitteeIcon />}
             onClick={() => { setAction({ type: 'committee', request: req }); setComments(''); setCommitteeDecisionVal('APPROVED'); }}>Record Decision</Button>
+        );
+      } else if (req.status === 'PENDING_HIGH_VALUE_APPROVAL') {
+        // Admin fills the Super Admin seat on a high-value request.
+        btns.push(
+          <Button key="hv-approve" size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
+            onClick={() => { setAction({ type: 'high_value', request: req }); setComments(''); setHighValueDecisionVal('APPROVED'); }}>Approve</Button>,
+          <Button key="hv-reject" size="small" variant="outlined" color="error" startIcon={<RejectIcon />}
+            onClick={() => { setAction({ type: 'high_value', request: req }); setComments(''); setHighValueDecisionVal('REJECTED'); }}>Reject</Button>
         );
       }
     }
@@ -717,6 +757,7 @@ const ProcurementApprovalsPage: React.FC = () => {
           {action?.type === 'reject' && 'Reject Request'}
           {action?.type === 'submit_committee' && 'Submit to Procurement Committee'}
           {action?.type === 'committee' && 'Record Committee Vote'}
+          {action?.type === 'high_value' && 'High-Value Approval'}
         </DialogTitle>
         <DialogContent>
           <Box pt={1}>
@@ -775,11 +816,30 @@ const ProcurementApprovalsPage: React.FC = () => {
                       );
                     })()}
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                      {committeeVotes.filter((v: any) => v.vote === 'APPROVED').length}/3 approved — 3 total approvals needed to advance.
+                      {committeeVotes.filter((v: any) => v.vote === 'APPROVED').length}/3 approved — 3 total approvals needed to advance.{Number((action?.request as any)?.is_high_value) === 1 ? ' This request is high-value: the committee recommends, then the Super Admin and the owning department Lead/HOP must both approve.' : ''}
                     </Typography>
                   </Box>
                 )}
               </Box>
+            )}
+
+            {action?.type === 'high_value' && (
+              <>
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  The Procurement Committee has <strong>recommended</strong> this request.
+                  It proceeds to Finance only once <strong>both</strong> the Super Admin and the
+                  Lead/Head of Programs of the owning department have approved.
+                  A rejection by either returns it to be amended and resubmitted.
+                </Alert>
+                <TextField
+                  select fullWidth label="Your Decision" value={highValueDecisionVal}
+                  onChange={e => setHighValueDecisionVal(e.target.value as any)}
+                  sx={{ mb: 2 }}
+                >
+                  <MenuItem value="APPROVED">Approve</MenuItem>
+                  <MenuItem value="REJECTED">Reject</MenuItem>
+                </TextField>
+              </>
             )}
 
             {action?.type === 'committee' && (
@@ -847,7 +907,12 @@ const ProcurementApprovalsPage: React.FC = () => {
 
             <TextField
               fullWidth multiline rows={3}
-              label={action?.type === 'reject' ? 'Rejection Reason *' : 'Comments (optional)'}
+              label={
+                action?.type === 'reject' ||
+                (action?.type === 'high_value' && highValueDecisionVal === 'REJECTED')
+                  ? 'Rejection Reason *'
+                  : 'Comments (optional)'
+              }
               value={comments}
               onChange={e => setComments(e.target.value)}
             />
