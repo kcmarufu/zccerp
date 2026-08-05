@@ -41,7 +41,7 @@ import {
   TableChart as ExcelIcon,
   ExpandMore as LoadMoreIcon
 } from '@mui/icons-material';
-import { format } from 'date-fns';
+import { format } from '../../utils/datetime';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 

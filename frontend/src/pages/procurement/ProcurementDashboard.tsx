@@ -28,7 +28,7 @@ import {
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { format } from 'date-fns';
+import { format } from '../../utils/datetime';
 import { useAuthStore } from '../../store/authStore';
 import { getProcurementDashboard, PROC_STATUS_LABELS, PROC_STATUS_COLORS } from '../../services/procurementService';
 import { ProcurementStatus } from '../../types';

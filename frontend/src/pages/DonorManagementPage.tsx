@@ -56,7 +56,7 @@ import {
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import { toast } from 'react-toastify';
-import { format } from 'date-fns';
+import { format } from '../utils/datetime';
 import donorService, { Donor, CreateDonorDto, DonorStats } from '../services/donorService';
 import projectService, { CreateProjectPayload, UpdateProjectPayload } from '../services/projectService';
 import { Project } from '../types';

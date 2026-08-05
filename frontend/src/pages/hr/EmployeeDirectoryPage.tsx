@@ -21,6 +21,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { toast } from 'react-toastify';
 import { getEmployees, createEmployee, updateEmployee, getEmployee } from '../../services/hrService';
 import { HREmployee, EmploymentStatus, ContractType } from '../../types';
+import { formatDate } from '../../utils/datetime';
 
 const STATUS_COLORS: Record<string, 'success' | 'warning' | 'error' | 'info' | 'default'> = {
   ACTIVE: 'success', ON_LEAVE: 'warning', SUSPENDED: 'error',
@@ -366,7 +367,7 @@ const EmployeeDirectoryPage: React.FC = () => {
                   <Grid item xs={6} md={3}><Typography variant="caption" color="text.secondary">Department</Typography><Typography>{viewEmployee.department_name || '-'}</Typography></Grid>
                   <Grid item xs={6} md={3}><Typography variant="caption" color="text.secondary">Status</Typography><Box><Chip label={viewEmployee.employment_status} size="small" color={STATUS_COLORS[viewEmployee.employment_status] || 'default'} /></Box></Grid>
                   <Grid item xs={6} md={3}><Typography variant="caption" color="text.secondary">Contract</Typography><Typography>{viewEmployee.contract_type?.replace('_', ' ')}</Typography></Grid>
-                  <Grid item xs={6} md={3}><Typography variant="caption" color="text.secondary">Hire Date</Typography><Typography>{viewEmployee.hire_date ? new Date(viewEmployee.hire_date).toLocaleDateString() : '-'}</Typography></Grid>
+                  <Grid item xs={6} md={3}><Typography variant="caption" color="text.secondary">Hire Date</Typography><Typography>{formatDate(viewEmployee.hire_date)}</Typography></Grid>
                   <Grid item xs={6} md={3}><Typography variant="caption" color="text.secondary">Email</Typography><Typography>{viewEmployee.personal_email || '-'}</Typography></Grid>
                   <Grid item xs={6} md={3}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography>{viewEmployee.phone_number || '-'}</Typography></Grid>
                   <Grid item xs={6} md={3}><Typography variant="caption" color="text.secondary">Supervisor</Typography><Typography>{viewEmployee.supervisor_name || '-'}</Typography></Grid>
@@ -390,8 +391,8 @@ const EmployeeDirectoryPage: React.FC = () => {
                     ) : (viewEmployee.contracts || []).map((c) => (
                       <TableRow key={c.id}>
                         <TableCell>{c.contract_type?.replace('_', ' ')}</TableCell>
-                        <TableCell>{new Date(c.start_date).toLocaleDateString()}</TableCell>
-                        <TableCell>{c.end_date ? new Date(c.end_date).toLocaleDateString() : 'Ongoing'}</TableCell>
+                        <TableCell>{formatDate(c.start_date)}</TableCell>
+                        <TableCell>{c.end_date ? formatDate(c.end_date) : 'Ongoing'}</TableCell>
                         <TableCell>{c.currency} {c.salary_amount?.toLocaleString()}</TableCell>
                         <TableCell><Chip label={c.status} size="small" /></TableCell>
                       </TableRow>

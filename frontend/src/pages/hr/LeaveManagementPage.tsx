@@ -37,14 +37,15 @@ import {
 } from '../../services/hrService';
 import { HRLeaveRequest, HRLeaveType, HRLeaveBalance, LeaveStatus } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate, formatDateTime } from '../../utils/datetime';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 const fmt = (d: string) =>
-  new Date(d).toLocaleDateString('en-ZW', { day: '2-digit', month: 'short', year: 'numeric' });
+  formatDate(d);
 
 const fmtDt = (d: string) =>
-  new Date(d).toLocaleDateString('en-ZW', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  formatDateTime(d);
 
 const STATUS_META: Record<LeaveStatus, { label: string; color: 'warning' | 'info' | 'success' | 'error' | 'default' }> = {
   PENDING:       { label: 'Awaiting Dept. Approval', color: 'warning' },

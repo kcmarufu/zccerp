@@ -5,7 +5,7 @@
  */
 
 import React, { Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastContainer } from 'react-toastify';
@@ -128,6 +128,17 @@ const ADMIN_ROLES: UserRole[] = ['ADMIN'];
 const FINANCE_MANAGERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'];
 const ALL_FINANCE_ROLES: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'];
 
+/**
+ * The request form is reachable from two routes and for any request id. React
+ * reuses a component instance when only the route params change, so without a
+ * key the form would carry the previous request's state — including its travel
+ * claim — into the next one. Keying on the id guarantees a fresh form.
+ */
+const KeyedRequestForm: React.FC = () => {
+  const { requestId } = useParams<{ requestId: string }>();
+  return <RequestForm key={requestId || 'new'} />;
+};
+
 const App: React.FC = () => {
   return (
     <QueryClientProvider client={queryClient}>
@@ -148,8 +159,8 @@ const App: React.FC = () => {
                       <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
                       <Route path="/finance/requests" element={<ProtectedRoute requiredPermission="view_own_requests"><RequestsListPage /></ProtectedRoute>} />
-                      <Route path="/finance/requests/create" element={<ProtectedRoute requiredPermission="create_request"><RequestForm /></ProtectedRoute>} />
-                      <Route path="/finance/requests/:requestId/edit" element={<ProtectedRoute requiredPermission="create_request"><RequestForm /></ProtectedRoute>} />
+                      <Route path="/finance/requests/create" element={<ProtectedRoute requiredPermission="create_request"><KeyedRequestForm /></ProtectedRoute>} />
+                      <Route path="/finance/requests/:requestId/edit" element={<ProtectedRoute requiredPermission="create_request"><KeyedRequestForm /></ProtectedRoute>} />
                       <Route path="/finance/requests/:requestId" element={<RequestDetailPage />} />
                       <Route path="/finance/approvals" element={<ProtectedRoute allowedRoles={APPROVER_ROLES}><ApprovalsPage /></ProtectedRoute>} />
                       <Route path="/finance/reconciliation" element={<ReconciliationPage />} />

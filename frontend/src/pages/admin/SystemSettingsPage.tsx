@@ -21,6 +21,7 @@ import {
 import { toast } from 'react-toastify';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
+import { formatTime } from '../../utils/datetime';
 
 interface SystemSettings {
   org_name: string;
@@ -110,7 +111,7 @@ const SystemSettingsPage: React.FC = () => {
       const res = await api.put('/admin/settings', settings);
       if (res.data.success) {
         toast.success('Settings saved successfully');
-        setLastSaved(new Date().toLocaleTimeString());
+        setLastSaved(formatTime(new Date()));
       } else {
         toast.error(res.data.error || 'Failed to save settings');
       }

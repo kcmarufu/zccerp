@@ -19,6 +19,7 @@ import { toast } from 'react-toastify';
 import { getExitClearances, initiateExitClearance, updateExitClearance } from '../../services/hrService';
 import { HRExitClearance } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate } from '../../utils/datetime';
 
 const STATUS_COLORS: Record<string, 'warning' | 'info' | 'success' | 'error' | 'default'> = {
   INITIATED: 'warning', IN_PROGRESS: 'info', COMPLETED: 'success', CANCELLED: 'error'
@@ -181,7 +182,7 @@ const ExitClearancePage: React.FC = () => {
                       <Chip label={(c as any).exit_type?.replace(/_/g, ' ')} size="small" variant="outlined" />
                     </TableCell>
                     <TableCell>
-                      {(c as any).last_working_date ? new Date((c as any).last_working_date).toLocaleDateString() : '-'}
+                      {formatDate((c as any).last_working_date)}
                     </TableCell>
                     <TableCell align="center">
                       <CheckIcon fontSize="small" color={(c as any).it_cleared ? 'success' : 'disabled'} />
@@ -391,7 +392,7 @@ const ExitClearancePage: React.FC = () => {
                 </Grid>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Last Working Day</Typography>
-                  <Typography>{(viewClearance as any).last_working_date ? new Date((viewClearance as any).last_working_date).toLocaleDateString() : '-'}</Typography>
+                  <Typography>{formatDate((viewClearance as any).last_working_date)}</Typography>
                 </Grid>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Status</Typography>

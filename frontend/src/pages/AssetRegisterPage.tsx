@@ -23,6 +23,7 @@ import assetService, {
 } from '../services/assetService';
 import donorService from '../services/donorService';
 import api from '../services/api';
+import { formatDate } from '../utils/datetime';
 
 // ============================================================================
 // Constants
@@ -349,7 +350,7 @@ const AssetRegisterPage: React.FC = () => {
   };
 
   const fmtCurrency = (val: number) => `$${Number(val || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
-  const fmtDate = (d: string | undefined | null) => d ? new Date(d).toLocaleDateString() : '-';
+  const fmtDate = (d: string | undefined | null) => formatDate(d);
 
   // ========================================================================
   // Render

@@ -19,6 +19,7 @@ import { toast } from 'react-toastify';
 import { getDisciplinaryRecords, createDisciplinaryRecord } from '../../services/hrService';
 import { HRDisciplinaryRecord } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate } from '../../utils/datetime';
 
 const STATUS_COLORS: Record<string, 'warning' | 'info' | 'success' | 'error' | 'default'> = {
   OPEN: 'warning', INVESTIGATING: 'info', RESOLVED: 'success', CLOSED: 'default', APPEALED: 'error'
@@ -133,7 +134,7 @@ const DisciplinaryRecordsPage: React.FC = () => {
                       <Typography variant="body2" fontWeight={600}>{rec.employee_name}</Typography>
                       <Typography variant="caption" color="text.secondary">{rec.employee_number}</Typography>
                     </TableCell>
-                    <TableCell>{new Date(rec.incident_date).toLocaleDateString()}</TableCell>
+                    <TableCell>{formatDate(rec.incident_date)}</TableCell>
                     <TableCell>
                       <Chip label={(rec.action_type || (rec as any).incident_type || '').replace(/_/g, ' ')} size="small" variant="outlined" />
                     </TableCell>
@@ -275,7 +276,7 @@ const DisciplinaryRecordsPage: React.FC = () => {
               </Grid>
               <Grid item xs={6}>
                 <Typography variant="caption" color="text.secondary">Incident Date</Typography>
-                <Typography>{new Date(viewRecord.incident_date).toLocaleDateString()}</Typography>
+                <Typography>{formatDate(viewRecord.incident_date)}</Typography>
               </Grid>
               <Grid item xs={6}>
                 <Typography variant="caption" color="text.secondary">Type</Typography>
@@ -304,7 +305,7 @@ const DisciplinaryRecordsPage: React.FC = () => {
               {viewRecord.follow_up_date && (
                 <Grid item xs={12}>
                   <Typography variant="caption" color="text.secondary">Follow-up Date</Typography>
-                  <Typography>{new Date(viewRecord.follow_up_date).toLocaleDateString()}</Typography>
+                  <Typography>{formatDate(viewRecord.follow_up_date)}</Typography>
                 </Grid>
               )}
               {viewRecord.notes && (

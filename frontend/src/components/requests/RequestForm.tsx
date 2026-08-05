@@ -64,6 +64,7 @@ import perDiemService from '../../services/perDiemService';
 import { reconciliationService } from '../../services/reconciliationService';
 import TravelClaimSection from './TravelClaimSection';
 import { useAuthStore } from '../../store/authStore';
+import { toDateInputValue, toTimeInputValue } from '../../utils/datetime';
 
 const generateId = () => {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
@@ -120,6 +121,24 @@ const defaultItem: RequestFormItem = {
   notes: ''
 };
 
+/** A pristine claim, used for new requests and to clear state between requests. */
+const emptyPerDiemClaim = (): PerDiemClaimFormData => ({
+  full_name: '',
+  designation: '',
+  project_id: null,
+  strategic_focus: '',
+  budget_line_id: null,
+  less_outstanding_advance: 0,
+  trip_items: [],
+  cost_distribution: [],
+});
+
+/** DECIMAL columns arrive as strings; coerce before any arithmetic. */
+const toNumber = (v: unknown): number => {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : 0;
+};
+
 const RequestForm: React.FC = () => {
   const navigate = useNavigate();
   const { requestId } = useParams<{ requestId: string }>();
@@ -146,16 +165,7 @@ const RequestForm: React.FC = () => {
   // ── Per Diem Claim state ──────────────────────────────────────────────────
   const [hasPerDiemClaim, setHasPerDiemClaim] = useState(false);
   const [perDiemRates, setPerDiemRates] = useState<PerDiemRates>({ breakfast: 10, lunch: 10, dinner: 10, overnight: 70, accommodation: 100 });
-  const [perDiemClaimData, setPerDiemClaimData] = useState<PerDiemClaimFormData>({
-    full_name: '',
-    designation: '',
-    project_id: null,
-    strategic_focus: '',
-    budget_line_id: null,
-    less_outstanding_advance: 0,
-    trip_items: [],
-    cost_distribution: [],
-  });
+  const [perDiemClaimData, setPerDiemClaimData] = useState<PerDiemClaimFormData>(emptyPerDiemClaim());
 
   const {
     control,
@@ -288,6 +298,10 @@ const RequestForm: React.FC = () => {
   // Preload existing request when in edit mode.
   useEffect(() => {
     if (!isEditMode || !requestId) {
+      // Composing a brand-new request: start from a clean claim so nothing
+      // carries over from a request that was open a moment ago.
+      setHasPerDiemClaim(false);
+      setPerDiemClaimData(emptyPerDiemClaim());
       return;
     }
 
@@ -350,7 +364,17 @@ const RequestForm: React.FC = () => {
           if (request.project_id) pendingProjectId.current = Number(request.project_id);
         }
 
-        // Load existing per diem claim if present
+        // Load existing per diem claim if present.
+        //
+        // Values coming back from the API need normalising before they can go
+        // into the form controls:
+        //   - DATE columns arrive as ISO timestamps, but <input type="date">
+        //     only accepts 'YYYY-MM-DD' and renders blank for anything else —
+        //     which is how trip dates vanished when a rejected request was
+        //     edited and resubmitted.
+        //   - TIME columns arrive as 'HH:MM:SS'; <input type="time"> wants 'HH:MM'.
+        //   - DECIMAL columns arrive as strings, which then concatenate instead
+        //     of adding when the totals are recalculated.
         if (request.has_per_diem_claim) {
           setHasPerDiemClaim(true);
           try {
@@ -362,12 +386,37 @@ const RequestForm: React.FC = () => {
                 project_id: claim.project_id,
                 strategic_focus: claim.strategic_focus || '',
                 budget_line_id: claim.budget_line_id,
-                less_outstanding_advance: claim.less_outstanding_advance,
-                trip_items: claim.trip_items.map(t => ({ ...t, id: String(t.id) })),
-                cost_distribution: claim.cost_distribution.map(d => ({ ...d, id: String(d.id) })),
+                less_outstanding_advance: toNumber(claim.less_outstanding_advance),
+                trip_items: claim.trip_items.map(t => ({
+                  ...t,
+                  id: String(t.id),
+                  trip_date: toDateInputValue(t.trip_date),
+                  return_date: toDateInputValue(t.return_date),
+                  departure_time: toTimeInputValue(t.departure_time),
+                  arrival_time: toTimeInputValue(t.arrival_time),
+                  recipient_name: t.recipient_name || (t as any).recipient_display_name || '',
+                  rate_breakfast: toNumber(t.rate_breakfast),
+                  rate_lunch: toNumber(t.rate_lunch),
+                  rate_dinner: toNumber(t.rate_dinner),
+                  rate_overnight: toNumber(t.rate_overnight),
+                  rate_accommodation: toNumber(t.rate_accommodation),
+                  line_total: toNumber(t.line_total),
+                })),
+                cost_distribution: claim.cost_distribution.map(d => ({
+                  ...d,
+                  id: String(d.id),
+                  amount: toNumber(d.amount),
+                })),
               });
             }
           } catch (e) { /* claim may not exist yet */ }
+        } else {
+          // This request has no claim. Clear any claim still held in state from a
+          // previously opened request — the form component is reused across
+          // routes, so without this the previous requester's trip rows would
+          // reappear here and be saved onto someone else's request.
+          setHasPerDiemClaim(false);
+          setPerDiemClaimData(emptyPerDiemClaim());
         }
       } catch (error) {
         toast.error('Failed to load request for editing');

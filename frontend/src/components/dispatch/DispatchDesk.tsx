@@ -47,7 +47,7 @@ import {
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import { toast } from 'react-toastify';
-import { format } from 'date-fns';
+import { format, formatDate } from '../../utils/datetime';
 
 import { Request, Department } from '../../types';
 import { requestService } from '../../services/requestService';
@@ -356,7 +356,7 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
           ['B. TRIP ITEMS'],
           ['Date', 'From', 'To', 'Departure', 'Arrival', 'Purpose', 'Breakfast ($)', 'Lunch ($)', 'Dinner ($)', 'Out of Pocket ($)', 'Accommodation ($)', 'Line Total ($)'],
           ...(cl.trip_items || []).map((t: any) => [
-            t.trip_date ? new Date(t.trip_date).toLocaleDateString('en-GB') : '',
+            formatDate(t.trip_date),
             t.from_location || '', t.to_location || '', t.departure_time || '', t.arrival_time || '', t.purpose || '',
             Number(t.rate_breakfast || 0).toFixed(2), Number(t.rate_lunch || 0).toFixed(2),
             Number(t.rate_dinner || 0).toFixed(2), Number(t.rate_overnight || 0).toFixed(2),
@@ -368,7 +368,7 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
           ['Total Claimed ($)', Number(cl.total_claimed || 0).toFixed(2)],
           ['Less Outstanding Advance ($)', Number(cl.less_outstanding_advance || 0).toFixed(2)],
           [Number(cl.amount_payable) >= 0 ? 'Amount Payable ($)' : 'Surplus to Refund ($)', Math.abs(Number(cl.amount_payable || 0)).toFixed(2)],
-          ...(cl.advance_reconciliation_due ? [['Reconciliation Due', new Date(cl.advance_reconciliation_due).toLocaleDateString('en-GB')]] : []),
+          ...(cl.advance_reconciliation_due ? [['Reconciliation Due', formatDate(cl.advance_reconciliation_due)]] : []),
           ...((cl.cost_distribution || []).length > 0 ? [
             [], ['D. COST DISTRIBUTION'],
             ['Account Name', 'Account Code', 'Partner / Project', 'Amount ($)'],

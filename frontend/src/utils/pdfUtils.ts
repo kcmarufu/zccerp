@@ -4,6 +4,7 @@
  * without opening a print dialog.
  */
 import html2pdf from 'html2pdf.js';
+import { formatDate, formatDateTime, formatClock } from './datetime';
 
 /** Build a full travel-claim page HTML block (starts with a page-break div). */
 export const buildTravelClaimPageHTML = (claim: any, requestCode: string): string => {
@@ -12,13 +13,13 @@ export const buildTravelClaimPageHTML = (claim: any, requestCode: string): strin
 
   const tripRows = (claim.trip_items || []).map((t: any, _i: number) => `
     <tr>
-      <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0;white-space:nowrap">${t.trip_date ? new Date(t.trip_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—'}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0;white-space:nowrap">${t.return_date ? new Date(t.return_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—'}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0;white-space:nowrap">${formatDate(t.trip_date, { omitYear: true })}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0;white-space:nowrap">${formatDate(t.return_date, { omitYear: true })}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0">${t.recipient_display_name || t.recipient_name || claim.full_name || '—'}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0">${t.from_location || '—'}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0">${t.to_location || '—'}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0">${t.departure_time || '—'}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0">${t.arrival_time || '—'}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0">${formatClock(t.departure_time)}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0">${formatClock(t.arrival_time)}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0;max-width:130px">${t.purpose || '—'}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0;text-align:right">${Number(t.rate_breakfast     || 0) > 0 ? fmtAmt(t.rate_breakfast)     : '—'}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e0e0e0;text-align:right">${Number(t.rate_lunch         || 0) > 0 ? fmtAmt(t.rate_lunch)         : '—'}</td>
@@ -46,7 +47,7 @@ export const buildTravelClaimPageHTML = (claim: any, requestCode: string): strin
       <div style="font-size:15px;font-weight:bold;margin-top:2px">Travel &amp; Subsistence Claim</div>
       <div style="font-size:10px;color:#555">${requestCode} &nbsp;|&nbsp; Attached to Float Requisition</div>
     </div>
-    <div style="font-size:10px;color:#555">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
+    <div style="font-size:10px;color:#555">${formatDate(new Date())}</div>
   </div>
 
   <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:11px">
@@ -112,7 +113,7 @@ export const buildTravelClaimPageHTML = (claim: any, requestCode: string): strin
         <td colspan="2" style="padding:7px 9px;font-weight:bold;font-size:14px;color:${payable ? '#2e7d32' : '#bf360c'}">${fmtAmt(Math.abs(Number(claim.amount_payable || 0)))}</td>
         <td colspan="2" style="padding:7px 9px;font-weight:bold;color:${payable ? '#2e7d32' : '#bf360c'}">${payable ? 'Amount Payable to Employee' : 'Surplus to Refund'}</td>
       </tr>
-      ${claim.advance_reconciliation_due ? `<tr><td style="padding:5px 9px;font-weight:bold">Reconciliation Due</td><td colspan="3" style="padding:5px 9px;color:#006064;font-weight:bold">${new Date(claim.advance_reconciliation_due).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td></tr>` : ''}
+      ${claim.advance_reconciliation_due ? `<tr><td style="padding:5px 9px;font-weight:bold">Reconciliation Due</td><td colspan="3" style="padding:5px 9px;color:#006064;font-weight:bold">${formatDate(claim.advance_reconciliation_due)}</td></tr>` : ''}
     </tbody>
   </table>
 
@@ -129,7 +130,7 @@ export const buildTravelClaimPageHTML = (claim: any, requestCode: string): strin
   </table>` : ''}
 
   <div style="margin-top:18px;padding-top:8px;border-top:1px solid #ccc">
-    <div style="font-size:9px;color:#666">ERP Connect - Zimbabwe Council of Churches &nbsp;|&nbsp; CONFIDENTIAL &nbsp;|&nbsp; Generated: ${new Date().toLocaleString('en-GB')}</div>
+    <div style="font-size:9px;color:#666">ERP Connect - Zimbabwe Council of Churches &nbsp;|&nbsp; CONFIDENTIAL &nbsp;|&nbsp; Generated: ${formatDateTime(new Date())}</div>
   </div>
 
 </div>`;
@@ -209,9 +210,7 @@ export const buildPurchaseOrderHTML = (request: any): string => {
   const selectedQuot: any = quotations.find((q: any) => q.is_selected);
   const reqCode = request.request_code;
 
-  const poDate = request.final_finance_approved_at
-    ? new Date(request.final_finance_approved_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-    : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+  const poDate = formatDate(request.final_finance_approved_at || new Date(), { long: true });
 
   const totalAmount = selectedQuot
     ? Number(selectedQuot.total_amount || 0)
@@ -266,7 +265,7 @@ export const buildPurchaseOrderHTML = (request: any): string => {
 <tr class="total-row"><td colspan="6" align="right">GRAND TOTAL:</td><td align="right">$${totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td></tr>
 </tbody></table>
 <div class="page-footer">
-  <div>Generated: ${new Date().toLocaleString('en-GB')} &nbsp;|&nbsp; ERP Connect — Zimbabwe Council of Churches &nbsp;|&nbsp; OFFICIAL DOCUMENT</div>
+  <div>Generated: ${formatDateTime(new Date())} &nbsp;|&nbsp; ERP Connect — Zimbabwe Council of Churches &nbsp;|&nbsp; OFFICIAL DOCUMENT</div>
 </div>
 </body></html>`;
 };

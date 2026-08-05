@@ -23,7 +23,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { format } from '../../utils/datetime';
 import { useAuthStore } from '../../store/authStore';
 import {
   getPurchaseRequests,

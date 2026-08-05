@@ -22,6 +22,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { getHRDashboardStats } from '../../services/hrService';
 import { HRDashboardStats } from '../../types';
+import { formatDate } from '../../utils/datetime';
 
 const HRDashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -159,7 +160,7 @@ const HRDashboardPage: React.FC = () => {
                     </ListItemAvatar>
                     <ListItemText
                       primary={`${emp.first_name} ${emp.last_name}`}
-                      secondary={new Date(emp.date_of_birth).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      secondary={formatDate(emp.date_of_birth, { omitYear: true })}
                     />
                   </ListItem>
                 ))}

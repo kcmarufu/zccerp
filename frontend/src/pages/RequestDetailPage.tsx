@@ -64,6 +64,7 @@ import perDiemService from '../services/perDiemService';
 import { Request, RequestItem, ApprovalLog, RequestStatus, PerDiemClaim } from '../types';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
 import { buildTravelClaimPageHTML } from '../utils/pdfUtils';
+import { formatDate as formatCalendarDate, formatDateTime } from '../utils/datetime';
 import { formatRoleLabel } from '../utils/roleUtils';
 import * as XLSX from 'xlsx';
 
@@ -154,7 +155,12 @@ const RequestDetailPage: React.FC = () => {
           try {
             const claim = await perDiemService.getClaim(parseInt(requestId!));
             setPerDiemClaim(claim);
-          } catch (_) { /* no claim yet */ }
+          } catch (_) {
+            // Never leave the previously viewed request's claim on screen —
+            // showing one person's claim under another's request is worse than
+            // showing none.
+            setPerDiemClaim(null);
+          }
         } else {
           setPerDiemClaim(null);
         }
@@ -406,15 +412,9 @@ const RequestDetailPage: React.FC = () => {
     );
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+  // Approval timestamps always render in the organisation's timezone, so the
+  // audit trail reads identically for every user regardless of their OS clock.
+  const formatDate = (dateString: string) => formatDateTime(dateString);
 
   const formatCurrency = (amount: number | string | null | undefined) => {
     const numAmount = Number(amount || 0);
@@ -513,15 +513,15 @@ const RequestDetailPage: React.FC = () => {
   </div>
   <div class="doc-header-right">
     <div class="ref">${request.request_code}</div>
-    <div class="date">Created: ${request.created_at ? new Date(request.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</div>
-    ${request.submitted_at ? `<div class="date">Submitted: ${new Date(request.submitted_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>` : ''}
+    <div class="date">Created: ${request.created_at ? formatCalendarDate(request.created_at) : '—'}</div>
+    ${request.submitted_at ? `<div class="date">Submitted: ${formatCalendarDate(request.submitted_at)}</div>` : ''}
   </div>
 </div>
 
 <h3>Requisition Details</h3>
 <div class="meta-grid">
   <div class="meta-item"><span class="meta-label">Reference Number</span><span class="meta-value">${request.request_code}</span></div>
-  <div class="meta-item"><span class="meta-label">Date Submitted</span><span class="meta-value">${request.submitted_at ? new Date(request.submitted_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
+  <div class="meta-item"><span class="meta-label">Date Submitted</span><span class="meta-value">${request.submitted_at ? formatCalendarDate(request.submitted_at) : '—'}</span></div>
   <div class="meta-item"><span class="meta-label">Department</span><span class="meta-value">${request.department_name}</span></div>
   <div class="meta-item"><span class="meta-label">Status</span><span class="meta-value" style="color:${sc};font-weight:bold">${getStatusLabel(request.status)}</span></div>
   <div class="meta-item"><span class="meta-label">Total Amount</span><span class="meta-value" style="font-weight:bold">$${Number(request.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
@@ -532,8 +532,8 @@ const RequestDetailPage: React.FC = () => {
       <span class="meta-label" style="color:#f57f17">Activity Request</span>
       <span class="meta-value" style="font-weight:bold;color:#f57f17">YES — Scheduled Activity</span>
     </div>
-    <div class="meta-item"><span class="meta-label">Activity Start Date</span><span class="meta-value">${(request as any).activity_start_date ? new Date((request as any).activity_start_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
-    <div class="meta-item"><span class="meta-label">Activity End Date</span><span class="meta-value">${(request as any).activity_end_date ? new Date((request as any).activity_end_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
+    <div class="meta-item"><span class="meta-label">Activity Start Date</span><span class="meta-value">${(request as any).activity_start_date ? formatCalendarDate((request as any).activity_start_date) : '—'}</span></div>
+    <div class="meta-item"><span class="meta-label">Activity End Date</span><span class="meta-value">${(request as any).activity_end_date ? formatCalendarDate((request as any).activity_end_date) : '—'}</span></div>
   ` : ''}
   ${(request as any).justification ? `<div class="meta-item meta-full"><span class="meta-label">Event / Purpose</span><span class="meta-value">${(request as any).justification}</span></div>` : ''}
   ${approvalLogs.filter(l => l.action === 'REJECTED').length > 0 ? `<div class="meta-item rejection-box"><span class="meta-label">Rejection Reason</span><span class="meta-value">${approvalLogs.filter(l => l.action === 'REJECTED').map(l => l.comment || l.comments || '').join('; ')}</span></div>` : ''}
@@ -553,13 +553,13 @@ ${approvalLogs.length > 0 ? `
 <table>
   <thead><tr><th>Date &amp; Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Status Change</th><th>Comments</th></tr></thead>
   <tbody>
-    ${approvalLogs.map(log => `<tr><td>${new Date(log.created_at).toLocaleString('en-GB')}</td><td>${log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}</td><td>${formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '—'}</td><td>${log.comment || log.comments || '—'}</td></tr>`).join('')}
+    ${approvalLogs.map(log => `<tr><td>${formatDateTime(log.created_at)}</td><td>${log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}</td><td>${formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '—'}</td><td>${log.comment || log.comments || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
 
 <div class="page-footer">
   <div class="footer-left">
-    <div>Generated: ${new Date().toLocaleString('en-GB')}</div>
+    <div>Generated: ${formatDateTime(new Date())}</div>
     <div>ERP Connect - Zimbabwe Council of Churches &nbsp;|&nbsp; CONFIDENTIAL</div>
   </div>
 </div>
@@ -585,8 +585,8 @@ ${buildClaimPage()}
       ['Department', request.department_name],
       ['Status', getStatusLabel(request.status)],
       ['Total Amount', `$${Number(request.total_amount || 0).toFixed(2)}`],
-      ['Date Created', request.created_at ? new Date(request.created_at).toLocaleDateString('en-GB') : ''],
-      ['Date Submitted', request.submitted_at ? new Date(request.submitted_at).toLocaleDateString('en-GB') : '']
+      ['Date Created', request.created_at ? formatCalendarDate(request.created_at) : ''],
+      ['Date Submitted', request.submitted_at ? formatCalendarDate(request.submitted_at) : '']
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(infoData), 'Requisition Info');
 
@@ -611,7 +611,7 @@ ${buildClaimPage()}
     if (approvalLogs.length > 0) {
       const tHeaders = ['Date & Time', 'Actor', 'Role', 'Action', 'Status Change', 'Comments'];
       const tRows = approvalLogs.map(log => [
-        new Date(log.created_at).toLocaleString('en-GB'),
+        formatDateTime(log.created_at),
         log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim(),
         formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code),
         log.action,
@@ -639,7 +639,7 @@ ${buildClaimPage()}
         ['B. TRIP ITEMS'],
         ['Date', 'From', 'To', 'Departure', 'Arrival', 'Purpose', 'Breakfast ($)', 'Lunch ($)', 'Dinner ($)', 'Out of Pocket ($)', 'Accommodation ($)', 'Line Total ($)'],
         ...perDiemClaim.trip_items.map(t => [
-          t.trip_date ? new Date(t.trip_date).toLocaleDateString('en-GB') : '',
+          t.trip_date ? formatCalendarDate(t.trip_date) : '',
           t.from_location || '',
           t.to_location || '',
           t.departure_time || '',
@@ -662,7 +662,7 @@ ${buildClaimPage()}
           Math.abs(Number(perDiemClaim.amount_payable || 0)).toFixed(2)
         ],
         ...(perDiemClaim.advance_reconciliation_due
-          ? [['Reconciliation Due', new Date(perDiemClaim.advance_reconciliation_due).toLocaleDateString('en-GB')]]
+          ? [['Reconciliation Due', formatCalendarDate(perDiemClaim.advance_reconciliation_due)]]
           : []),
         ...(perDiemClaim.cost_distribution.length > 0 ? [
           [],
@@ -817,7 +817,7 @@ ${buildClaimPage()}
                     <Typography variant="body2" color="text.secondary">Activity Start Date</Typography>
                     <Typography variant="body1" fontWeight="medium">
                       {(request as any).activity_start_date
-                        ? new Date((request as any).activity_start_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                        ? formatCalendarDate((request as any).activity_start_date)
                         : '—'}
                     </Typography>
                   </Grid>
@@ -825,7 +825,7 @@ ${buildClaimPage()}
                     <Typography variant="body2" color="text.secondary">Activity End Date</Typography>
                     <Typography variant="body1" fontWeight="medium">
                       {(request as any).activity_end_date
-                        ? new Date((request as any).activity_end_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                        ? formatCalendarDate((request as any).activity_end_date)
                         : '—'}
                     </Typography>
                   </Grid>

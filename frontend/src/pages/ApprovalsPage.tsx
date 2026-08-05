@@ -68,7 +68,8 @@ import {
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import { toast } from 'react-toastify';
-import { format, formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns';
+import { format } from '../utils/datetime';
 import { downloadHTMLAsPDF, buildDigitalStamp, buildTravelClaimPageHTML } from '../utils/pdfUtils';
 
 import { Request, RequestItem, BudgetImpact, ApprovalPayload, PerDiemClaim } from '../types';

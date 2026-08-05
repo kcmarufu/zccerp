@@ -1,28 +1,16 @@
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const { dirFor, ensureUploadDirs } = require('../config/uploads');
 
-// Ensure upload directories exist
-const uploadDirs = {
-  QUOTATION: path.join(__dirname, '../../uploads/quotations'),
-  RECONCILIATION: path.join(__dirname, '../../uploads/reconciliations'),
-  INVOICE: path.join(__dirname, '../../uploads/invoices'),
-  RECEIPT: path.join(__dirname, '../../uploads/receipts'),
-  temp: path.join(__dirname, '../../uploads/temp')
-};
-
-Object.values(uploadDirs).forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
+// Destinations resolve from the configured persistent upload root (UPLOAD_DIR),
+// not from a path inside the git working tree — a deploy that rewrites the tree
+// can then never redirect uploads into storage that is about to be replaced.
+ensureUploadDirs();
 
 // Configure storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const attachmentType = req.body.attachment_type || 'temp';
-    const uploadPath = uploadDirs[attachmentType] || uploadDirs.temp;
-    cb(null, uploadPath);
+    cb(null, dirFor(req.body.attachment_type || 'temp'));
   },
   filename: (req, file, cb) => {
     // Generate unique filename: timestamp_originalname

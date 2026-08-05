@@ -54,7 +54,7 @@ import {
   Search as SearchIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { format } from 'date-fns';
+import { format } from '../../utils/datetime';
 
 import { BudgetLine, BudgetTransaction, Department, Project } from '../../types';
 import { budgetService } from '../../services/budgetService';

@@ -77,6 +77,7 @@ import {
 import { useAuthStore } from '../../store/authStore';
 import { UserRole } from '../../types';
 import api from '../../services/api';
+import { formatDateTime } from '../../utils/datetime';
 
 const DRAWER_WIDTH = 280;
 
@@ -971,7 +972,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                                     <Typography variant="body2" fontWeight={item.is_read ? 400 : 600} noWrap>{item.title}</Typography>
                                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.message}</Typography>
                                     <Typography variant="caption" color="text.disabled">
-                                      {item.created_at ? new Date(item.created_at).toLocaleString() : ''}
+                                      {item.created_at ? formatDateTime(item.created_at) : ''}
                                     </Typography>
                                   </Box>
                                 </ListItem>

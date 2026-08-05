@@ -6,6 +6,7 @@ const { query } = require('../config/database');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { resolveStoredPath } = require('../config/uploads');
 
 // In-memory one-time download tokens: token -> { attachmentId, expiresAt }
 const _downloadTokens = new Map();
@@ -189,8 +190,8 @@ exports.downloadByToken = async (req, res) => {
     const attachment = attachments[0];
     if (!attachment.is_active) return res.status(410).send('Attachment deleted');
 
-    const filePath = path.resolve(attachment.file_path);
-    if (!fs.existsSync(filePath)) return res.status(404).send('File not found on server');
+    const filePath = resolveStoredPath(attachment.file_path);
+    if (!filePath) return res.status(404).send('File not found on server');
 
     const safeFileName = attachment.original_name.replace(/[\r\n"\\]/g, '_');
     res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
@@ -227,11 +228,12 @@ exports.downloadAttachment = async (req, res) => {
       return res.status(410).json({ error: 'Attachment has been deleted' });
     }
     
-    // Check if file exists
-    if (!fs.existsSync(attachment.file_path)) {
+    // Check if file exists (re-anchors legacy paths onto the current upload root)
+    const filePath = resolveStoredPath(attachment.file_path);
+    if (!filePath) {
       return res.status(404).json({ error: 'File not found on server' });
     }
-    
+
     const origin = req.headers.origin;
     if (origin) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -247,7 +249,7 @@ exports.downloadAttachment = async (req, res) => {
     // Use promises so errors are caught by the outer try/catch.
     // Callback-based fs.readFile inside an async function is NOT covered by try/catch
     // and causes unhandled errors that abort the response with ERR_NETWORK.
-    const data = await fs.promises.readFile(path.resolve(attachment.file_path));
+    const data = await fs.promises.readFile(filePath);
     res.setHeader('Content-Length', data.length);
     res.end(data);
   } catch (error) {
@@ -349,8 +351,9 @@ exports.permanentlyDeleteAttachment = async (req, res) => {
     const attachment = attachments[0];
     
     // Delete physical file
-    if (fs.existsSync(attachment.file_path)) {
-      fs.unlinkSync(attachment.file_path);
+    const storedFile = resolveStoredPath(attachment.file_path);
+    if (storedFile) {
+      fs.unlinkSync(storedFile);
     }
     
     // Delete database record

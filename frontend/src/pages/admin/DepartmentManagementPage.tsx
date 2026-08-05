@@ -22,7 +22,7 @@ import {
   Cancel as InactiveIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { format } from 'date-fns';
+import { format } from '../../utils/datetime';
 import api from '../../services/api';
 
 interface DepartmentRecord {

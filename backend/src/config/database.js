@@ -31,7 +31,24 @@ const pool = mysql.createPool({
   queueLimit: 100,             // max 100 requests queued; beyond this → error (prevents memory bloat)
   connectTimeout: 10000,       // 10s to establish a connection
   enableKeepAlive: true,
-  keepAliveInitialDelay: 30000 // ping idle connections every 30s
+  keepAliveInitialDelay: 30000, // ping idle connections every 30s
+
+  // ── Date/time handling (see also: frontend src/utils/datetime.ts) ───────────
+  // timezone 'Z': DATETIME/TIMESTAMP values are read and written as UTC, whatever
+  //   the host's TZ happens to be. Without this the driver uses the process
+  //   timezone, so a server TZ change would silently shift every stored instant.
+  // dateStrings ['DATE']: DATE columns (trip dates, activity dates, reconciliation
+  //   due dates) are returned as plain 'YYYY-MM-DD' strings instead of Date objects.
+  //   A calendar date has no time and no timezone — turning it into an instant at
+  //   UTC midnight is what made dates render a day early for viewers west of UTC.
+  timezone: 'Z',
+  dateStrings: ['DATE']
+});
+
+// Pin every pooled connection to UTC so NOW()/CURRENT_TIMESTAMP write the same
+// instant the driver reads back, independent of the MySQL server's system tz.
+pool.on('connection', (connection) => {
+  connection.query("SET time_zone = '+00:00'");
 });
 
 // Test database connection

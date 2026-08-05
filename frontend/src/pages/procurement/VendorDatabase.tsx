@@ -31,6 +31,7 @@ import { downloadHTMLAsPDF } from '../../utils/pdfUtils';
 import { useAuthStore } from '../../store/authStore';
 import { getVendors, createVendor, updateVendor, deleteVendor } from '../../services/procurementService';
 import { ProcVendor } from '../../types';
+import { formatDate } from '../../utils/datetime';
 
 const CATEGORIES = ['IT Equipment', 'Office Supplies', 'Construction', 'Vehicles', 'Consultancy', 'Food & Beverage', 'Medical', 'Training', 'Transport', 'Other'];
 
@@ -148,7 +149,7 @@ const VendorDatabase: React.FC = () => {
 </style></head><body>
 <div class="header">
   <div><div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div><h1>Vendor Database</h1><p>Total vendors: <strong>${vendors.length}</strong></p></div>
-  <div style="font-size:10px;color:#666">Generated: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
+  <div style="font-size:10px;color:#666">Generated: ${formatDate(new Date())}</div>
 </div>
 <table>
   <thead><tr><th>#</th><th>Company Name</th><th>Category</th><th>Contact Person</th><th>Email</th><th>Phone</th><th>Prequalified</th><th>Active</th></tr></thead>

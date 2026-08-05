@@ -21,6 +21,7 @@ import {
 } from '../../services/hrService';
 import { HRTimesheet, TimesheetStatus } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate } from '../../utils/datetime';
 
 const STATUS_COLORS: Record<string, 'default' | 'info' | 'warning' | 'success' | 'error'> = {
   DRAFT: 'default', SUBMITTED: 'info', APPROVED: 'success', REJECTED: 'error'
@@ -325,7 +326,7 @@ const TimesheetManagementPage: React.FC = () => {
                 <TableBody>
                   {(viewTimesheet.entries || []).map((entry) => (
                     <TableRow key={entry.id}>
-                      <TableCell>{new Date(entry.entry_date).toLocaleDateString()}</TableCell>
+                      <TableCell>{formatDate(entry.entry_date)}</TableCell>
                       <TableCell align="center">{entry.hours_worked}</TableCell>
                       <TableCell>{entry.donor_name || '-'}</TableCell>
                       <TableCell>{entry.project_code || '-'}</TableCell>

@@ -36,7 +36,7 @@ import {
   Edit as EditIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { format } from 'date-fns';
+import { format, formatDate } from '../utils/datetime';
 import * as XLSX from 'xlsx';
 
 import { useAuthStore } from '../store/authStore';
@@ -211,8 +211,8 @@ const ReconciliationPage: React.FC = () => {
     <label style="color:#f57f17">Activity Request</label>
     <span style="font-weight:bold;color:#f57f17">YES — Scheduled Activity</span>
   </div>
-  <div class="meta-item"><label>Activity Start Date</label><span>${req.activity_start_date ? new Date(req.activity_start_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—'}</span></div>
-  <div class="meta-item"><label>Activity End Date</label><span>${req.activity_end_date ? new Date(req.activity_end_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—'}</span></div>
+  <div class="meta-item"><label>Activity Start Date</label><span>${formatDate(req.activity_start_date)}</span></div>
+  <div class="meta-item"><label>Activity End Date</label><span>${formatDate(req.activity_end_date)}</span></div>
   ` : ''}
 </div>
 ${reconItems.length > 0 ? `
@@ -1788,13 +1788,13 @@ ${buildDigitalStamp('')}
                     {' '}Planned Start:{' '}
                     <strong>
                       {(selectedRequest as any).activity_start_date
-                        ? new Date((selectedRequest as any).activity_start_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                        ? formatDate((selectedRequest as any).activity_start_date)
                         : '—'}
                     </strong>
                     &nbsp;&bull;&nbsp;Planned End:{' '}
                     <strong>
                       {(selectedRequest as any).activity_end_date
-                        ? new Date((selectedRequest as any).activity_end_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                        ? formatDate((selectedRequest as any).activity_end_date)
                         : '—'}
                     </strong>
                   </Alert>

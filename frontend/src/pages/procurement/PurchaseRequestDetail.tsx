@@ -33,7 +33,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { format, formatDate, formatDateTime } from '../../utils/datetime';
 import { toast } from 'react-toastify';
 import { useAuthStore } from '../../store/authStore';
 import {
@@ -487,20 +487,20 @@ ${request.status === 'DRAFT' ? '<div class="watermark">DRAFT</div>' : ''}
   </div>
   <div class="doc-header-right">
     <div class="ref">${request.request_code}</div>
-    <div class="date">Created: ${request.created_at ? new Date(request.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</div>
-    ${request.submitted_at ? `<div class="date">Submitted: ${new Date(request.submitted_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>` : ''}
+    <div class="date">Created: ${formatDate(request.created_at)}</div>
+    ${request.submitted_at ? `<div class="date">Submitted: ${formatDate(request.submitted_at)}</div>` : ''}
   </div>
 </div>
 
 <h3>Requisition Details</h3>
 <div class="meta-grid">
   <div class="meta-item"><span class="meta-label">Reference Number</span><span class="meta-value">${request.request_code}</span></div>
-  <div class="meta-item"><span class="meta-label">Date Created</span><span class="meta-value">${request.created_at ? new Date(request.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
+  <div class="meta-item"><span class="meta-label">Date Created</span><span class="meta-value">${formatDate(request.created_at)}</span></div>
   <div class="meta-item"><span class="meta-label">Department</span><span class="meta-value">${request.department_name}${request.department_code ? ` (${request.department_code})` : ''}</span></div>
   <div class="meta-item"><span class="meta-label">Partner</span><span class="meta-value">${(request as any).donor_name || '—'}</span></div>
   <div class="meta-item"><span class="meta-label">Project</span><span class="meta-value">${(request as any).project_name || '—'}</span></div>
   <div class="meta-item"><span class="meta-label">Priority Level</span><span class="meta-value ${`pri-${request.priority}`}">${request.priority}</span></div>
-  <div class="meta-item"><span class="meta-label">Expected Delivery</span><span class="meta-value">${request.expected_delivery_date ? new Date(request.expected_delivery_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></div>
+  <div class="meta-item"><span class="meta-label">Expected Delivery</span><span class="meta-value">${formatDate(request.expected_delivery_date)}</span></div>
   <div class="meta-item meta-full"><span class="meta-label">Justification</span><span class="meta-value">${request.justification || '—'}</span></div>
   ${request.rejection_reason ? `<div class="meta-item rejection-box"><span class="meta-label">Rejection Reason</span><span class="meta-value">${request.rejection_reason}</span></div>` : ''}
 </div>
@@ -519,7 +519,7 @@ ${quotations.length > 0 ? `
 <table>
   <thead><tr><th>Vendor</th><th>Quotation Ref</th><th align="right">Amount</th><th>Currency</th><th>Valid Until</th><th>Lead Time</th><th>Notes</th></tr></thead>
   <tbody>
-    ${quotations.map(q => `<tr><td>${q.vendor_name}${q.is_selected ? '<span class="selected-badge">✓ SELECTED</span>' : ''}</td><td>${q.quotation_number || '—'}</td><td align="right">${Number(q.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td><td>${q.currency}</td><td>${q.validity_date ? new Date(q.validity_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</td><td>${q.delivery_timeline || '—'}</td><td>${q.notes || '—'}</td></tr>`).join('')}
+    ${quotations.map(q => `<tr><td>${q.vendor_name}${q.is_selected ? '<span class="selected-badge">✓ SELECTED</span>' : ''}</td><td>${q.quotation_number || '—'}</td><td align="right">${Number(q.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td><td>${q.currency}</td><td>${formatDate(q.validity_date)}</td><td>${q.delivery_timeline || '—'}</td><td>${q.notes || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
 
@@ -528,7 +528,7 @@ ${trail.length > 0 ? `
 <table>
   <thead><tr><th>Date &amp; Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Comments</th></tr></thead>
   <tbody>
-    ${trail.map(log => `<tr><td>${new Date(log.created_at).toLocaleString('en-GB')}</td><td>${log.actor_first_name} ${log.actor_last_name}</td><td>${formatRoleLabel(log.actor_role, log.actor_department_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.comments || '—'}</td></tr>`).join('')}
+    ${trail.map(log => `<tr><td>${formatDateTime(log.created_at)}</td><td>${log.actor_first_name} ${log.actor_last_name}</td><td>${formatRoleLabel(log.actor_role, log.actor_department_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.comments || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
 
@@ -540,7 +540,7 @@ ${allCommitteeApproved ? `
 
 <div class="page-footer">
   <div class="footer-left">
-    <div>Generated: ${new Date().toLocaleString('en-GB')}</div>
+    <div>Generated: ${formatDateTime(new Date())}</div>
     <div>ERP Connect - Zimbabwe Council of Churches &nbsp;|&nbsp; CONFIDENTIAL</div>
   </div>
 </div>

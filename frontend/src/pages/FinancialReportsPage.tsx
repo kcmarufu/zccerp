@@ -27,7 +27,7 @@ import {
   PictureAsPdf as PdfIcon
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
-import { format } from 'date-fns';
+import { format } from '../utils/datetime';
 import { downloadHTMLAsPDF } from '../utils/pdfUtils';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid,

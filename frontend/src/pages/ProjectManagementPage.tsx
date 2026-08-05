@@ -34,7 +34,7 @@ import {
   ClearAll as ClearIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { format } from 'date-fns';
+import { format } from '../utils/datetime';
 import { useAuthStore } from '../store/authStore';
 import { downloadHTMLAsPDF } from '../utils/pdfUtils';
 import projectService from '../services/projectService';

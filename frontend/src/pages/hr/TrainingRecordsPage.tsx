@@ -18,6 +18,7 @@ import { toast } from 'react-toastify';
 import { getTrainingRecords, createTrainingRecord } from '../../services/hrService';
 import { HRTrainingRecord } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate } from '../../utils/datetime';
 
 const STATUS_COLORS: Record<string, 'info' | 'warning' | 'success' | 'default'> = {
   SCHEDULED: 'info', IN_PROGRESS: 'warning', COMPLETED: 'success', CANCELLED: 'default'
@@ -130,8 +131,8 @@ const TrainingRecordsPage: React.FC = () => {
                     <TableCell>{rec.provider || '-'}</TableCell>
                     <TableCell>
                       <Typography variant="body2">
-                        {new Date(rec.start_date).toLocaleDateString()}
-                        {rec.end_date && ` - ${new Date(rec.end_date).toLocaleDateString()}`}
+                        {formatDate(rec.start_date)}
+                        {rec.end_date && ` - ${formatDate(rec.end_date)}`}
                       </Typography>
                     </TableCell>
                     <TableCell align="right">

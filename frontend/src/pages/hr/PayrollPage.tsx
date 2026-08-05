@@ -16,6 +16,7 @@ import {
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { getPayrollPeriods, getPayrollRecords } from '../../services/hrService';
+import { formatDate } from '../../utils/datetime';
 
 const STATUS_COLORS: Record<string, 'default' | 'info' | 'success' | 'warning' | 'error'> = {
   OPEN: 'info', PROCESSING: 'warning', PROCESSED: 'success', APPROVED: 'success', CLOSED: 'default'
@@ -144,7 +145,7 @@ const PayrollPage: React.FC = () => {
                     <TableCell><Typography variant="body2" fontWeight={600}>{period.period_name}</Typography></TableCell>
                     <TableCell>{MONTHS[(period.period_month || 1) - 1]} {period.period_year}</TableCell>
                     <TableCell>
-                      {period.start_date ? new Date(period.start_date).toLocaleDateString() : '-'} — {period.end_date ? new Date(period.end_date).toLocaleDateString() : '-'}
+                      {formatDate(period.start_date)} — {formatDate(period.end_date)}
                     </TableCell>
                     <TableCell align="center">
                       <Chip label={period.record_count || 0} size="small" variant="outlined" />

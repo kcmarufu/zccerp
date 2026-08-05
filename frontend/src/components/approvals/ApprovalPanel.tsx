@@ -42,7 +42,7 @@ import {
   FilterList as FilterIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { format } from 'date-fns';
+import { format } from '../../utils/datetime';
 
 import { Request, BudgetImpact, ApprovalPayload } from '../../types';
 import { approvalService } from '../../services/approvalService';

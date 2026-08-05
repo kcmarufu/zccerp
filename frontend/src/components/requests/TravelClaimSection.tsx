@@ -10,7 +10,7 @@
  * Projects and Budget Lines are loaded independently from the API.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import {
   Box, Paper, Typography, Grid, TextField, MenuItem,
@@ -37,6 +37,7 @@ import {
 } from '../../types';
 import { useAuthStore } from '../../store/authStore';
 import projectService from '../../services/projectService';
+import { formatDate, formatClock, toDateInputValue, toTimeInputValue } from '../../utils/datetime';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const DEFAULT_RATES: PerDiemRates = { breakfast: 10, lunch: 10, dinner: 10, overnight: 70, accommodation: 100 };
@@ -73,15 +74,26 @@ const blankDistRow = (): PerDiemCostDistributionFormData => ({
   amount: 0,
 });
 
-const calcLineTotal = (item: PerDiemTripItemFormData): number =>
-  (item.rate_breakfast     || 0) +
-  (item.rate_lunch         || 0) +
-  (item.rate_dinner        || 0) +
-  (item.rate_overnight     || 0) +
-  (item.rate_accommodation || 0);
+/**
+ * MySQL DECIMAL columns arrive over JSON as *strings* ("10.00"), so `+` on them
+ * concatenates instead of adding — that is what produced totals like
+ * "0.000010.000" on screen. Every monetary value is coerced through num() before
+ * any arithmetic or formatting.
+ */
+const num = (v: unknown): number => {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : 0;
+};
 
-const fmt = (n: number | undefined) =>
-  `$${(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const calcLineTotal = (item: PerDiemTripItemFormData): number =>
+  num(item.rate_breakfast) +
+  num(item.rate_lunch) +
+  num(item.rate_dinner) +
+  num(item.rate_overnight) +
+  num(item.rate_accommodation);
+
+const fmt = (n: number | string | undefined) =>
+  `$${num(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 interface EditProps {
@@ -108,7 +120,7 @@ const TravelClaimSection: React.FC<Props> = (props) => {
   // ── READ-ONLY MODE ──────────────────────────────────────────────────────────
   if (props.mode === 'readonly') {
     const { claim } = props;
-    const isPayable = Number(claim.amount_payable) >= 0;
+    const isPayable = num(claim.amount_payable) >= 0;
     return (
       <Paper elevation={2} sx={{ borderRadius: 2, overflow: 'hidden', mb: 2 }}>
 
@@ -175,25 +187,25 @@ const TravelClaimSection: React.FC<Props> = (props) => {
                       {(t as any).recipient_display_name || t.recipient_name || claim.full_name}
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                      {t.trip_date ? new Date(t.trip_date).toLocaleDateString() : '—'}
+                      {formatDate(t.trip_date)}
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                      {t.return_date ? new Date(t.return_date).toLocaleDateString() : '—'}
+                      {formatDate(t.return_date)}
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       {t.from_location} <span style={{ color: '#90a4ae' }}>→</span> {t.to_location}
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary', fontSize: 11 }}>
-                      {t.departure_time || '—'} / {t.arrival_time || '—'}
+                      {formatClock(t.departure_time)} / {formatClock(t.arrival_time)}
                     </TableCell>
                     <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t.purpose}
                     </TableCell>
-                    <TableCell align="right">{(t.rate_breakfast     || 0) > 0 ? fmt(t.rate_breakfast)     : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
-                    <TableCell align="right">{(t.rate_lunch         || 0) > 0 ? fmt(t.rate_lunch)         : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
-                    <TableCell align="right">{(t.rate_dinner        || 0) > 0 ? fmt(t.rate_dinner)        : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
-                    <TableCell align="right">{(t.rate_overnight     || 0) > 0 ? fmt(t.rate_overnight)     : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
-                    <TableCell align="right">{(t.rate_accommodation || 0) > 0 ? fmt(t.rate_accommodation) : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
+                    <TableCell align="right">{num(t.rate_breakfast) > 0 ? fmt(t.rate_breakfast)     : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
+                    <TableCell align="right">{num(t.rate_lunch) > 0 ? fmt(t.rate_lunch)         : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
+                    <TableCell align="right">{num(t.rate_dinner) > 0 ? fmt(t.rate_dinner)        : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
+                    <TableCell align="right">{num(t.rate_overnight) > 0 ? fmt(t.rate_overnight)     : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
+                    <TableCell align="right">{num(t.rate_accommodation) > 0 ? fmt(t.rate_accommodation) : <span style={{ color: '#bdbdbd' }}>—</span>}</TableCell>
                     <TableCell align="right" sx={{ fontWeight: 700, color: 'info.dark' }}>{fmt(t.line_total)}</TableCell>
                   </TableRow>
                 ))}
@@ -231,14 +243,14 @@ const TravelClaimSection: React.FC<Props> = (props) => {
               {isPayable ? 'Amount Payable to Employee' : 'Surplus to Refund'}
             </Typography>
             <Typography variant="h6" fontWeight={700} color={isPayable ? 'success.dark' : 'warning.dark'} sx={{ lineHeight: 1.3 }}>
-              {fmt(Math.abs(Number(claim.amount_payable)))}
+              {fmt(Math.abs(num(claim.amount_payable)))}
             </Typography>
           </Box>
           {claim.advance_reconciliation_due && (
             <Box sx={{ flex: 1, minWidth: 150, px: 2.5, py: 1.25, bgcolor: 'info.light' }}>
               <Typography variant="caption" color="info.dark">Reconciliation Due</Typography>
               <Typography variant="body1" fontWeight={600} color="info.dark" sx={{ lineHeight: 1.3 }}>
-                {new Date(claim.advance_reconciliation_due).toLocaleDateString()}
+                {formatDate(claim.advance_reconciliation_due)}
               </Typography>
             </Box>
           )}
@@ -284,16 +296,28 @@ const TravelClaimSection: React.FC<Props> = (props) => {
   const { value, onChange } = props;
   const { user } = useAuthStore();
 
-  // Auto-fill employee details from logged-in user (always run on mount / user change)
+  // Always read the newest form state from a ref inside effects. The auto-fill
+  // effect below runs on `user` identity changes, which can happen long after the
+  // user has started typing; spreading a `value` captured by the effect's closure
+  // would roll the whole claim back to that stale snapshot and discard their work.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  // Auto-fill employee details from logged-in user (only fills blanks, never overwrites)
   useEffect(() => {
     if (props.mode !== 'edit') return;
     const autoName = user
       ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email
       : '';
     const autoDesig = user?.department_name || user?.role_name || 'Staff';
-    if (autoName) {
-      onChange({ ...value, full_name: autoName, designation: value.designation || autoDesig });
-    }
+    if (!autoName) return;
+    const current = valueRef.current;
+    if (current.full_name && current.designation) return;
+    onChange({
+      ...current,
+      full_name: current.full_name || autoName,
+      designation: current.designation || autoDesig,
+    });
   }, [user]); // eslint-disable-line
 
   // Load all active projects independently
@@ -337,11 +361,11 @@ const TravelClaimSection: React.FC<Props> = (props) => {
       if (i !== index) return t;
       const updated = { ...t, ...patch };
       // Derive boolean flags from amounts
-      updated.breakfast      = (updated.rate_breakfast     || 0) > 0;
-      updated.lunch          = (updated.rate_lunch         || 0) > 0;
-      updated.dinner         = (updated.rate_dinner        || 0) > 0;
-      updated.overnight_stay = (updated.rate_overnight     || 0) > 0;
-      updated.accommodation  = (updated.rate_accommodation || 0) > 0;
+      updated.breakfast      = num(updated.rate_breakfast) > 0;
+      updated.lunch          = num(updated.rate_lunch) > 0;
+      updated.dinner         = num(updated.rate_dinner) > 0;
+      updated.overnight_stay = num(updated.rate_overnight) > 0;
+      updated.accommodation  = num(updated.rate_accommodation) > 0;
       updated.line_total     = calcLineTotal(updated);
       return updated;
     });
@@ -359,7 +383,7 @@ const TravelClaimSection: React.FC<Props> = (props) => {
 
   // Recalculate totals on every change
   const totalClaimed  = value.trip_items.reduce((s, t) => s + calcLineTotal(t), 0);
-  const amountPayable = totalClaimed - (value.less_outstanding_advance || 0);
+  const amountPayable = totalClaimed - num(value.less_outstanding_advance);
 
   return (
     <Paper elevation={3} sx={{ p: 0, mb: 3, borderRadius: 2, overflow: 'hidden' }}>
@@ -497,12 +521,12 @@ const TravelClaimSection: React.FC<Props> = (props) => {
                     />
                   </TableCell>
                   <TableCell>
-                    <TextField type="date" size="small" fullWidth value={item.trip_date}
+                    <TextField type="date" size="small" fullWidth value={toDateInputValue(item.trip_date)}
                       onChange={e => updateTripItem(idx, { trip_date: e.target.value })}
                       inputProps={{ style: { fontSize: 12 } }} />
                   </TableCell>
                   <TableCell>
-                    <TextField type="date" size="small" fullWidth value={item.return_date || ''}
+                    <TextField type="date" size="small" fullWidth value={toDateInputValue(item.return_date)}
                       onChange={e => updateTripItem(idx, { return_date: e.target.value })}
                       inputProps={{ style: { fontSize: 12 } }} />
                   </TableCell>
@@ -517,12 +541,12 @@ const TravelClaimSection: React.FC<Props> = (props) => {
                       inputProps={{ style: { fontSize: 12 } }} />
                   </TableCell>
                   <TableCell>
-                    <TextField type="time" size="small" value={item.departure_time}
+                    <TextField type="time" size="small" value={toTimeInputValue(item.departure_time)}
                       onChange={e => updateTripItem(idx, { departure_time: e.target.value })}
                       inputProps={{ style: { fontSize: 12 } }} />
                   </TableCell>
                   <TableCell>
-                    <TextField type="time" size="small" value={item.arrival_time}
+                    <TextField type="time" size="small" value={toTimeInputValue(item.arrival_time)}
                       onChange={e => updateTripItem(idx, { arrival_time: e.target.value })}
                       inputProps={{ style: { fontSize: 12 } }} />
                   </TableCell>
@@ -533,38 +557,38 @@ const TravelClaimSection: React.FC<Props> = (props) => {
                       inputProps={{ style: { fontSize: 12 } }} />
                   </TableCell>
                   <TableCell>
-                    <TextField size="small" type="number" value={item.rate_breakfast ?? 0}
+                    <TextField size="small" type="number" value={num(item.rate_breakfast)}
                       onChange={e => updateTripItem(idx, { rate_breakfast: parseFloat(e.target.value) || 0 })}
                       InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
                       inputProps={{ min: 0, step: 0.5, style: { textAlign: 'right', width: 60 } }} />
                   </TableCell>
                   <TableCell>
-                    <TextField size="small" type="number" value={item.rate_lunch ?? 0}
+                    <TextField size="small" type="number" value={num(item.rate_lunch)}
                       onChange={e => updateTripItem(idx, { rate_lunch: parseFloat(e.target.value) || 0 })}
                       InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
                       inputProps={{ min: 0, step: 0.5, style: { textAlign: 'right', width: 60 } }} />
                   </TableCell>
                   <TableCell>
-                    <TextField size="small" type="number" value={item.rate_dinner ?? 0}
+                    <TextField size="small" type="number" value={num(item.rate_dinner)}
                       onChange={e => updateTripItem(idx, { rate_dinner: parseFloat(e.target.value) || 0 })}
                       InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
                       inputProps={{ min: 0, step: 0.5, style: { textAlign: 'right', width: 60 } }} />
                   </TableCell>
                   <TableCell>
-                    <TextField size="small" type="number" value={item.rate_overnight ?? 0}
+                    <TextField size="small" type="number" value={num(item.rate_overnight)}
                       onChange={e => updateTripItem(idx, { rate_overnight: parseFloat(e.target.value) || 0 })}
                       InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
                       inputProps={{ min: 0, step: 0.5, style: { textAlign: 'right', width: 60 } }} />
                   </TableCell>
                   <TableCell>
-                    <TextField size="small" type="number" value={item.rate_accommodation ?? 0}
+                    <TextField size="small" type="number" value={num(item.rate_accommodation)}
                       onChange={e => updateTripItem(idx, { rate_accommodation: parseFloat(e.target.value) || 0 })}
                       InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
                       inputProps={{ min: 0, step: 0.5, style: { textAlign: 'right', width: 70 } }} />
                   </TableCell>
                   <TableCell align="right">
                     <Typography variant="body2" fontWeight={700} color="info.dark" sx={{ whiteSpace: 'nowrap' }}>
-                      ${lineTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      ${num(lineTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </Typography>
                   </TableCell>
                   <TableCell>
@@ -634,7 +658,7 @@ const TravelClaimSection: React.FC<Props> = (props) => {
               size="small"
               placeholder="0.00"
               inputProps={{ min: 0, step: 0.01 }}
-              value={value.less_outstanding_advance || ''}
+              value={value.less_outstanding_advance ?? ''}
               onChange={e => setField('less_outstanding_advance', parseFloat(e.target.value) || 0)}
               helperText="Any advance already received for this trip"
               InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}

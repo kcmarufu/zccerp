@@ -8,6 +8,7 @@ const procurementService = require('../services/procurement.service');
 const { query } = require('../config/database');
 const path = require('path');
 const fs = require('fs');
+const { resolveStoredPath } = require('../config/uploads');
 
 class ProcurementController {
 
@@ -277,8 +278,8 @@ class ProcurementController {
       const quot = rows[0];
       if (!quot.file_path) return res.status(404).json({ success: false, error: 'No file attached' });
 
-      const filePath = path.resolve(quot.file_path);
-      if (!fs.existsSync(filePath)) {
+      const filePath = resolveStoredPath(quot.file_path);
+      if (!filePath) {
         return res.status(404).json({ success: false, error: 'File not found on server' });
       }
       res.download(filePath, quot.file_name || 'quotation');
@@ -345,8 +346,8 @@ class ProcurementController {
       if (!rows.length) return res.status(404).json({ success: false, error: 'Request not found' });
       const { pop_file_path, pop_file_name } = rows[0];
       if (!pop_file_path) return res.status(404).json({ success: false, error: 'No POP document uploaded for this request' });
-      const filePath = path.resolve(pop_file_path);
-      if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'POP file not found on server' });
+      const filePath = resolveStoredPath(pop_file_path);
+      if (!filePath) return res.status(404).json({ success: false, error: 'POP file not found on server' });
       res.download(filePath, pop_file_name || 'proof-of-payment');
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -463,8 +464,9 @@ class ProcurementController {
         return res.status(403).json({ success: false, error: 'Not authorized to delete this attachment' });
       }
       // Remove file from disk
-      if (fs.existsSync(attachment.file_path)) {
-        fs.unlinkSync(attachment.file_path);
+      const storedFile = resolveStoredPath(attachment.file_path);
+      if (storedFile) {
+        fs.unlinkSync(storedFile);
       }
       await query('DELETE FROM proc_request_attachments WHERE id = ?', [req.params.attachmentId]);
       res.json({ success: true, message: 'Attachment deleted' });
@@ -481,12 +483,13 @@ class ProcurementController {
       );
       if (!rows || !rows[0]) return res.status(404).json({ success: false, error: 'Attachment not found' });
       const attachment = rows[0];
-      if (!fs.existsSync(attachment.file_path)) {
+      const filePath = resolveStoredPath(attachment.file_path);
+      if (!filePath) {
         return res.status(404).json({ success: false, error: 'File not found on server' });
       }
       res.setHeader('Content-Disposition', `attachment; filename="${attachment.original_name}"`);
       res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
-      res.sendFile(path.resolve(attachment.file_path));
+      res.sendFile(filePath);
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }

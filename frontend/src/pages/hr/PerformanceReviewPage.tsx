@@ -19,6 +19,7 @@ import { toast } from 'react-toastify';
 import { getPerformanceReviews, createPerformanceReview, updatePerformanceReview } from '../../services/hrService';
 import { HRPerformanceReview } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate } from '../../utils/datetime';
 
 const STATUS_COLORS: Record<string, 'default' | 'info' | 'success' | 'warning'> = {
   DRAFT: 'default', IN_PROGRESS: 'info', COMPLETED: 'success', ACKNOWLEDGED: 'warning'
@@ -155,7 +156,7 @@ const PerformanceReviewPage: React.FC = () => {
                     <TableCell>{review.job_title || '-'}</TableCell>
                     <TableCell>{review.department_name || '-'}</TableCell>
                     <TableCell>{review.review_period}</TableCell>
-                    <TableCell>{review.review_date ? new Date(review.review_date).toLocaleDateString() : '-'}</TableCell>
+                    <TableCell>{formatDate(review.review_date)}</TableCell>
                     <TableCell align="center">
                       {review.overall_rating ? (
                         <Rating value={review.overall_rating} readOnly size="small" max={5} />
