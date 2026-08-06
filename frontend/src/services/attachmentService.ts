@@ -108,6 +108,45 @@ class AttachmentService {
   }
 
   /**
+   * Open an attachment in a new browser tab instead of saving it to disk.
+   *
+   * Reviewers overwhelmingly just want to read a receipt or a quotation, and
+   * downloading every one of them fills up their machine for nothing. The
+   * backend serves the file with `Content-Disposition: inline`, but only for
+   * types a browser can safely display — Word/Excel files are still handed
+   * over as a download because nothing else can be done with them.
+   *
+   * The tab is opened synchronously, before the token request, so the browser
+   * attributes it to the user's click and does not block it as a popup.
+   */
+  async viewAttachment(id: number, originalName?: string): Promise<void> {
+    const tab = window.open('', '_blank');
+    try {
+      const { data } = await api.get(`/attachments/${id}/download-token`);
+      const url = `${API_BASE_URL}/attachments/dl/${data.token}?disposition=inline`;
+      if (tab) {
+        tab.location.href = url;
+      } else {
+        // Popup blocked — fall back to a normal download so the click still works
+        await this.downloadAttachment(id, originalName || 'attachment');
+      }
+    } catch (err) {
+      tab?.close();
+      throw err;
+    }
+  }
+
+  /**
+   * Whether the browser will render this file in a tab rather than download it.
+   * Mirrors INLINE_VIEWABLE_TYPES in the backend attachment controller.
+   */
+  canViewInline(fileType?: string): boolean {
+    const t = (fileType || '').toLowerCase();
+    return t === 'application/pdf' || t === 'text/plain' ||
+      (t.startsWith('image/') && t !== 'image/svg+xml');
+  }
+
+  /**
    * Get attachments for an entity (request, budget transaction, etc.)
    */
   async getEntityAttachments(

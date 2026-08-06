@@ -34,6 +34,7 @@ import {
   ListItemIcon,
   ListItemText,
   ListItemSecondaryAction,
+  Tooltip,
   Autocomplete
 } from '@mui/material';
 import {
@@ -46,7 +47,8 @@ import {
   Close as CloseIcon,
   FlightTakeoff as TripIcon,
   Warning as WarningIcon,
-  Event as ActivityIcon
+  Event as ActivityIcon,
+  OpenInNew as OpenInNewIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { v4 as uuidv4 } from 'uuid';
@@ -155,6 +157,11 @@ const RequestForm: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  // Documents already stored against this request (edit mode only). Without
+  // these on screen there was no way to take an old quotation down, so every
+  // edit added another copy of the same document to the server.
+  const [existingAttachments, setExistingAttachments] = useState<any[]>([]);
+  const [deletingAttachmentId, setDeletingAttachmentId] = useState<number | null>(null);
   const [existingStatus, setExistingStatus] = useState<string | null>(null);
   const [crossDeptWarning, setCrossDeptWarning] = useState<string | null>(null);
   const [overdueBlocked, setOverdueBlocked] = useState(false);
@@ -304,6 +311,7 @@ const RequestForm: React.FC = () => {
       // carries over from a request that was open a moment ago.
       setHasPerDiemClaim(false);
       setPerDiemClaimData(emptyPerDiemClaim());
+      setExistingAttachments([]);
       return;
     }
 
@@ -344,6 +352,14 @@ const RequestForm: React.FC = () => {
         }
 
         setExistingStatus(request.status);
+
+        // Show what is already attached so the requester can replace rather
+        // than duplicate documents.
+        try {
+          const atts = await attachmentService.getEntityAttachments('REQUEST', Number(requestId));
+          setExistingAttachments(Array.isArray(atts) ? atts : (atts as any)?.data || []);
+        } catch { setExistingAttachments([]); }
+
         reset({
           justification: request.justification || '',
           currency: 'USD',
@@ -497,6 +513,28 @@ const RequestForm: React.FC = () => {
 
   const handleRemoveFile = (index: number) => {
     setUploadedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  /**
+   * Delete a document that is already stored against this request.
+   *
+   * Editing a request previously only ever added files, so correcting a
+   * quotation meant uploading the new one next to the wrong one — confusing for
+   * approvers and steadily filling the server with superseded copies.
+   */
+  const handleDeleteExistingAttachment = async (attachment: any) => {
+    const name = attachment.original_name || attachment.file_name || 'this file';
+    if (!window.confirm(`Remove "${name}" from this request? You can upload a corrected version afterwards.`)) return;
+    try {
+      setDeletingAttachmentId(attachment.id);
+      await attachmentService.deleteAttachment(attachment.id);
+      setExistingAttachments(prev => prev.filter(a => a.id !== attachment.id));
+      toast.success('Document removed');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to remove document');
+    } finally {
+      setDeletingAttachmentId(null);
+    }
   };
 
   const formatFileSize = (bytes: number) => {
@@ -1173,6 +1211,57 @@ const RequestForm: React.FC = () => {
           <Button variant="outlined" startIcon={<UploadIcon />} onClick={() => fileInputRef.current?.click()} sx={{ mb: 2 }}>
             Upload Documents
           </Button>
+
+          {/* Documents already on this request — view them, and remove any
+              being replaced so a corrected copy does not sit next to the old one */}
+          {isEditMode && existingAttachments.length > 0 && (
+            <Box mb={2}>
+              <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                Already attached ({existingAttachments.length})
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block" mb={1}>
+                Remove any document you are replacing before uploading the amended version.
+              </Typography>
+              <List dense sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                {existingAttachments.map((att: any, index: number) => (
+                  <ListItem key={att.id} divider={index < existingAttachments.length - 1}>
+                    <ListItemIcon><FileIcon color="success" /></ListItemIcon>
+                    <ListItemText
+                      primary={att.original_name || att.file_name}
+                      secondary={`${attachmentService.typeLabel(att.attachment_type)} • ${attachmentService.formatFileSize(att.file_size || 0)}`}
+                    />
+                    <ListItemSecondaryAction>
+                      <Tooltip title={attachmentService.canViewInline(att.file_type)
+                        ? 'View in browser'
+                        : 'This file type cannot be previewed — it will download'}>
+                        <span>
+                          <IconButton size="small" color="primary"
+                            disabled={!attachmentService.canViewInline(att.file_type)}
+                            onClick={() => attachmentService
+                              .viewAttachment(att.id, att.original_name || att.file_name)
+                              .catch(() => toast.error('Failed to open document'))}>
+                            <OpenInNewIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Tooltip title="Remove this document">
+                        <span>
+                          <IconButton edge="end" size="small" color="error"
+                            disabled={deletingAttachmentId === att.id}
+                            onClick={() => handleDeleteExistingAttachment(att)}>
+                            {deletingAttachmentId === att.id
+                              ? <CircularProgress size={16} />
+                              : <DeleteIcon fontSize="small" />}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </ListItemSecondaryAction>
+                  </ListItem>
+                ))}
+              </List>
+            </Box>
+          )}
+
           {uploadedFiles.length > 0 && (
             <List dense sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
               {uploadedFiles.map((file, index) => (
@@ -1188,7 +1277,7 @@ const RequestForm: React.FC = () => {
               ))}
             </List>
           )}
-          {uploadedFiles.length === 0 && (
+          {uploadedFiles.length === 0 && existingAttachments.length === 0 && (
             <Alert severity="info" icon={<FileIcon />}>
               No documents uploaded yet. Quotations are strongly recommended for procurement requests.
             </Alert>

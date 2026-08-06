@@ -12,7 +12,7 @@ import {
   IconButton, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Grid, CircularProgress, Alert, Tooltip, Card,
   CardContent, InputAdornment, Stack, LinearProgress,
-  Tabs, Tab, Badge, alpha, useTheme, FormControl, InputLabel,
+  Tabs, Tab, Badge, alpha, lighten, useTheme, FormControl, InputLabel,
   Select, MenuItem, Divider, ButtonGroup
 } from '@mui/material';
 import {
@@ -40,6 +40,7 @@ import { downloadHTMLAsPDF } from '../utils/pdfUtils';
 import projectService from '../services/projectService';
 import api from '../services/api';
 import { Project } from '../types';
+import { stickyActionCell, stickyActionHeadCell } from '../utils/tableStyles';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -1215,7 +1216,7 @@ const ProjectManagementPage: React.FC = () => {
                 <TableCell align="right" sx={{ py: 1 }}><strong>Spent / Util</strong></TableCell>
                 <TableCell align="center" sx={{ py: 1 }}><strong>Lines</strong></TableCell>
                 <TableCell align="center" sx={{ py: 1 }}><strong>Status</strong></TableCell>
-                <TableCell align="center" sx={{ py: 1, width: 80 }}><strong>Actions</strong></TableCell>
+                <TableCell align="center" sx={{ py: 1, width: 80, ...stickyActionHeadCell(lighten(theme.palette.primary.main, 0.94)) }}><strong>Actions</strong></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -1275,7 +1276,7 @@ const ProjectManagementPage: React.FC = () => {
                       <Chip label={p.is_active ? 'Active' : 'Inactive'} size="small"
                         color={p.is_active ? 'success' : 'default'} sx={{ height: 20, fontSize: '0.7rem' }} />
                     </TableCell>
-                    <TableCell align="center">
+                    <TableCell align="center" sx={{ ...stickyActionCell() }}>
                       <Stack direction="row" spacing={0} justifyContent="center">
                         <Tooltip title="View Project Details">
                           <IconButton size="small" color="primary" onClick={() => setSelectedProject(p)}>

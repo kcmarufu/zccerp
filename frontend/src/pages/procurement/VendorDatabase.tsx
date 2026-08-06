@@ -32,6 +32,7 @@ import { useAuthStore } from '../../store/authStore';
 import { getVendors, createVendor, updateVendor, deleteVendor } from '../../services/procurementService';
 import { ProcVendor } from '../../types';
 import { formatDate } from '../../utils/datetime';
+import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
 
 const CATEGORIES = ['IT Equipment', 'Office Supplies', 'Construction', 'Vehicles', 'Consultancy', 'Food & Beverage', 'Medical', 'Training', 'Transport', 'Other'];
 
@@ -232,7 +233,7 @@ const VendorDatabase: React.FC = () => {
               <TableCell><strong>Status</strong></TableCell>
               <TableCell><strong>Rating</strong></TableCell>
               <TableCell><strong>Quotations</strong></TableCell>
-              <TableCell align="center"><strong>Actions</strong></TableCell>
+              <TableCell align="center" sx={{ ...stickyActionHeadCell('grey.50') }}><strong>Actions</strong></TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -282,7 +283,7 @@ const VendorDatabase: React.FC = () => {
                 <TableCell>
                   <Chip label={vendor.quotation_count ?? 0} size="small" variant="outlined" />
                 </TableCell>
-                <TableCell align="center">
+                <TableCell align="center" sx={{ ...stickyActionCell() }}>
                   {canManage && (
                     <Tooltip title="Edit">
                       <IconButton size="small" color="primary" onClick={() => openEdit(vendor)}>

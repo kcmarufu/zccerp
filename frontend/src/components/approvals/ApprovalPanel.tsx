@@ -39,6 +39,7 @@ import {
   Warning as WarningIcon,
   Info as InfoIcon,
   Download as DownloadIcon,
+  OpenInNew as OpenInNewIcon,
   FilterList as FilterIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
@@ -476,15 +477,33 @@ const ApprovalPanel: React.FC = () => {
                             {att.attachment_type} &bull; {attachmentService.formatFileSize(att.file_size)} &bull; Uploaded by {att.first_name} {att.last_name}
                           </Typography>
                         </Box>
-                        <Tooltip title="Download">
-                          <IconButton
-                            size="small"
-                            color="primary"
-                            onClick={() => attachmentService.downloadAttachment(att.id, att.original_name)}
-                          >
-                            <DownloadIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
+                        <Box display="flex" gap={0.5}>
+                          <Tooltip title={attachmentService.canViewInline(att.file_type)
+                            ? 'View in browser'
+                            : 'This file type cannot be previewed — it will download'}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                color="primary"
+                                disabled={!attachmentService.canViewInline(att.file_type)}
+                                onClick={() => attachmentService
+                                  .viewAttachment(att.id, att.original_name)
+                                  .catch(() => toast.error('Failed to open attachment'))}
+                              >
+                                <OpenInNewIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title="Download">
+                            <IconButton
+                              size="small"
+                              color="primary"
+                              onClick={() => attachmentService.downloadAttachment(att.id, att.original_name)}
+                            >
+                              <DownloadIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
                       </CardContent>
                     </Card>
                   ))}

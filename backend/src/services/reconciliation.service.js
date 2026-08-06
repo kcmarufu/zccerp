@@ -906,7 +906,12 @@ class ReconciliationService {
   }
 
   /**
-   * Get reconciliation details for a request
+   * Get reconciliation details for a request (the most recent attempt)
+   *
+   * The reviewer subqueries are scoped to `al.created_at >= r.created_at`, i.e.
+   * to decisions taken on *this* attempt. Unscoped, a freshly resubmitted
+   * reconciliation inherited the previous attempt's rejection and displayed it
+   * as though the work had already been knocked back again.
    */
   async getReconciliation(requestId) {
     const reconciliations = await query(
@@ -917,21 +922,51 @@ class ReconciliationService {
               fr.last_name as reviewer_last_name,
               (SELECT al.comments FROM approval_logs al
                WHERE al.request_id = r.request_id
-                 AND al.approver_role IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS')
+                 AND al.previous_status = 'RECON_PENDING_LEAD'
                  AND al.action IN ('APPROVED', 'REJECTED')
-               ORDER BY al.created_at DESC LIMIT 1) AS lead_comments,
+                 AND al.created_at >= r.created_at
+               ORDER BY al.created_at ASC LIMIT 1) AS lead_comments,
               (SELECT al.action FROM approval_logs al
                WHERE al.request_id = r.request_id
-                 AND al.approver_role IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS')
+                 AND al.previous_status = 'RECON_PENDING_LEAD'
                  AND al.action IN ('APPROVED', 'REJECTED')
-               ORDER BY al.created_at DESC LIMIT 1) AS lead_action,
+                 AND al.created_at >= r.created_at
+               ORDER BY al.created_at ASC LIMIT 1) AS lead_action,
               (SELECT CONCAT(lu.first_name, ' ', lu.last_name)
                FROM approval_logs al2
                JOIN users lu ON al2.approver_id = lu.id
                WHERE al2.request_id = r.request_id
-                 AND al2.approver_role IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS')
+                 AND al2.previous_status = 'RECON_PENDING_LEAD'
                  AND al2.action IN ('APPROVED', 'REJECTED')
-               ORDER BY al2.created_at DESC LIMIT 1) AS lead_reviewer_name
+                 AND al2.created_at >= r.created_at
+               ORDER BY al2.created_at ASC LIMIT 1) AS lead_reviewer_name,
+              -- Which desk sent this attempt back, and why
+              (SELECT CASE al.previous_status
+                        WHEN 'RECON_PENDING_LEAD'    THEN 'LEAD'
+                        WHEN 'RECON_PENDING_FINANCE' THEN 'FINANCE'
+                      END
+               FROM approval_logs al
+               WHERE al.request_id = r.request_id
+                 AND al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
+                 AND al.created_at >= r.created_at
+               ORDER BY al.created_at ASC LIMIT 1) AS rejected_by_stage,
+              (SELECT al.approver_role FROM approval_logs al
+               WHERE al.request_id = r.request_id
+                 AND al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
+                 AND al.created_at >= r.created_at
+               ORDER BY al.created_at ASC LIMIT 1) AS rejected_by_role,
+              (SELECT CONCAT(ru.first_name, ' ', ru.last_name)
+               FROM approval_logs al
+               JOIN users ru ON al.approver_id = ru.id
+               WHERE al.request_id = r.request_id
+                 AND al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
+                 AND al.created_at >= r.created_at
+               ORDER BY al.created_at ASC LIMIT 1) AS rejected_by_name,
+              (SELECT al.comments FROM approval_logs al
+               WHERE al.request_id = r.request_id
+                 AND al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
+                 AND al.created_at >= r.created_at
+               ORDER BY al.created_at ASC LIMIT 1) AS rejection_comments
        FROM reconciliations r
        JOIN users u ON r.reconciled_by = u.id
        LEFT JOIN users fr ON r.finance_reviewer_id = fr.id
@@ -971,18 +1006,47 @@ class ReconciliationService {
 
   /**
    * Get all requests pending reconciliation (for requester)
+   *
+   * A rejected reconciliation puts the request back into DISPATCHED, which is
+   * indistinguishable on screen from one that was never reconciled at all. The
+   * latest attempt's status — and who rejected it — travels with the row so the
+   * list can say "Rejected by Finance, amend" rather than just "Reconcile".
    */
   async getMyDispatchedRequests(userId) {
     return await query(
-      `SELECT r.*, 
+      `SELECT r.*,
               d.department_name, d.department_code,
               (SELECT COUNT(*) FROM reconciliations rec WHERE rec.request_id = r.id) as reconciliation_count,
               latest_rec.submission_timeliness,
-              latest_rec.working_days_taken
+              latest_rec.working_days_taken,
+              latest_rec.status AS last_reconciliation_status,
+              latest_rec.created_at AS last_reconciliation_at,
+              (SELECT CASE al.previous_status
+                        WHEN 'RECON_PENDING_LEAD'    THEN 'LEAD'
+                        WHEN 'RECON_PENDING_FINANCE' THEN 'FINANCE'
+                      END
+                 FROM approval_logs al
+                WHERE al.request_id = r.id
+                  AND al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
+                  AND al.created_at >= latest_rec.created_at
+                ORDER BY al.created_at ASC LIMIT 1) AS rejected_by_stage,
+              (SELECT CONCAT(ru.first_name, ' ', ru.last_name)
+                 FROM approval_logs al
+                 JOIN users ru ON ru.id = al.approver_id
+                WHERE al.request_id = r.id
+                  AND al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
+                  AND al.created_at >= latest_rec.created_at
+                ORDER BY al.created_at ASC LIMIT 1) AS rejected_by_name,
+              (SELECT al.comments
+                 FROM approval_logs al
+                WHERE al.request_id = r.id
+                  AND al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
+                  AND al.created_at >= latest_rec.created_at
+                ORDER BY al.created_at ASC LIMIT 1) AS rejection_comments
        FROM requests r
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN (
-         SELECT request_id, submission_timeliness, working_days_taken
+         SELECT request_id, id, status, created_at, submission_timeliness, working_days_taken
          FROM reconciliations
          WHERE id = (SELECT MAX(id) FROM reconciliations r2 WHERE r2.request_id = reconciliations.request_id)
        ) latest_rec ON latest_rec.request_id = r.id
@@ -1031,22 +1095,102 @@ class ReconciliationService {
 
   /**
    * Get current user's submitted reconciliations (all statuses)
+   *
+   * A rejected reconciliation used to arrive here as a bare "REJECTED" with the
+   * reviewer's reason parked in `finance_comments` regardless of who wrote it,
+   * so a requester could not tell whether the Lead/HOP or Finance had sent it
+   * back, nor what they were being asked to fix. The decision itself is fully
+   * recorded in approval_logs, so each attempt is matched to the decisions
+   * taken during its own lifetime — from when it was submitted until the next
+   * attempt was submitted — and the stage, the reviewer's name and their
+   * comments are returned alongside it.
    */
   async getMyReconciliations(userId) {
     return await query(
-      `SELECT rec.*,
+      `WITH attempt AS (
+         SELECT rec.id,
+                rec.request_id,
+                rec.created_at AS attempt_start,
+                COALESCE(
+                  (SELECT MIN(r2.created_at) FROM reconciliations r2
+                    WHERE r2.request_id = rec.request_id
+                      AND r2.created_at > rec.created_at),
+                  '9999-12-31 23:59:59'
+                ) AS attempt_end
+         FROM reconciliations rec
+         WHERE rec.reconciled_by = ?
+       ),
+       logs AS (
+         SELECT a.id AS rec_id,
+                al.action, al.previous_status, al.new_status,
+                al.approver_role, al.comments, al.created_at,
+                CONCAT(u.first_name, ' ', u.last_name) AS approver_name
+         FROM attempt a
+         JOIN approval_logs al
+           ON al.request_id = a.request_id
+          AND al.created_at >= a.attempt_start
+          AND al.created_at <  a.attempt_end
+         JOIN users u ON u.id = al.approver_id
+       )
+       SELECT rec.*,
               r.request_code,
+              r.status AS request_status,
               r.total_amount as request_amount,
               d.department_name, d.department_code,
               fr.first_name as reviewer_first_name,
-              fr.last_name as reviewer_last_name
+              fr.last_name as reviewer_last_name,
+              -- Lead / HOP decision on this attempt
+              (SELECT l.action FROM logs l
+                WHERE l.rec_id = rec.id AND l.previous_status = 'RECON_PENDING_LEAD'
+                  AND l.action IN ('APPROVED', 'REJECTED')
+                ORDER BY l.created_at ASC LIMIT 1) AS lead_action,
+              (SELECT l.comments FROM logs l
+                WHERE l.rec_id = rec.id AND l.previous_status = 'RECON_PENDING_LEAD'
+                  AND l.action IN ('APPROVED', 'REJECTED')
+                ORDER BY l.created_at ASC LIMIT 1) AS lead_comments,
+              (SELECT l.approver_name FROM logs l
+                WHERE l.rec_id = rec.id AND l.previous_status = 'RECON_PENDING_LEAD'
+                  AND l.action IN ('APPROVED', 'REJECTED')
+                ORDER BY l.created_at ASC LIMIT 1) AS lead_reviewer_name,
+              (SELECT l.created_at FROM logs l
+                WHERE l.rec_id = rec.id AND l.previous_status = 'RECON_PENDING_LEAD'
+                  AND l.action IN ('APPROVED', 'REJECTED')
+                ORDER BY l.created_at ASC LIMIT 1) AS lead_reviewed_at,
+              -- Finance decision on this attempt
+              (SELECT l.action FROM logs l
+                WHERE l.rec_id = rec.id AND l.previous_status = 'RECON_PENDING_FINANCE'
+                  AND l.action IN ('APPROVED', 'REJECTED')
+                ORDER BY l.created_at ASC LIMIT 1) AS finance_action,
+              (SELECT l.approver_name FROM logs l
+                WHERE l.rec_id = rec.id AND l.previous_status = 'RECON_PENDING_FINANCE'
+                  AND l.action IN ('APPROVED', 'REJECTED')
+                ORDER BY l.created_at ASC LIMIT 1) AS finance_reviewer_name,
+              -- The rejection that sent this attempt back to the requester.
+              -- Reconciliation rejections are the ones that land on DISPATCHED;
+              -- previous_status says which desk it came from.
+              (SELECT CASE l.previous_status
+                        WHEN 'RECON_PENDING_LEAD'    THEN 'LEAD'
+                        WHEN 'RECON_PENDING_FINANCE' THEN 'FINANCE'
+                      END
+                 FROM logs l
+                WHERE l.rec_id = rec.id AND l.action = 'REJECTED' AND l.new_status = 'DISPATCHED'
+                ORDER BY l.created_at ASC LIMIT 1) AS rejected_by_stage,
+              (SELECT l.approver_role FROM logs l
+                WHERE l.rec_id = rec.id AND l.action = 'REJECTED' AND l.new_status = 'DISPATCHED'
+                ORDER BY l.created_at ASC LIMIT 1) AS rejected_by_role,
+              (SELECT l.approver_name FROM logs l
+                WHERE l.rec_id = rec.id AND l.action = 'REJECTED' AND l.new_status = 'DISPATCHED'
+                ORDER BY l.created_at ASC LIMIT 1) AS rejected_by_name,
+              (SELECT l.comments FROM logs l
+                WHERE l.rec_id = rec.id AND l.action = 'REJECTED' AND l.new_status = 'DISPATCHED'
+                ORDER BY l.created_at ASC LIMIT 1) AS rejection_comments
        FROM reconciliations rec
        JOIN requests r ON rec.request_id = r.id
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN users fr ON rec.finance_reviewer_id = fr.id
        WHERE rec.reconciled_by = ?
        ORDER BY rec.created_at DESC`,
-      [userId]
+      [userId, userId]
     );
   }
 

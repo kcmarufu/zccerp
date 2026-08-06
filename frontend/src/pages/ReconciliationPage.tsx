@@ -33,10 +33,13 @@ import {
   Search as SearchIcon,
   Warning as WarningIcon,
   Schedule as ScheduleIcon,
-  Edit as EditIcon
+  Edit as EditIcon,
+  OpenInNew as OpenInNewIcon,
+  Download as DownloadIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { format, formatDate } from '../utils/datetime';
+import { stickyActionCell, stickyActionHeadCell } from '../utils/tableStyles';
 import * as XLSX from 'xlsx';
 
 import { useAuthStore } from '../store/authStore';
@@ -84,6 +87,49 @@ const ReturnedAmount: React.FC<{ row: any }> = ({ row }) => {
       {money(returnedOf(row))}
     </Typography>
   );
+};
+
+/**
+ * View / download buttons for one attachment.
+ *
+ * "View" opens the file in a tab and is the primary action — reviewers are
+ * reading these documents, not collecting them. Download stays available for
+ * the formats a browser cannot display, and for anyone who does want the file.
+ */
+const AttachmentActions: React.FC<{ attachment: any }> = ({ attachment }) => {
+  const name = attachment.original_name || attachment.file_name;
+  const viewable = attachmentService.canViewInline(attachment.file_type);
+  return (
+    <Box display="flex" gap={0.5} alignItems="center">
+      <Tooltip title={viewable ? 'View in browser' : 'This file type cannot be previewed — it will download'}>
+        <span>
+          <Button size="small" variant="outlined" startIcon={<OpenInNewIcon fontSize="small" />}
+            disabled={!viewable}
+            onClick={() => attachmentService.viewAttachment(attachment.id, name).catch(() => toast.error('Failed to open attachment'))}>
+            View
+          </Button>
+        </span>
+      </Tooltip>
+      <Tooltip title="Download">
+        <IconButton size="small" color="primary"
+          onClick={() => attachmentService.downloadAttachment(attachment.id, name)}>
+          <DownloadIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    </Box>
+  );
+};
+
+/** Human label for the desk that rejected a reconciliation. */
+const rejectionStageLabel = (recon: any): string => {
+  const stage = recon?.rejected_by_stage;
+  if (stage === 'LEAD') return 'Lead / HOP';
+  if (stage === 'FINANCE') return 'Finance';
+  // Older records predate stage tracking; fall back to the recorded role.
+  const role = recon?.rejected_by_role;
+  if (role === 'FINANCE_CLERK') return 'Finance';
+  if (role === 'PROGRAM_LEAD' || role === 'HEAD_OF_PROGRAMS') return 'Lead / HOP';
+  return 'Reviewer';
 };
 
 const SubmissionTimeliness: React.FC<{ timeliness?: string | null; days?: number | null }> = ({ timeliness, days }) => {
@@ -387,6 +433,10 @@ ${buildDigitalStamp('')}
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [existingAttachments, setExistingAttachments] = useState<any[]>([]);
   const [editModeReconId, setEditModeReconId] = useState<number | null>(null);
+  // The rejected attempt this form was pre-filled from, so the requester can see
+  // who sent it back and what they asked for while they fix it.
+  const [rejectedAttempt, setRejectedAttempt] = useState<any>(null);
+  const [deletingAttachmentId, setDeletingAttachmentId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Review dialog
@@ -508,9 +558,24 @@ ${buildDigitalStamp('')}
     setUploadedFiles([]);
     setExistingAttachments([]);
     setEditModeReconId(null);
+    setRejectedAttempt(null);
     setRequestBudgetLines([]);
   };
 
+  /**
+   * Open the reconciliation form for a DISPATCHED request.
+   *
+   * A rejection returns the request to DISPATCHED, so this same button is what
+   * a requester presses to fix a rejected reconciliation — and it used to hand
+   * them a blank form, throwing away every figure and note they had already
+   * entered. When the last attempt was rejected, its line amounts, notes,
+   * additional costs, activity dates and uploaded documents are restored, and
+   * the reviewer's comments are shown alongside so they know what to fix.
+   *
+   * The rejected attempt itself is never edited in place: the request is back
+   * at DISPATCHED, so submitting creates a fresh attempt and the rejected one
+   * stays in the audit trail. Hence editModeReconId is deliberately left null.
+   */
   const openReconciliationForm = async (request: any) => {
     try {
       const response = await requestService.getById(request.id);
@@ -523,17 +588,10 @@ ${buildDigitalStamp('')}
         setSelectedRequest(fullRequest);
         const items: RequestItem[] = response.data.items || [];
         setRequestItems(items);
-        setFormItems(
-          items.map(item => ({
-            requestItemId: item.id,
-            description: item.item_description || (item as any).description || '',
-            budgetedAmount: (item.quantity || 1) * (item.unit_price || 0),
-            actualAmount: 0,
-            notes: ''
-          }))
-        );
+
         // Reset form fields first (this also clears requestBudgetLines to [])
         resetFormState();
+
         // Collect unique budget lines from request items for extra cost selection
         // Must be set AFTER resetFormState so the reset doesn't overwrite them
         const blMap = new Map<number, any>();
@@ -548,7 +606,64 @@ ${buildDigitalStamp('')}
             });
           }
         }
-        setRequestBudgetLines(Array.from(blMap.values()));
+        const budgetLines = Array.from(blMap.values());
+        setRequestBudgetLines(budgetLines);
+
+        // Recover the previous attempt if it was rejected
+        let previous: any = null;
+        try {
+          const prevRes = await reconciliationService.getReconciliation(request.id);
+          if (prevRes.success && prevRes.data && (prevRes.data as any).status === 'REJECTED') {
+            previous = prevRes.data;
+          }
+        } catch { /* no previous attempt — carry on with a blank form */ }
+
+        const previousItems: any[] = previous?.items || [];
+        const previousByRequestItem = new Map<number, any>(
+          previousItems.filter(pi => pi.request_item_id != null).map(pi => [Number(pi.request_item_id), pi])
+        );
+
+        setFormItems(
+          items.map(item => {
+            const prev = previousByRequestItem.get(Number(item.id));
+            return {
+              requestItemId: item.id,
+              description: item.item_description || (item as any).description || '',
+              budgetedAmount: (item.quantity || 1) * (item.unit_price || 0),
+              actualAmount: prev ? Number(prev.actual_amount) || 0 : 0,
+              notes: prev?.notes || ''
+            };
+          })
+        );
+
+        if (previous) {
+          // Additional costs carried no request_item_id when they were saved
+          setExtraItems(
+            previousItems
+              .filter(pi => pi.request_item_id == null)
+              .map(pi => ({
+                description: pi.description || '',
+                actualAmount: String(Number(pi.actual_amount) || ''),
+                notes: pi.notes || '',
+                budgetLineId: budgetLines.some(bl => bl.id === Number(pi.budget_line_id))
+                  ? Number(pi.budget_line_id)
+                  : null
+              }))
+          );
+          setFormNotes(previous.notes || '');
+          setOverspendNotes(previous.overspend_notes || '');
+          if (previous.actual_start_date) setActualStartDate(String(previous.actual_start_date).substring(0, 10));
+          if (previous.actual_end_date) setActualEndDate(String(previous.actual_end_date).substring(0, 10));
+          setRejectedAttempt(previous);
+
+          // The documents already on the request stay attached; the requester
+          // removes the ones being replaced rather than piling new copies on top.
+          try {
+            const attRes = await attachmentService.getEntityAttachments('REQUEST', request.id);
+            setExistingAttachments(Array.isArray(attRes) ? attRes : (attRes as any)?.data || []);
+          } catch { setExistingAttachments([]); }
+        }
+
         setFormOpen(true);
       }
     } catch (error) {
@@ -568,11 +683,36 @@ ${buildDigitalStamp('')}
         toast.error('Failed to load request details');
         return;
       }
+      resetFormState();
       setSelectedRequest(requestRes.data as any);
+
+      // Budget lines available for additional costs come from the request's own
+      // items — without them the "Add Cost" picker opens empty in edit mode.
+      const requestItemList: any[] = (requestRes.data as any).items || [];
+      const blMap = new Map<number, any>();
+      for (const item of requestItemList) {
+        const blId = item.budget_line_id;
+        if (blId && !blMap.has(blId)) {
+          blMap.set(blId, {
+            id: blId,
+            budget_code: item.budget_code || '',
+            budget_name: item.budget_name || item.item_description || '',
+            category: item.category || ''
+          });
+        }
+      }
+      const budgetLines = Array.from(blMap.values());
+      setRequestBudgetLines(budgetLines);
+
       if (reconRes.success && reconRes.data) {
         const existingRecon = reconRes.data as any;
+        const allItems: any[] = existingRecon.items || [];
+
+        // Additional costs (no request_item_id) belong in the editable extras
+        // section — folded into formItems they became read-only rows whose
+        // budget line was dropped on the next save.
         setFormItems(
-          (existingRecon.items || []).map((item: any) => ({
+          allItems.filter(item => item.request_item_id != null).map((item: any) => ({
             requestItemId: item.request_item_id,
             description: item.description || '',
             budgetedAmount: Number(item.budgeted_amount) || 0,
@@ -580,15 +720,25 @@ ${buildDigitalStamp('')}
             notes: item.notes || ''
           }))
         );
+        setExtraItems(
+          allItems.filter(item => item.request_item_id == null).map((item: any) => ({
+            description: item.description || '',
+            actualAmount: String(Number(item.actual_amount) || ''),
+            notes: item.notes || '',
+            budgetLineId: budgetLines.some(bl => bl.id === Number(item.budget_line_id))
+              ? Number(item.budget_line_id)
+              : null
+          }))
+        );
         setFormNotes(existingRecon.notes || '');
         setOverspendNotes(existingRecon.overspend_notes || '');
         setEditModeReconId(existingRecon.id);
         // Pre-fill actual dates if previously saved
         if (existingRecon.actual_start_date) {
-          setActualStartDate(existingRecon.actual_start_date.substring(0, 10));
+          setActualStartDate(String(existingRecon.actual_start_date).substring(0, 10));
         }
         if (existingRecon.actual_end_date) {
-          setActualEndDate(existingRecon.actual_end_date.substring(0, 10));
+          setActualEndDate(String(existingRecon.actual_end_date).substring(0, 10));
         }
       }
       try {
@@ -600,6 +750,28 @@ ${buildDigitalStamp('')}
       setFormOpen(true);
     } catch (error) {
       toast.error('Failed to load reconciliation for editing');
+    }
+  };
+
+  /**
+   * Remove a document already stored against the request.
+   *
+   * Amended paperwork used to be uploaded alongside the superseded copy,
+   * because there was no way to take the old one down — leaving reviewers to
+   * guess which version was current and filling the server with duplicates.
+   */
+  const handleDeleteExistingAttachment = async (attachment: any) => {
+    const name = attachment.original_name || attachment.file_name || 'this file';
+    if (!window.confirm(`Remove "${name}" from this request? You can upload a corrected version afterwards.`)) return;
+    try {
+      setDeletingAttachmentId(attachment.id);
+      await attachmentService.deleteAttachment(attachment.id);
+      setExistingAttachments(prev => prev.filter(a => a.id !== attachment.id));
+      toast.success('Attachment removed');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to remove attachment');
+    } finally {
+      setDeletingAttachmentId(null);
     }
   };
 
@@ -1015,15 +1187,25 @@ ${buildDigitalStamp('')}
             >
               <MenuItem value="">All Statuses</MenuItem>
               <MenuItem value="DISPATCHED">Awaiting Reconciliation</MenuItem>
+              <MenuItem value="RECON_REJECTED">Rejected — Needs Amending</MenuItem>
               <MenuItem value="RECON_PENDING_LEAD">Pending Lead Approval</MenuItem>
               <MenuItem value="RECON_PENDING_FINANCE">Pending Finance Approval</MenuItem>
               <MenuItem value="RECONCILED">Reconciled</MenuItem>
             </TextField>
           </Box>
           {(() => {
-            const filteredMyRequests = myRequests.filter(req =>
-              !myRequestsStatusFilter || req.status === myRequestsStatusFilter
-            );
+            const filteredMyRequests = myRequests.filter(req => {
+              if (!myRequestsStatusFilter) return true;
+              // Rejected reconciliations sit under the DISPATCHED request
+              // status, so they need a filter of their own to be findable.
+              if (myRequestsStatusFilter === 'RECON_REJECTED') {
+                return req.status === 'DISPATCHED' && req.last_reconciliation_status === 'REJECTED';
+              }
+              if (myRequestsStatusFilter === 'DISPATCHED') {
+                return req.status === 'DISPATCHED' && req.last_reconciliation_status !== 'REJECTED';
+              }
+              return req.status === myRequestsStatusFilter;
+            });
             const pagedMyRequests = filteredMyRequests.slice(myReqPage * myReqRowsPerPage, myReqPage * myReqRowsPerPage + myReqRowsPerPage);
             return filteredMyRequests.length === 0 ? (
               <Box py={6} textAlign="center">
@@ -1042,7 +1224,7 @@ ${buildDigitalStamp('')}
                       <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
                       <TableCell sx={{ fontWeight: 600 }}>Date</TableCell>
                       <TableCell sx={{ fontWeight: 600 }}>Submission Deadline</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }} align="center">Action</TableCell>
+                      <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Action</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -1059,7 +1241,25 @@ ${buildDigitalStamp('')}
                         <TableCell><Typography fontWeight={500}>{req.request_code}</Typography></TableCell>
                         <TableCell><Chip label={req.department_code} size="small" variant="outlined" /></TableCell>
                         <TableCell>${Number(req.total_amount || 0).toLocaleString()}</TableCell>
-                        <TableCell><Chip label={getStatusLabel(req.status)} color={getStatusColor(req.status)} size="small" /></TableCell>
+                        <TableCell>
+                          <Chip
+                            label={req.status === 'DISPATCHED' && req.last_reconciliation_status === 'REJECTED'
+                              ? `Rejected by ${rejectionStageLabel(req)}`
+                              : getStatusLabel(req.status)}
+                            color={req.status === 'DISPATCHED' && req.last_reconciliation_status === 'REJECTED'
+                              ? 'error'
+                              : getStatusColor(req.status)}
+                            size="small"
+                          />
+                          {req.status === 'DISPATCHED' && req.last_reconciliation_status === 'REJECTED' && req.rejection_comments && (
+                            <Tooltip title={req.rejection_comments}>
+                              <Typography variant="caption" color="error.main" display="block"
+                                sx={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'help' }}>
+                                {req.rejection_comments}
+                              </Typography>
+                            </Tooltip>
+                          )}
+                        </TableCell>
                         <TableCell>{req.dispatched_at ? format(new Date(req.dispatched_at), 'MMM d, yyyy') : req.updated_at ? format(new Date(req.updated_at), 'MMM d, yyyy') : '-'}</TableCell>
                         <TableCell>
                           {daysElapsed !== null ? (
@@ -1080,10 +1280,13 @@ ${buildDigitalStamp('')}
                               : <Typography variant="body2" color="text.disabled">—</Typography>
                           )}
                         </TableCell>
-                        <TableCell align="center">
+                        <TableCell align="center" sx={{ ...stickyActionCell() }}>
                           {req.status === 'DISPATCHED' ? (
-                            <Button size="small" variant="contained" color="primary" startIcon={<ReconcileIcon />} onClick={() => openReconciliationForm(req)}>
-                              Reconcile
+                            <Button size="small" variant="contained"
+                              color={req.last_reconciliation_status === 'REJECTED' ? 'warning' : 'primary'}
+                              startIcon={req.last_reconciliation_status === 'REJECTED' ? <EditIcon /> : <ReconcileIcon />}
+                              onClick={() => openReconciliationForm(req)}>
+                              {req.last_reconciliation_status === 'REJECTED' ? 'Amend & Resubmit' : 'Reconcile'}
                             </Button>
                           ) : req.status === 'RECONCILED' ? (
                             <Chip label="Reconciled" color="success" size="small" icon={<ApproveIcon />} />
@@ -1161,7 +1364,7 @@ ${buildDigitalStamp('')}
                     <TableCell sx={{ fontWeight: 600 }}>Lead/HOP Comments</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Finance Comments</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Submitted</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }} align="center">Action</TableCell>
+                    <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Action</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1171,33 +1374,82 @@ ${buildDigitalStamp('')}
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(recon.total_spent || 0).toLocaleString()}</TableCell>
                       <TableCell><ReturnedAmount row={recon} /></TableCell>
                       <TableCell>
+                        {/* A bare "Rejected" left requesters unable to tell which
+                            desk sent the work back, so the stage is named here */}
                         <Chip
-                          label={getStatusLabel(recon.status)}
+                          label={recon.status === 'REJECTED'
+                            ? `Rejected by ${rejectionStageLabel(recon)}`
+                            : getStatusLabel(recon.status)}
                           color={getStatusColor(recon.status)}
                           size="small"
                         />
+                        {recon.status === 'REJECTED' && recon.rejected_by_name && (
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            {recon.rejected_by_name}
+                          </Typography>
+                        )}
                       </TableCell>
                       <TableCell>
                         <SubmissionTimeliness timeliness={(recon as any).submission_timeliness} days={(recon as any).working_days_taken} />
                         {!(recon as any).submission_timeliness && <Typography variant="body2" color="text.disabled">—</Typography>}
                       </TableCell>
                       <TableCell>
-                        <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {(recon as any).lead_comments || '-'}
-                        </Typography>
+                        {/* Comments are what the requester has to act on, so
+                            each one is shown in full on hover and attributed to
+                            the desk that actually wrote it */}
+                        {(() => {
+                          const lead = (recon as any).lead_comments;
+                          if (!lead) return <Typography variant="body2" color="text.disabled">-</Typography>;
+                          const rejected = (recon as any).lead_action === 'REJECTED';
+                          return (
+                            <Tooltip title={lead}>
+                              <Typography variant="body2"
+                                color={rejected ? 'error.main' : 'text.secondary'}
+                                sx={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'help' }}>
+                                {lead}
+                              </Typography>
+                            </Tooltip>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
-                        <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {recon.finance_comments || '-'}
-                        </Typography>
+                        {(() => {
+                          // finance_comments carries whichever reviewer wrote
+                          // it; only show it here when Finance was the author.
+                          const fromLead = (recon as any).rejected_by_stage === 'LEAD';
+                          const financeText = fromLead ? null : recon.finance_comments;
+                          if (!financeText) return <Typography variant="body2" color="text.disabled">-</Typography>;
+                          const rejected = recon.status === 'REJECTED';
+                          return (
+                            <Tooltip title={financeText}>
+                              <Typography variant="body2"
+                                color={rejected ? 'error.main' : 'text.secondary'}
+                                sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'help' }}>
+                                {financeText}
+                              </Typography>
+                            </Tooltip>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>{recon.created_at ? format(new Date(recon.created_at), 'MMM d, yyyy') : '-'}</TableCell>
-                      <TableCell align="center">
+                      <TableCell align="center" sx={{ ...stickyActionCell() }}>
                         {recon.status === 'SUBMITTED' && (
                           <Tooltip title="Edit Reconciliation">
                             <IconButton size="small" color="primary" onClick={() => openEditReconciliation(recon)}>
                               <EditIcon />
                             </IconButton>
+                          </Tooltip>
+                        )}
+                        {/* A rejection returns the request to DISPATCHED — that
+                            is the requester's cue to amend and resubmit, and it
+                            now happens from the row they were just reading */}
+                        {recon.status === 'REJECTED' && (recon as any).request_status === 'DISPATCHED' && (
+                          <Tooltip title="Amend & Resubmit — your previous entries are restored">
+                            <Button size="small" variant="contained" color="warning" startIcon={<EditIcon />}
+                              onClick={() => openReconciliationForm({ ...recon, id: recon.request_id })}
+                              sx={{ mr: 0.5 }}>
+                              Amend
+                            </Button>
                           </Tooltip>
                         )}
                         <Tooltip title="View Details">
@@ -1295,7 +1547,7 @@ ${buildDigitalStamp('')}
                     <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Submitted</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Timeliness</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }} align="center">Actions</TableCell>
+                    <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1315,7 +1567,7 @@ ${buildDigitalStamp('')}
                       <TableCell><ReturnedAmount row={req} /></TableCell>
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
-                      <TableCell align="center">
+                      <TableCell align="center" sx={{ ...stickyActionCell() }}>
                         <Button size="small" variant="outlined" startIcon={<ViewIcon />}
                           onClick={() => openReviewDialog(req, canDirectApprove ? 'finance' : 'lead')}>
                           Review
@@ -1353,7 +1605,7 @@ ${buildDigitalStamp('')}
                     <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Reviewed</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }} align="center">Actions</TableCell>
+                    <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1367,7 +1619,7 @@ ${buildDigitalStamp('')}
                         <Chip label={rec.status?.replace(/_/g, ' ') || '—'} color={getStatusColor(rec.status)} size="small" />
                       </TableCell>
                       <TableCell>{rec.lead_approved_at ? format(new Date(rec.lead_approved_at), 'MMM d, yyyy') : '-'}</TableCell>
-                      <TableCell align="center">
+                      <TableCell align="center" sx={{ ...stickyActionCell() }}>
                         <Tooltip title="View Details">
                           <IconButton size="small" color="primary" onClick={() => openViewDialog(rec)}><ViewIcon /></IconButton>
                         </Tooltip>
@@ -1473,7 +1725,7 @@ ${buildDigitalStamp('')}
                     <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Submitted</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Timeliness</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }} align="center">Actions</TableCell>
+                    <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1498,7 +1750,7 @@ ${buildDigitalStamp('')}
                       <TableCell><ReturnedAmount row={req} /></TableCell>
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
-                      <TableCell align="center">
+                      <TableCell align="center" sx={{ ...stickyActionCell() }}>
                         {req.status === 'RECON_PENDING_FINANCE' ? (
                           <Button size="small" variant="outlined" startIcon={<ViewIcon />} onClick={() => openReviewDialog(req, 'finance')}>Review</Button>
                         ) : (
@@ -1542,7 +1794,7 @@ ${buildDigitalStamp('')}
                     <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Decision</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Reviewed</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }} align="center">Actions</TableCell>
+                    <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1561,7 +1813,7 @@ ${buildDigitalStamp('')}
                         />
                       </TableCell>
                       <TableCell>{rec.reviewed_at ? format(new Date(rec.reviewed_at), 'MMM d, yyyy') : '—'}</TableCell>
-                      <TableCell align="center">
+                      <TableCell align="center" sx={{ ...stickyActionCell() }}>
                         <Tooltip title="View Details">
                           <IconButton size="small" color="primary" onClick={() => openViewDialog(rec)}><ViewIcon /></IconButton>
                         </Tooltip>
@@ -1694,7 +1946,7 @@ ${buildDigitalStamp('')}
                         <TableCell sx={{ fontWeight: 600 }}>Timeliness</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>Reviewed By</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>Reviewed</TableCell>
-                        <TableCell sx={{ fontWeight: 600 }} align="center">Actions</TableCell>
+                        <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Actions</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -1726,7 +1978,7 @@ ${buildDigitalStamp('')}
                               {rec.reviewer_first_name ? `${rec.reviewer_first_name} ${rec.reviewer_last_name}` : <Typography variant="body2" color="text.disabled">—</Typography>}
                             </TableCell>
                             <TableCell>{rec.reviewed_at ? format(new Date(rec.reviewed_at), 'MMM d, yyyy') : '—'}</TableCell>
-                            <TableCell align="center">
+                            <TableCell align="center" sx={{ ...stickyActionCell() }}>
                               {rec.reconciliation_id && (
                                 <Tooltip title="View Details">
                                   <IconButton size="small" color="primary" onClick={() => openViewDialog(rec)}><ViewIcon /></IconButton>
@@ -1774,13 +2026,40 @@ ${buildDigitalStamp('')}
           <Box display="flex" alignItems="center" gap={1}>
             <ReconcileIcon color="primary" />
             <Typography variant="h6">
-              {editModeReconId ? 'Edit Reconciliation' : 'Reconcile'}: {selectedRequest?.request_code}
+              {editModeReconId
+                ? 'Edit Reconciliation'
+                : rejectedAttempt ? 'Amend & Resubmit Reconciliation' : 'Reconcile'}: {selectedRequest?.request_code}
             </Typography>
           </Box>
         </DialogTitle>
         <DialogContent dividers>
           {selectedRequest && (
             <Box>
+              {/* What the reviewer asked for, kept in front of the requester
+                  while they correct the reconciliation */}
+              {rejectedAttempt && (
+                <Alert severity="error" icon={<RejectIcon />} sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" fontWeight={700}>
+                    Rejected by {rejectionStageLabel(rejectedAttempt)}
+                    {rejectedAttempt.rejected_by_name ? ` — ${rejectedAttempt.rejected_by_name}` : ''}
+                    {rejectedAttempt.reviewed_at ? ` on ${format(new Date(rejectedAttempt.reviewed_at), 'dd MMM yyyy')}` : ''}
+                  </Typography>
+                  {(rejectedAttempt.rejection_comments || rejectedAttempt.finance_comments) && (
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
+                      <strong>Reason:</strong> {rejectedAttempt.rejection_comments || rejectedAttempt.finance_comments}
+                    </Typography>
+                  )}
+                  {rejectedAttempt.rejected_by_stage === 'FINANCE' && rejectedAttempt.lead_comments && (
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
+                      <strong>Earlier Lead/HOP comment:</strong> {rejectedAttempt.lead_comments}
+                    </Typography>
+                  )}
+                  <Typography variant="caption" display="block" sx={{ mt: 0.8 }}>
+                    Your previous figures, notes and documents have been restored below — amend what was
+                    queried, remove any document you are replacing, then resubmit.
+                  </Typography>
+                </Alert>
+              )}
               {(() => {
                 const isActivity = Boolean((selectedRequest as any).is_activity_request);
                 const baseDate = isActivity && (selectedRequest as any).activity_end_date
@@ -2018,17 +2297,48 @@ ${buildDigitalStamp('')}
                 <Typography variant="caption" color="text.secondary" display="block" mb={1}>
                   Attach receipts, invoices, or supporting documents (PDF, images, Office docs - max 8MB each)
                 </Typography>
-                {/* Existing attachments (edit mode) */}
+                {/* Existing attachments — viewable and removable so amended
+                    documents replace the originals instead of stacking up */}
                 {existingAttachments.length > 0 && (
                   <Box mb={1}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600}>Previously uploaded:</Typography>
+                    <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                      Previously uploaded ({existingAttachments.length}) — remove any document you are replacing:
+                    </Typography>
                     <List dense disablePadding>
                       {existingAttachments.map((att: any, idx: number) => (
-                        <ListItem key={`existing-${idx}`}>
+                        <ListItem key={att.id ?? `existing-${idx}`}
+                          secondaryAction={
+                            <Box display="flex" alignItems="center" gap={0.5}>
+                              <Tooltip title={attachmentService.canViewInline(att.file_type)
+                                ? 'View in browser'
+                                : 'This file type cannot be previewed — it will download'}>
+                                <span>
+                                  <IconButton size="small" color="primary"
+                                    disabled={!attachmentService.canViewInline(att.file_type)}
+                                    onClick={() => attachmentService
+                                      .viewAttachment(att.id, att.original_name || att.file_name)
+                                      .catch(() => toast.error('Failed to open attachment'))}>
+                                    <OpenInNewIcon fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="Remove this document">
+                                <span>
+                                  <IconButton size="small" color="error"
+                                    disabled={deletingAttachmentId === att.id}
+                                    onClick={() => handleDeleteExistingAttachment(att)}>
+                                    {deletingAttachmentId === att.id
+                                      ? <CircularProgress size={16} />
+                                      : <DeleteIcon fontSize="small" />}
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            </Box>
+                          }>
                           <ListItemIcon sx={{ minWidth: 32 }}><FileIcon fontSize="small" color="success" /></ListItemIcon>
                           <ListItemText
-                            primary={att.file_name || att.original_name || `Attachment ${idx + 1}`}
-                            secondary="Already uploaded"
+                            primary={att.original_name || att.file_name || `Attachment ${idx + 1}`}
+                            secondary={`${attachmentService.typeLabel(att.attachment_type)} • ${attachmentService.formatFileSize(att.file_size || 0)} • already uploaded`}
                             primaryTypographyProps={{ fontSize: '0.8rem', fontWeight: 500, color: 'success.main' }}
                             secondaryTypographyProps={{ fontSize: '0.7rem' }} />
                         </ListItem>
@@ -2081,7 +2391,9 @@ ${buildDigitalStamp('')}
           <Button variant="contained" startIcon={isSubmitting ? <CircularProgress size={18} /> : <SubmitIcon />}
             onClick={handleSubmitReconciliation}
             disabled={isSubmitting || formItems.length === 0 || (totalVariance < 0 && !overspendNotes.trim()) || (uploadedFiles.length === 0 && existingAttachments.length === 0)}>
-            {editModeReconId ? 'Update Reconciliation' : 'Submit Reconciliation'}
+            {editModeReconId
+              ? 'Update Reconciliation'
+              : rejectedAttempt ? 'Resubmit Reconciliation' : 'Submit Reconciliation'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -2224,10 +2536,7 @@ ${buildDigitalStamp('')}
                           primaryTypographyProps={{ variant: 'body2' }}
                           secondaryTypographyProps={{ variant: 'caption' }}
                         />
-                        <Button size="small" variant="outlined"
-                          onClick={() => attachmentService.downloadAttachment(att.id, att.original_name || att.file_name)}>
-                          Download
-                        </Button>
+                        <AttachmentActions attachment={att} />
                       </ListItem>
                     ))}
                   </List>
@@ -2293,15 +2602,26 @@ ${buildDigitalStamp('')}
                   <Typography fontWeight={500}>{viewReconciliation.created_at ? format(new Date(viewReconciliation.created_at), 'MMM d, yyyy') : '-'}</Typography>
                 </Grid>
               </Grid>
-              {(viewReconciliation as any).lead_comments && (
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  <Typography variant="subtitle2">HOP / Lead Comments:</Typography>
-                  {(viewReconciliation as any).lead_comments}
+              {/* Rejections are attributed to the desk that made them. The
+                  finance_comments column stores whichever reviewer wrote the
+                  reason, so labelling it "Finance" unconditionally told
+                  requesters the wrong thing when the Lead/HOP rejected. */}
+              {viewReconciliation.status === 'REJECTED' && (
+                <Alert severity="error" icon={<RejectIcon />} sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" fontWeight={700}>
+                    Rejected by {rejectionStageLabel(viewReconciliation)}
+                    {viewReconciliation.rejected_by_name ? ` — ${viewReconciliation.rejected_by_name}` : ''}
+                  </Typography>
+                  {(viewReconciliation.rejection_comments || viewReconciliation.finance_comments) && (
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
+                      <strong>Reason:</strong> {viewReconciliation.rejection_comments || viewReconciliation.finance_comments}
+                    </Typography>
+                  )}
                 </Alert>
               )}
 
-              {viewReconciliation.finance_comments && (
-                <Alert severity={viewReconciliation.status === 'APPROVED' ? 'success' : 'error'} sx={{ mb: 2 }}>
+              {viewReconciliation.status !== 'REJECTED' && viewReconciliation.finance_comments && (
+                <Alert severity={viewReconciliation.status === 'APPROVED' ? 'success' : 'info'} sx={{ mb: 2 }}>
                   <Typography variant="subtitle2">Finance Comments:</Typography>
                   {viewReconciliation.finance_comments}
                 </Alert>
@@ -2396,10 +2716,7 @@ ${buildDigitalStamp('')}
                           primaryTypographyProps={{ variant: 'body2' }}
                           secondaryTypographyProps={{ variant: 'caption' }}
                         />
-                        <Button size="small" variant="outlined"
-                          onClick={() => attachmentService.downloadAttachment(att.id, att.original_name || att.file_name)}>
-                          Download
-                        </Button>
+                        <AttachmentActions attachment={att} />
                       </ListItem>
                     ))}
                   </List>

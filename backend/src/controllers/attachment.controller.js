@@ -25,6 +25,51 @@ const { resolveStoredPath } = require('../config/uploads');
 const DOWNLOAD_TOKEN_TTL = '10m';
 const DOWNLOAD_TOKEN_PURPOSE = 'attachment-download';
 
+/**
+ * Content types that may be rendered *inline* in the browser tab.
+ *
+ * Viewing beats downloading for the people reviewing these files — they only
+ * want to read a receipt, not accumulate a Downloads folder full of them. But
+ * inline rendering means the browser executes whatever it is handed, so only
+ * types that cannot carry script are served that way:
+ *   - PDF and raster images render in the built-in viewers,
+ *   - SVG is deliberately excluded (it can carry <script>),
+ *   - anything else (Word, Excel, CSV, unknown) still comes down as a download,
+ *     because no browser can display it anyway.
+ *
+ * `Content-Type` here comes from the upload, i.e. from the client, so it is
+ * treated as untrusted: `X-Content-Type-Options: nosniff` pins the browser to
+ * the type we send, and a locked-down CSP neutralises the response even if a
+ * future type slips onto this list.
+ */
+const INLINE_VIEWABLE_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'image/tiff',
+  'text/plain'
+]);
+
+const canRenderInline = (fileType) => INLINE_VIEWABLE_TYPES.has(String(fileType || '').toLowerCase());
+
+/**
+ * Set the disposition and hardening headers for a file being served.
+ * Falls back to a download whenever the type is not safely viewable.
+ */
+const applyFileHeaders = (res, attachment, wantsInline) => {
+  const safeFileName = attachment.original_name.replace(/[\r\n"\\]/g, '_');
+  const inline = wantsInline && canRenderInline(attachment.file_type);
+
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${safeFileName}"`);
+  res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self' data:; object-src 'none'; script-src 'none'; style-src 'unsafe-inline'; sandbox");
+};
+
 const signDownloadToken = (attachmentId, userId) => jwt.sign(
   { attachmentId, userId, purpose: DOWNLOAD_TOKEN_PURPOSE },
   process.env.JWT_SECRET,
@@ -218,9 +263,10 @@ exports.downloadByToken = async (req, res) => {
     const filePath = resolveStoredPath(attachment.file_path);
     if (!filePath) return res.status(404).send('File not found on server');
 
-    const safeFileName = attachment.original_name.replace(/[\r\n"\\]/g, '_');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
-    res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
+    // ?disposition=inline asks the browser to display the file instead of
+    // saving it. Honoured only for types that are safe to render — see
+    // INLINE_VIEWABLE_TYPES.
+    applyFileHeaders(res, attachment, req.query.disposition === 'inline');
 
     const data = await fs.promises.readFile(filePath);
     res.setHeader('Content-Length', data.length);
@@ -267,9 +313,7 @@ exports.downloadAttachment = async (req, res) => {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Type');
 
-    const safeFileName = attachment.original_name.replace(/[\r\n"\\]/g, '_');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
-    res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
+    applyFileHeaders(res, attachment, req.query.disposition === 'inline');
 
     // Use promises so errors are caught by the outer try/catch.
     // Callback-based fs.readFile inside an async function is NOT covered by try/catch
@@ -333,15 +377,38 @@ exports.deleteAttachment = async (req, res) => {
     const attachment = attachments[0];
     
     // Check if user is authorized to delete (uploader or admin/finance)
-    const isAuthorized = 
-      attachment.uploaded_by === userId || 
+    const isPrivileged =
       userRole === 'FINANCE_CLERK' ||
-      userRole === 'HEAD_OF_PROGRAMS';
-    
-    if (!isAuthorized) {
+      userRole === 'HEAD_OF_PROGRAMS' ||
+      userRole === 'ADMIN';
+    const isUploader = attachment.uploaded_by === userId;
+
+    if (!isUploader && !isPrivileged) {
       return res.status(403).json({ error: 'Not authorized to delete this attachment' });
     }
-    
+
+    // Requesters replace their own documents while a request is still theirs to
+    // work on — a rejected float being re-submitted, or a reconciliation being
+    // corrected. Once the request has been approved for payment or fully
+    // reconciled, the files are the evidence behind that decision, so the
+    // uploader can no longer remove them (Finance/HOP still can).
+    if (isUploader && !isPrivileged && attachment.entity_type === 'REQUEST') {
+      const UPLOADER_DELETABLE_STATUSES = [
+        'DRAFT', 'REJECTED',
+        'PENDING_ADMIN_APPROVAL', 'PENDING_LEAD_APPROVAL',
+        'PENDING_HOP_APPROVAL', 'PENDING_FINANCE_APPROVAL',
+        'DISPATCHED', 'PENDING_RECONCILIATION',
+        'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE'
+      ];
+      const requests = await query('SELECT status FROM requests WHERE id = ?', [attachment.entity_id]);
+      const status = requests.length ? requests[0].status : null;
+      if (status && !UPLOADER_DELETABLE_STATUSES.includes(status)) {
+        return res.status(403).json({
+          error: `Attachments can no longer be removed — this request is ${status.replace(/_/g, ' ')}. Please contact Finance if a document must be replaced.`
+        });
+      }
+    }
+
     // Soft delete
     await query(
       'UPDATE attachments SET is_active = FALSE WHERE id = ?',

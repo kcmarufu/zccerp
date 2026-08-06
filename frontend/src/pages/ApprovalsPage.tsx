@@ -64,12 +64,14 @@ import {
   FilterList as FilterIcon,
   Clear as ClearIcon,
   AttachFile as AttachIcon,
-  Download as DownloadIcon
+  Download as DownloadIcon,
+  OpenInNew as OpenInNewIcon
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import { toast } from 'react-toastify';
 import { formatDistanceToNow } from 'date-fns';
 import { format } from '../utils/datetime';
+import { stickyActionCell, stickyActionHeadCell } from '../utils/tableStyles';
 import { downloadHTMLAsPDF, buildDigitalStamp, buildTravelClaimPageHTML } from '../utils/pdfUtils';
 
 import { Request, RequestItem, BudgetImpact, ApprovalPayload, PerDiemClaim } from '../types';
@@ -658,7 +660,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
               </TableCell>
               {type === 'approved' && <TableCell sx={{ fontWeight: 'bold' }}>Reversal Window</TableCell>}
               {type === 'rejected' && <TableCell sx={{ fontWeight: 'bold' }}>Reason</TableCell>}
-              <TableCell sx={{ fontWeight: 'bold' }} align="center">Actions</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', ...stickyActionHeadCell('grey.100') }} align="center">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -740,7 +742,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                       </Tooltip>
                     </TableCell>
                   )}
-                  <TableCell align="center">
+                  <TableCell align="center" sx={{ ...stickyActionCell() }}>
                     <Tooltip title="View Details">
                       <IconButton size="small" onClick={() => handleOpenDialog(request, 'view')}>
                         <ViewIcon />
@@ -1187,15 +1189,33 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                           disablePadding
                           sx={{ py: 0.5 }}
                           secondaryAction={
-                            <Tooltip title="Download">
-                              <IconButton
-                                size="small"
-                                color="primary"
-                                onClick={() => attachmentService.downloadAttachment(att.id, att.original_name || att.file_name)}
-                              >
-                                <DownloadIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
+                            <Box display="flex" gap={0.5}>
+                              <Tooltip title={attachmentService.canViewInline(att.file_type)
+                                ? 'View in browser'
+                                : 'This file type cannot be previewed — it will download'}>
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    color="primary"
+                                    disabled={!attachmentService.canViewInline(att.file_type)}
+                                    onClick={() => attachmentService
+                                      .viewAttachment(att.id, att.original_name || att.file_name)
+                                      .catch(() => toast.error('Failed to open attachment'))}
+                                  >
+                                    <OpenInNewIcon fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="Download">
+                                <IconButton
+                                  size="small"
+                                  color="primary"
+                                  onClick={() => attachmentService.downloadAttachment(att.id, att.original_name || att.file_name)}
+                                >
+                                  <DownloadIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </Box>
                           }
                         >
                           <ListItemIcon sx={{ minWidth: 32 }}>

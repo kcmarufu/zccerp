@@ -43,6 +43,7 @@ import {
   Edit as EditIcon,
   Send as SendIcon,
   Download as DownloadIcon,
+  OpenInNew as OpenInNewIcon,
   CheckCircle as ApproveIcon,
   Cancel as RejectIcon,
   LocalShipping as DispatchIcon,
@@ -127,6 +128,15 @@ const RequestDetailPage: React.FC = () => {
       await attachmentService.downloadAttachment(attachment.id, attachment.original_name);
     } catch (err) {
       setError('Failed to download attachment');
+    }
+  };
+
+  /** Open the file in a tab — most readers only want to look at it. */
+  const handleViewAttachment = async (attachment: Attachment) => {
+    try {
+      await attachmentService.viewAttachment(attachment.id, attachment.original_name);
+    } catch (err) {
+      setError('Failed to open attachment');
     }
   };
 
@@ -940,7 +950,7 @@ ${buildClaimPage()}
                     <TableCell sx={{ width: '14%' }}>Type</TableCell>
                     <TableCell sx={{ width: '18%' }}>Uploaded By</TableCell>
                     <TableCell sx={{ width: '18%' }}>Date</TableCell>
-                    <TableCell align="center" sx={{ width: '10%' }}>Download</TableCell>
+                    <TableCell align="center" sx={{ width: '10%' }}>View / Download</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -984,6 +994,20 @@ ${buildClaimPage()}
                         </Typography>
                       </TableCell>
                       <TableCell align="center">
+                        <Tooltip title={attachmentService.canViewInline(att.file_type)
+                          ? 'View in browser'
+                          : 'This file type cannot be previewed — it will download'}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              color="primary"
+                              disabled={!attachmentService.canViewInline(att.file_type)}
+                              onClick={() => handleViewAttachment(att)}
+                            >
+                              <OpenInNewIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                         <Tooltip title="Download">
                           <IconButton
                             size="small"

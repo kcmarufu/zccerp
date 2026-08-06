@@ -36,6 +36,7 @@ import * as XLSX from 'xlsx';
 import api from '../../services/api';
 import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
 import { toast } from 'react-toastify';
+import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
 
 const STATUSES: ProcurementStatus[] = [
   'DRAFT', 'PENDING_DEPT_APPROVAL', 'PENDING_FINANCE_APPROVAL',
@@ -256,7 +257,7 @@ const PurchaseRequestList: React.FC = () => {
               <TableCell><strong>Amount</strong></TableCell>
               <TableCell><strong>Status</strong></TableCell>
               <TableCell><strong>Date</strong></TableCell>
-              <TableCell align="center"><strong>Actions</strong></TableCell>
+              <TableCell align="center" sx={{ ...stickyActionHeadCell('grey.50') }}><strong>Actions</strong></TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -357,7 +358,7 @@ const PurchaseRequestList: React.FC = () => {
                       {format(new Date(req.created_at), 'dd MMM yyyy')}
                     </Typography>
                   </TableCell>
-                  <TableCell align="center">
+                  <TableCell align="center" sx={{ ...stickyActionCell() }}>
                     <Tooltip title="View Details">
                       <IconButton size="small" color="primary" onClick={e => { e.stopPropagation(); navigate(`/procurement/requests/${req.id}`); }}>
                         <ViewIcon fontSize="small" />

@@ -19,10 +19,13 @@ class ReconciliationController {
       const { requestId } = req.params;
       const userId = req.user.id;
       const ipAddress = req.ip;
-      const { items, notes, totalSpent, totalReturned, actualStartDate, actualEndDate } = req.body;
+      // overspendNotes must be forwarded: the form makes it mandatory whenever
+      // actual spend exceeds the float, and dropping it here discarded the
+      // requester's explanation before it ever reached the database.
+      const { items, notes, overspendNotes, totalSpent, totalReturned, actualStartDate, actualEndDate } = req.body;
 
       const result = await reconciliationService.submitReconciliation(
-        requestId, userId, { items, notes, totalSpent, totalReturned, actualStartDate, actualEndDate }, ipAddress
+        requestId, userId, { items, notes, overspendNotes, totalSpent, totalReturned, actualStartDate, actualEndDate }, ipAddress
       );
 
       res.json({

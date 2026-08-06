@@ -60,6 +60,7 @@ import { format } from '../utils/datetime';
 import donorService, { Donor, CreateDonorDto, DonorStats } from '../services/donorService';
 import projectService, { CreateProjectPayload, UpdateProjectPayload } from '../services/projectService';
 import { Project } from '../types';
+import { stickyActionCell, stickyActionHeadCell } from '../utils/tableStyles';
 
 const DONOR_TYPES = [
   { value: 'GOVERNMENT', label: 'Government' },
@@ -622,7 +623,7 @@ const DonorManagementPage: React.FC = () => {
               <TableCell sx={{ color: 'white', fontWeight: 700 }} align="right">Spent</TableCell>
               <TableCell sx={{ color: 'white', fontWeight: 700 }}>FY</TableCell>
               <TableCell sx={{ color: 'white', fontWeight: 700 }}>Status</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 700 }} align="center">Actions</TableCell>
+              <TableCell sx={{ color: 'white', fontWeight: 700, ...stickyActionHeadCell('#006064') }} align="center">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -673,7 +674,7 @@ const DonorManagementPage: React.FC = () => {
                       size="small"
                     />
                   </TableCell>
-                  <TableCell align="center">
+                  <TableCell align="center" sx={{ ...stickyActionCell() }}>
                     <Stack direction="row" spacing={0.5} justifyContent="center">
                       {/* These actions are visible to all */}
                       <Tooltip title="Fund History">

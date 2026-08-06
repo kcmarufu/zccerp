@@ -62,6 +62,7 @@ import {
 import { ProcRequest, ProcVendor } from '../../types';
 import api from '../../services/api';
 import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
+import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type ActionType =
@@ -660,7 +661,7 @@ const ProcurementApprovalsPage: React.FC = () => {
                     <TableCell align="right">Amount ($)</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Date</TableCell>
-                    <TableCell>Actions</TableCell>
+                    <TableCell align="center" sx={{ ...stickyActionHeadCell('grey.50') }}>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -728,7 +729,7 @@ const ProcurementApprovalsPage: React.FC = () => {
                           {req.created_at ? format(new Date(req.created_at), 'dd MMM yyyy') : '—'}
                         </Typography>
                       </TableCell>
-                      <TableCell>{renderActions(req)}</TableCell>
+                      <TableCell align="center" sx={{ ...stickyActionCell() }}>{renderActions(req)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
