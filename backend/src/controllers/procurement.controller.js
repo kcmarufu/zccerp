@@ -432,6 +432,7 @@ class ProcurementController {
       const logs = await query(
         `SELECT pal.*,
           u.first_name AS actor_first_name, u.last_name AS actor_last_name, u.email AS actor_email,
+          u.job_title AS actor_job_title,
           d.department_code AS actor_department_code
          FROM proc_approval_logs pal
          JOIN users u ON pal.actor_id = u.id

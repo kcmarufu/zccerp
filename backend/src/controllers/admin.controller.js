@@ -127,6 +127,7 @@ class AdminController {
       const users = await query(
         `SELECT u.id, u.email, u.first_name, u.last_name,
                 u.is_active, u.last_login, u.created_at, u.updated_at,
+                u.job_title,
                 r.role_name as role, r.role_description,
                 d.department_name, d.department_code, u.department_id
          FROM users u
@@ -151,6 +152,7 @@ class AdminController {
       const users = await query(
         `SELECT u.id, u.email, u.first_name, u.last_name,
                 u.is_active, u.last_login, u.created_at, u.updated_at,
+                u.job_title,
                 r.role_name as role, r.role_description,
                 d.department_name, d.department_code, u.department_id
          FROM users u

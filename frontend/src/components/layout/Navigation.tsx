@@ -78,6 +78,7 @@ import { useAuthStore } from '../../store/authStore';
 import { UserRole } from '../../types';
 import api from '../../services/api';
 import { formatDateTime } from '../../utils/datetime';
+import { formatRoleLabel } from '../../utils/roleUtils';
 
 const DRAWER_WIDTH = 280;
 
@@ -548,17 +549,8 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     }
   };
 
-  const getRoleLabel = (role: UserRole): string => {
-    switch (role) {
-      case 'ADMIN': return 'System Admin';
-      case 'FINANCE_CLERK': return 'Finance Clerk';
-      case 'HEAD_OF_PROGRAMS': return 'Head of Programs';
-      case 'PROGRAM_LEAD': return 'Program Lead';
-      case 'PROCUREMENT_OFFICER': return 'Procurement Officer';
-      case 'PROCUREMENT_COMMITTEE': return 'Procurement Committee';
-      default: return 'General User';
-    }
-  };
+  const getRoleLabel = (role: UserRole): string =>
+    formatRoleLabel(role, (user as any)?.job_title);
 
   const isPathActive = (path: string) => {
     if (path === '/finance/requests' && location.pathname === '/finance/requests') return true;

@@ -551,7 +551,7 @@ const DonorManagementPage: React.FC = () => {
       {/* Read-only notice for Finance Clerks */}
       {!canEdit && (
         <Alert severity="info" sx={{ mb: 3 }}>
-          <strong>View Only Access:</strong> You can view partner records but cannot make changes. Contact a Finance HOP or Finance Lead to add or update partners.
+          <strong>View Only Access:</strong> You can view partner records but cannot make changes. Contact the Finance Head of Department or Finance Department Lead to add or update partners.
         </Alert>
       )}
 

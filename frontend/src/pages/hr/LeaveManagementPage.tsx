@@ -686,7 +686,7 @@ const LeaveManagementPage: React.FC = () => {
               </Grid>
             </Grid>
             <Alert severity="info" sx={{ mt: 2, fontSize: '0.78rem' }}>
-              <strong>Approval flow:</strong> Submitted → Departmental Approval (LEAD/HOP) → HR Office Final Approval
+              <strong>Approval flow:</strong> Submitted → Departmental Approval (Department Lead / Head of Department) → HR Office Final Approval
             </Alert>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2 }}>

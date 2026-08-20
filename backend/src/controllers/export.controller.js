@@ -7,6 +7,7 @@ const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const { query } = require('../config/database');
 const approvalService = require('../services/approval.service');
+const { formatRoleLabel } = require('../config/roleLabels');
 const notificationService = require('../services/notification.service');
 
 class ExportController {
@@ -192,7 +193,7 @@ class ExportController {
           doc.font('Helvetica-Bold').fillColor(actionColor).text(a.action, 55, y + 4, { width: 60 });
           doc.font('Helvetica').fillColor('#1a1a1a');
           doc.text(`${a.approver_first_name} ${a.approver_last_name}`, 120, y + 4, { width: 135 });
-          doc.text((a.approver_role || '').replace(/_/g, ' '), 260, y + 4, { width: 105 });
+          doc.text(formatRoleLabel(a.approver_role, a.actor_job_title), 260, y + 4, { width: 105 });
           doc.text(a.comments || '—', 370, y + 4, { width: 95 });
           doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
           y += 18;
@@ -401,7 +402,7 @@ class ExportController {
           doc.font('Helvetica-Bold').fillColor(actionColor).text(a.action, 55, y + 4, { width: 60 });
           doc.font('Helvetica').fillColor('#1a1a1a');
           doc.text(`${a.approver_first_name} ${a.approver_last_name}`, 120, y + 4, { width: 135 });
-          doc.text((a.approver_role || '').replace(/_/g, ' '), 260, y + 4, { width: 105 });
+          doc.text(formatRoleLabel(a.approver_role, a.actor_job_title), 260, y + 4, { width: 105 });
           doc.text(a.comments || '—', 370, y + 4, { width: 95 });
           doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
           y += 18;
@@ -576,7 +577,7 @@ class ExportController {
 
       approvalTrail.forEach(approval => {
         approvalSheet.addRow({
-          stage: approval.approver_role.replace(/_/g, ' '),
+          stage: formatRoleLabel(approval.approver_role, approval.actor_job_title),
           action: approval.action,
           approverName: `${approval.approver_first_name} ${approval.approver_last_name}`,
           email: approval.approver_email,

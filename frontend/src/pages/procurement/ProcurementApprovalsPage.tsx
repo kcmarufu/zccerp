@@ -63,6 +63,7 @@ import { ProcRequest, ProcVendor } from '../../types';
 import api from '../../services/api';
 import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
+import { formatRoleLabel } from '../../utils/roleUtils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type ActionType =
@@ -555,7 +556,7 @@ const ProcurementApprovalsPage: React.FC = () => {
             <Box>
               <Typography variant="h5" fontWeight={700}>Procurement Approval Queue</Typography>
               <Typography variant="body2" sx={{ opacity: 0.85 }}>
-                Items requiring your action — {user?.role?.replace(/_/g, ' ')}
+                Items requiring your action — {formatRoleLabel(user?.role, (user as any)?.job_title)}
               </Typography>
             </Box>
           </Box>
@@ -817,7 +818,7 @@ const ProcurementApprovalsPage: React.FC = () => {
                       );
                     })()}
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                      {committeeVotes.filter((v: any) => v.vote === 'APPROVED').length}/3 approved — 3 total approvals needed to advance.{Number((action?.request as any)?.is_high_value) === 1 ? ' This request is high-value: the committee recommends, then the Super Admin and the owning department Lead/HOP must both approve.' : ''}
+                      {committeeVotes.filter((v: any) => v.vote === 'APPROVED').length}/3 approved — 3 total approvals needed to advance.{Number((action?.request as any)?.is_high_value) === 1 ? ' This request is high-value: the committee recommends, then the Super Admin and the owning Department Lead / Head of Department must both approve.' : ''}
                     </Typography>
                   </Box>
                 )}
@@ -829,7 +830,7 @@ const ProcurementApprovalsPage: React.FC = () => {
                 <Alert severity="info" sx={{ mb: 2 }}>
                   The Procurement Committee has <strong>recommended</strong> this request.
                   It proceeds to Finance only once <strong>both</strong> the Super Admin and the
-                  Lead/Head of Programs of the owning department have approved.
+                  Department Lead / Head of Department of the owning department have approved.
                   A rejection by either returns it to be amended and resubmitted.
                 </Alert>
                 <TextField

@@ -284,7 +284,7 @@ const RequestForm: React.FC = () => {
     ) {
       const ownerDept = selectedProject.department_name || `Department ID ${selectedProject.department_id}`;
       setCrossDeptWarning(
-        `This project is not assigned to your department. Your request will be routed to the HOP/Lead of the ${ownerDept} department for approval.`
+        `This project is not assigned to your department. Your request will be routed to the Department Lead / Head of Department of the ${ownerDept} department for approval.`
       );
     }
 
@@ -656,7 +656,7 @@ const RequestForm: React.FC = () => {
           await savePerDiemIfNeeded(createResponse.data.requestId);
           const submitResponse = await requestService.submit(createResponse.data.requestId);
           if (submitResponse.success) {
-            const approvalRoute = data.isAdminRequest ? 'Admin -> Finance' : 'Program Lead or Head of Programs -> Finance';
+            const approvalRoute = data.isAdminRequest ? 'Admin -> Finance' : 'Department Lead or Head of Department -> Finance';
             toast.success(`Request ${createResponse.data.requestCode} submitted (${approvalRoute})`);
             navigate('/finance/requests');
           }
@@ -923,7 +923,7 @@ const RequestForm: React.FC = () => {
             <Alert severity="info" sx={{ mt: 2 }}>
               <strong>Admin Request:</strong> Partner and project are pre-set to <strong>Administration (Internal)</strong>.
               Simply pick the budget line (Maintenance, Softwares, or Rentals) for each item.
-              Approval route: <strong>Admin → HR Lead / HOP → Finance</strong>.
+              Approval route: <strong>Admin → HR Department Lead / Head of Department → Finance</strong>.
             </Alert>
           )}
           {selectedDonorId && selectedProject && (

@@ -6,8 +6,63 @@
  */
 
 const { query, transaction, pool } = require('../config/database');
-const { REQUEST_STATUS, ROLES } = require('../config/roles');
+const {
+  REQUEST_STATUS, ROLES, FINANCE_DEPT_CODE, ADMIN_HR_DEPT_CODE
+} = require('../config/roles');
 const notificationService = require('./notification.service');
+
+/**
+ * Can this approver act on the departmental (Lead/HOP) stage of a reconciliation?
+ *
+ * This mirrors what getPendingLeadReconciliations() puts in each approver's
+ * queue — the two used to disagree, so approvers were shown items the action
+ * then refused. In particular the Admin-donor gate compared the department
+ * code against 'HR', a code that does not exist (Admin & HR is 'AHR'), so
+ * *every* Lead was blocked from Admin-donor reconciliations.
+ *
+ * @param {object} request  request row, incl. donor_type and approver_dept
+ * @param {string} role     approver's role
+ * @param {string} deptCode approver's department code
+ * @returns {string|null}   null when allowed, otherwise the reason to refuse
+ */
+function leadReconRefusalReason(request, role, deptCode) {
+  // Super Admin and Head of Department carry cross-department authority.
+  if (role === ROLES.ADMIN || role === ROLES.HEAD_OF_PROGRAMS) return null;
+
+  if (role !== ROLES.PROGRAM_LEAD) {
+    return 'Only a Department Lead or Head of Department can review reconciliations at this stage';
+  }
+
+  // The Finance (FOS) Department Lead oversees reconciliations across all
+  // departments — at the departmental stage as well as the Finance stage.
+  if (deptCode === FINANCE_DEPT_CODE) return null;
+
+  // Admin-donor reconciliations belong to the Admin & HR department.
+  if (request.donor_type === 'ADMIN') {
+    return deptCode === ADMIN_HR_DEPT_CODE
+      ? null
+      : 'Admin reconciliations can only be reviewed by the Admin & HR Department Lead or Head of Department';
+  }
+
+  // For cross-dept requests, use the routing (project-owning) dept; otherwise
+  // the requester's own dept.
+  const effectiveDeptId = Number(request.routing_department_id || request.department_id);
+  if (effectiveDeptId !== Number(request.approver_dept)) {
+    return 'You can only review reconciliations from your department (or the project-owning department for cross-department requests)';
+  }
+
+  return null;
+}
+
+/**
+ * Who may act at the Finance review stage: the Finance desk itself, plus the
+ * Finance department's own Lead / Head of Department (and Super Admin).
+ */
+function canReviewReconAsFinance(role, deptCode) {
+  if (role === ROLES.FINANCE_CLERK || role === ROLES.ADMIN) return true;
+  return deptCode === FINANCE_DEPT_CODE &&
+    (role === ROLES.PROGRAM_LEAD || role === ROLES.HEAD_OF_PROGRAMS);
+}
 
 /**
  * Calculate number of working days (Mon-Fri) between two dates.
@@ -267,7 +322,10 @@ class ReconciliationService {
    * - Over-expenditure: actual > budgeted → further deduct the difference from the budget line
    * - Change returned: actual < budgeted → reverse the difference back to the budget line
    */
-  async approveReconciliation(requestId, approverId, approverRole, comments, ipAddress) {
+  async approveReconciliation(requestId, approverId, approverRole, comments, ipAddress, approverDeptCode) {
+    if (!canReviewReconAsFinance(approverRole, approverDeptCode)) {
+      throw new Error('Only the Finance desk, or the Finance Department Lead / Head of Department, can approve at Finance review');
+    }
     const result = await transaction(async (connection) => {
       // Lock request
       const [requests] = await connection.execute(
@@ -566,7 +624,10 @@ class ReconciliationService {
   /**
    * Finance rejects a reconciliation (sends back to requester)
    */
-  async rejectReconciliation(requestId, approverId, approverRole, comments, ipAddress) {
+  async rejectReconciliation(requestId, approverId, approverRole, comments, ipAddress, approverDeptCode) {
+    if (!canReviewReconAsFinance(approverRole, approverDeptCode)) {
+      throw new Error('Only the Finance desk, or the Finance Department Lead / Head of Department, can reject at Finance review');
+    }
     const result = await transaction(async (connection) => {
       const [requests] = await connection.execute(
         'SELECT * FROM requests WHERE id = ? FOR UPDATE',
@@ -660,20 +721,8 @@ class ReconciliationService {
         throw new Error(`Cannot approve reconciliation with status: ${request.status}. Must be pending lead review.`);
       }
 
-      // Admin-donor reconciliations: HR-dept Lead/HOP can act; HOP can also approve from any dept
-      if (request.donor_type === 'ADMIN') {
-        if (approverRole === ROLES.PROGRAM_LEAD && approverDeptCode !== 'HR') {
-          throw new Error('Admin reconciliations can only be approved by the HR/Admin department Lead or HOP');
-        }
-        // HOP can approve admin reconciliations from any dept
-      } else {
-        // For cross-dept requests, use the routing (project-owning) dept; otherwise the requester's dept.
-        const effectiveDeptId = Number(request.routing_department_id || request.department_id);
-        if (approverRole === ROLES.PROGRAM_LEAD && effectiveDeptId !== Number(request.approver_dept)) {
-          throw new Error('You can only approve reconciliations from your department (or the project-owning department for cross-department requests)');
-        }
-        // HOP can approve reconciliations from ANY department (cross-department authority)
-      }
+      const refusal = leadReconRefusalReason(request, approverRole, approverDeptCode);
+      if (refusal) throw new Error(refusal);
 
       // Update status to RECON_PENDING_FINANCE
       await connection.execute(
@@ -733,19 +782,8 @@ class ReconciliationService {
         throw new Error(`Cannot reject reconciliation with status: ${request.status}`);
       }
 
-      // Admin-donor reconciliations: HR-dept Lead can act; HOP can act from any dept
-      if (request.donor_type === 'ADMIN') {
-        if (approverRole === ROLES.PROGRAM_LEAD && approverDeptCode !== 'HR') {
-          throw new Error('Admin reconciliations can only be rejected by the HR/Admin department Lead or HOP');
-        }
-        // HOP can reject admin reconciliations from any dept
-      } else {
-        const effectiveDeptId = Number(request.routing_department_id || request.department_id);
-        if (approverRole === ROLES.PROGRAM_LEAD && effectiveDeptId !== Number(request.approver_dept)) {
-          throw new Error('You can only reject reconciliations from your department (or the project-owning department for cross-department requests)');
-        }
-        // HOP can reject reconciliations from ANY department
-      }
+      const refusal = leadReconRefusalReason(request, approverRole, approverDeptCode);
+      if (refusal) throw new Error(refusal);
 
       // Get the reconciliation and mark as rejected
       const [recons] = await connection.execute(

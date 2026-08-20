@@ -22,6 +22,7 @@ import { toast } from 'react-toastify';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
 import { formatTime } from '../../utils/datetime';
+import { formatRoleLabel } from '../../utils/roleUtils';
 
 interface SystemSettings {
   org_name: string;
@@ -297,7 +298,7 @@ const SystemSettingsPage: React.FC = () => {
               <Grid item xs={12} md={6}>
                 <FormControlLabel
                   control={<Switch checked={settings.require_dept_approval} onChange={handleToggle('require_dept_approval')} color="primary" />}
-                  label={<Box><Typography variant="body2" fontWeight={500}>Require Department Head Approval</Typography><Typography variant="caption" color="text.secondary">All requests go through HOP/Lead approval before Finance</Typography></Box>}
+                  label={<Box><Typography variant="body2" fontWeight={500}>Require Department Head Approval</Typography><Typography variant="caption" color="text.secondary">All requests go through Department Lead / Head of Department approval before Finance</Typography></Box>}
                   sx={{ alignItems: 'flex-start', '& .MuiFormControlLabel-label': { mt: 0.3 } }}
                 />
               </Grid>
@@ -362,7 +363,7 @@ const SystemSettingsPage: React.FC = () => {
                 { label: 'Database', value: 'MySQL 9.6 (finance_erp)' },
                 { label: 'Backend Framework', value: 'Node.js / Express.js' },
                 { label: 'Frontend Framework', value: 'React 18 + TypeScript + Material UI v5' },
-                { label: 'Logged In As', value: user ? `${user.first_name} ${user.last_name} (${user.role})` : '-' },
+                { label: 'Logged In As', value: user ? `${user.first_name} ${user.last_name} (${formatRoleLabel(user.role, (user as any).job_title)})` : '-' },
               ].map(item => (
                 <Grid item xs={12} sm={6} key={item.label}>
                   <Card variant="outlined" sx={{ borderRadius: 2 }}>

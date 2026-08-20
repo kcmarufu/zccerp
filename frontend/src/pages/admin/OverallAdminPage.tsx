@@ -27,6 +27,7 @@ import {
 } from '@mui/icons-material';
 import { formatDistanceToNow } from 'date-fns';
 import api from '../../services/api';
+import { formatRoleLabel } from '../../utils/roleUtils';
 
 interface AdminOverviewResponse {
   summary: {
@@ -223,7 +224,7 @@ const OverallAdminPage: React.FC = () => {
               {data.roleDistribution.map((item) => (
                 <Chip
                   key={item.role}
-                  label={`${item.role.replace(/_/g, ' ')}: ${item.count}`}
+                  label={`${formatRoleLabel(item.role)}: ${item.count}`}
                   variant="outlined"
                 />
               ))}

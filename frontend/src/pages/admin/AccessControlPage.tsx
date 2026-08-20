@@ -171,8 +171,8 @@ const AccessControlPage: React.FC = () => {
   const roles = [
     { key: 'ADMIN', label: 'System Admin', description: 'Full system oversight and control', color: 'error' as const },
     { key: 'GENERAL_USER', label: 'General User', description: 'Standard users who create requests', color: 'default' as const },
-    { key: 'PROGRAM_LEAD', label: 'Program Lead', description: 'Department leads who approve requests', color: 'primary' as const },
-    { key: 'HEAD_OF_PROGRAMS', label: 'Head of Programs', description: 'Senior approver with wider access', color: 'secondary' as const },
+    { key: 'PROGRAM_LEAD', label: 'Department Lead', description: 'Department leads who approve requests', color: 'primary' as const },
+    { key: 'HEAD_OF_PROGRAMS', label: 'Head of Department', description: 'Senior approver with wider access', color: 'secondary' as const },
     { key: 'FINANCE_CLERK', label: 'Finance Clerk', description: 'Finance team with full system access', color: 'success' as const }
   ];
 
@@ -212,8 +212,8 @@ const AccessControlPage: React.FC = () => {
   const getRoleLabel = (role: string) => {
     switch (role) {
       case 'FINANCE_CLERK': return 'Finance Clerk';
-      case 'HEAD_OF_PROGRAMS': return 'Head of Programs';
-      case 'PROGRAM_LEAD': return 'Program Lead';
+      case 'HEAD_OF_PROGRAMS': return 'Head of Department';
+      case 'PROGRAM_LEAD': return 'Department Lead';
       default: return 'General User';
     }
   };

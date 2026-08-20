@@ -270,7 +270,7 @@ class NotificationService {
     const link = `/procurement/requests/${requestId}`;
     const title = `High-Value Approval Needed: ${requestCode}`;
     const message = `The Procurement Committee has recommended this USD ${Number(amount || 0).toFixed(2)} request. ` +
-                    `It needs approval from both the Super Admin and the owning department's Lead/Head of Programs.`;
+                    `It needs approval from both the Super Admin and the owning department's Department Lead / Head of Department.`;
     try {
       await this._notifyByRole(['ADMIN'], title, message, 'approval_pending', 'proc_request', requestId, link);
       if (owningDepartmentId) {

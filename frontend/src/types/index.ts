@@ -17,6 +17,8 @@ export interface User {
   department_code: string;
   role: UserRole;
   role_name: UserRole;
+  /** Display title that overrides the role label (e.g. "General Secretary"). Cosmetic only. */
+  job_title?: string | null;
   is_active: boolean;
   last_login: string | null;
 }
@@ -137,6 +139,8 @@ export interface ApprovalLog {
   actor_name?: string;
   actor_role?: string;
   actor_department_code?: string | null;
+  /** Approver's display title override, when they have one. */
+  actor_job_title?: string | null;
   comment?: string;
   approver_role: UserRole;
   action: ApprovalAction;

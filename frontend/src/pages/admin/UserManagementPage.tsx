@@ -37,6 +37,7 @@ import { format } from '../../utils/datetime';
 import * as XLSX from 'xlsx';
 import api from '../../services/api';
 import { useAuthStore } from '../../store/authStore';
+import { formatRoleLabel } from '../../utils/roleUtils';
 
 interface UserRecord {
   id: number;
@@ -45,6 +46,7 @@ interface UserRecord {
   last_name: string;
   role: string;
   role_name?: string;
+  job_title?: string | null;
   department_id: number;
   department_name?: string;
   department_code?: string;
@@ -63,6 +65,7 @@ interface Department {
 interface Role {
   id: number;
   role_name: string;
+  job_title?: string | null;
   role_description?: string;
 }
 
@@ -273,18 +276,9 @@ const UserManagementPage: React.FC = () => {
     }
   };
 
-  const getRoleLabel = (role: string) => {
-    switch (role) {
-      case 'ADMIN': return 'Super Administrator';
-      case 'FINANCE_CLERK': return 'Finance Clerk';
-      case 'HEAD_OF_PROGRAMS': return 'Head of Programs';
-      case 'PROGRAM_LEAD': return 'Program Lead';
-      case 'GENERAL_USER': return 'General User';
-      case 'PROCUREMENT_OFFICER': return 'Procurement Officer';
-      case 'PROCUREMENT_COMMITTEE': return 'Procurement Committee';
-      default: return role?.replace(/_/g, ' ') || 'Unknown';
-    }
-  };
+  // A user's own job_title, when set, wins over the role's generic label.
+  const getRoleLabel = (role: string, jobTitle?: string | null) =>
+    formatRoleLabel(role, jobTitle) || 'Unknown';
 
   const filteredUsers = users.filter(u => {
     const textMatch = (u.first_name + ' ' + u.last_name + ' ' + u.email + ' ' + (u.department_name || ''))
@@ -300,7 +294,7 @@ const UserManagementPage: React.FC = () => {
       'First Name': u.first_name,
       'Last Name': u.last_name,
       'Email': u.email,
-      'Role': getRoleLabel(u.role || u.role_name || ''),
+      'Role': getRoleLabel(u.role || u.role_name || '', u.job_title),
       'Department': u.department_name || '-',
       'Status': u.is_active ? 'Active' : 'Inactive',
       'Last Login': u.last_login ? format(new Date(u.last_login), 'dd/MM/yyyy HH:mm') : 'Never',
@@ -326,7 +320,7 @@ const UserManagementPage: React.FC = () => {
         <tr>
           <td>${safeText(u.first_name + ' ' + u.last_name)}</td>
           <td>${safeText(u.email)}</td>
-          <td>${safeText(getRoleLabel(u.role || u.role_name || ''))}</td>
+          <td>${safeText(getRoleLabel(u.role || u.role_name || '', u.job_title))}</td>
           <td>${safeText(u.department_name || '-')}</td>
           <td>${u.is_active ? 'Active' : 'Inactive'}</td>
           <td>${safeDate(u.last_login)}</td>
@@ -474,8 +468,8 @@ const UserManagementPage: React.FC = () => {
               <MenuItem value="">All Roles</MenuItem>
               <MenuItem value="ADMIN">Super Administrator</MenuItem>
               <MenuItem value="GENERAL_USER">General User</MenuItem>
-              <MenuItem value="PROGRAM_LEAD">Program Lead</MenuItem>
-              <MenuItem value="HEAD_OF_PROGRAMS">Head of Programs</MenuItem>
+              <MenuItem value="PROGRAM_LEAD">Department Lead</MenuItem>
+              <MenuItem value="HEAD_OF_PROGRAMS">Head of Department</MenuItem>
               <MenuItem value="FINANCE_CLERK">Finance Clerk</MenuItem>
               <MenuItem value="PROCUREMENT_OFFICER">Procurement Officer</MenuItem>
               <MenuItem value="PROCUREMENT_COMMITTEE">Procurement Committee</MenuItem>
@@ -553,7 +547,7 @@ const UserManagementPage: React.FC = () => {
                       </Box>
                     </TableCell>
                     <TableCell sx={{ py: 0.8, px: 1.5 }}>
-                      <Chip label={getRoleLabel(u.role || u.role_name || '')} color={getRoleColor(u.role || u.role_name || '')} size="small"
+                      <Chip label={getRoleLabel(u.role || u.role_name || '', u.job_title)} color={getRoleColor(u.role || u.role_name || '')} size="small"
                         sx={{ fontSize: '0.68rem', height: 20, '& .MuiChip-label': { px: 0.8 } }} />
                     </TableCell>
                     <TableCell sx={{ py: 0.8, px: 1.5 }}>
@@ -664,8 +658,8 @@ const UserManagementPage: React.FC = () => {
                 <Select label="Role" value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value })}>
                   <MenuItem value="ADMIN">Super Administrator</MenuItem>
                   <MenuItem value="GENERAL_USER">General User</MenuItem>
-                  <MenuItem value="PROGRAM_LEAD">Program Lead</MenuItem>
-                  <MenuItem value="HEAD_OF_PROGRAMS">Head of Programs</MenuItem>
+                  <MenuItem value="PROGRAM_LEAD">Department Lead</MenuItem>
+                  <MenuItem value="HEAD_OF_PROGRAMS">Head of Department</MenuItem>
                   <MenuItem value="FINANCE_CLERK">Finance Clerk</MenuItem>
                   <MenuItem value="PROCUREMENT_OFFICER">Procurement Officer</MenuItem>
                   <MenuItem value="PROCUREMENT_COMMITTEE">Procurement Committee</MenuItem>
@@ -760,7 +754,7 @@ const UserManagementPage: React.FC = () => {
                   <Typography variant="h6">{profileUser.first_name} {profileUser.last_name}</Typography>
                   <Typography variant="body2" color="text.secondary">{profileUser.email}</Typography>
                   <Box display="flex" gap={1} mt={0.5}>
-                    <Chip label={getRoleLabel(profileUser.role || profileUser.role_name || '')}
+                    <Chip label={getRoleLabel(profileUser.role || profileUser.role_name || '', profileUser.job_title)}
                       color={getRoleColor(profileUser.role || profileUser.role_name || '')} size="small" />
                     <Chip label={profileUser.is_active ? 'Active' : 'Inactive'}
                       color={profileUser.is_active ? 'success' : 'default'} size="small" />

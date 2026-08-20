@@ -82,6 +82,7 @@ import perDiemService from '../services/perDiemService';
 import { useAuthStore } from '../store/authStore';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
 import { reconciliationService } from '../services/reconciliationService';
+import { formatRoleLabel } from '../utils/roleUtils';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -447,7 +448,7 @@ const ApprovalsPage: React.FC = () => {
         <tr>
           <td class="act-${t.action}">${t.action}</td>
           <td>${t.approver_first_name || t.actor_name || ''} ${t.approver_last_name || ''}</td>
-          <td>${(t.approver_role || t.actor_role || '').replace(/_/g,' ')}</td>
+          <td>${formatRoleLabel(t.approver_role || t.actor_role, t.actor_job_title)}</td>
           <td>${t.comments || t.comment || '—'}</td>
           <td>${t.created_at ? format(new Date(t.created_at),'dd MMM yyyy HH:mm') : '—'}</td>
         </tr>`).join('');
@@ -763,7 +764,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                           </Tooltip>
                         )}
                         {!canApproveInList(request) && request.status === 'PENDING_LEAD_APPROVAL' && (
-                          <Tooltip title="View only — request is pending approval by its department Lead/HOP">
+                          <Tooltip title="View only — request is pending approval by its Department Lead / Head of Department">
                             <span>
                               <IconButton size="small" disabled>
                                 <ApproveIcon />
@@ -920,7 +921,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
               {[
                 { v: 'PENDING_ADMIN_APPROVAL', l: 'Pending Admin' },
                 { v: 'PENDING_LEAD_APPROVAL', l: 'Pending Lead' },
-                { v: 'PENDING_HOP_APPROVAL', l: 'Pending HOP' },
+                { v: 'PENDING_HOP_APPROVAL', l: 'Pending Head of Department' },
                 { v: 'PENDING_FINANCE_APPROVAL', l: 'Pending Finance' },
                 { v: 'APPROVED', l: 'Approved' },
                 { v: 'REJECTED', l: 'Rejected' },
@@ -988,7 +989,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 <Alert severity="info" icon={<WarningIcon />} sx={{ mb: 2 }}>
                   <strong>Cross-Department Request:</strong> This request uses a project assigned to the{' '}
                   <strong>{(fullRequestDetails as any)?.routing_department_name || selectedRequest.routing_department_name || 'project-owning'}</strong> department.
-                  Approval is routed to the HOP/Lead of that department instead of the requester's department.
+                  Approval is routed to the Department Lead / Head of Department of that department instead of the requester's department.
                   After approval it will proceed to Finance as normal.
                 </Alert>
               )}
@@ -1302,7 +1303,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                             </TableCell>
                             <TableCell sx={{ fontSize: '0.75rem' }}>
                               <Chip
-                                label={(log.actor_role || log.approver_role || '').replace(/_/g, ' ')}
+                                label={formatRoleLabel(log.actor_role || log.approver_role, log.actor_job_title)}
                                 size="small"
                                 variant="outlined"
                                 sx={{ fontSize: '0.65rem', height: 20 }}

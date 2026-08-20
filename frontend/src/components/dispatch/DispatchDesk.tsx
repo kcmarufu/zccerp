@@ -55,6 +55,7 @@ import { reconciliationService } from '../../services/reconciliationService';
 import api from '../../services/api';
 import { downloadHTMLAsPDF, buildTravelClaimPageHTML, buildDigitalStamp } from '../../utils/pdfUtils';
 import perDiemService from '../../services/perDiemService';
+import { formatRoleLabel } from '../../utils/roleUtils';
 
 const DispatchDesk: React.FC = () => {
   // ── HARDCODED BRANDING ────────────────────────────────────────────────
@@ -223,7 +224,7 @@ const DispatchDesk: React.FC = () => {
         <tr>
           <td class="act-${t.action}">${t.action}</td>
           <td>${t.approver_first_name || t.actor_name || ''} ${t.approver_last_name || ''}</td>
-          <td>${(t.approver_role || t.actor_role || '').replace(/_/g, ' ')}</td>
+          <td>${formatRoleLabel(t.approver_role || t.actor_role, t.actor_job_title)}</td>
           <td>${t.comments || t.comment || '—'}</td>
           <td>${t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy HH:mm') : '—'}</td>
         </tr>`).join('');
@@ -333,7 +334,7 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
       const trailHeaders = ['Action', 'By', 'Role', 'Comments', 'Date'];
       const trailRows2 = trail.map((t: any) => [
         t.action, `${t.approver_first_name || t.actor_name || ''} ${t.approver_last_name || ''}`.trim(),
-        (t.approver_role || t.actor_role || '').replace(/_/g, ' '),
+        formatRoleLabel(t.approver_role || t.actor_role, t.actor_job_title),
         t.comments || t.comment || '', t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy HH:mm') : ''
       ]);
       const ws3 = XLSX.utils.aoa_to_sheet([trailHeaders, ...trailRows2]);
@@ -544,7 +545,7 @@ ${buildDigitalStamp('')}
 
   const getStatusLabel = (status: string): string => {
     switch (status) {
-      case 'RECON_PENDING_LEAD': return 'On Lead/HOP Review';
+      case 'RECON_PENDING_LEAD': return 'On Departmental Review';
       case 'RECON_PENDING_FINANCE': return 'On Finance Review';
       case 'DISPATCHED': return 'Awaiting Reconciliation';
       case 'PENDING_RECONCILIATION': return 'Pending Reconciliation';
@@ -681,7 +682,7 @@ ${buildDigitalStamp('')}
               <MenuItem value="">All Statuses</MenuItem>
               <MenuItem value="APPROVED">Pending Dispatch</MenuItem>
               <MenuItem value="DISPATCHED">Dispatched</MenuItem>
-              <MenuItem value="RECON_PENDING_LEAD">On Lead/HOP Review</MenuItem>
+              <MenuItem value="RECON_PENDING_LEAD">On Departmental Review</MenuItem>
               <MenuItem value="RECON_PENDING_FINANCE">On Finance Review</MenuItem>
               <MenuItem value="PENDING_RECONCILIATION">Waiting for Reconciliation</MenuItem>
               <MenuItem value="RECONCILED">Reconciled</MenuItem>
@@ -796,7 +797,7 @@ ${buildDigitalStamp('')}
               >
                 <MenuItem value="">All Reconciliation</MenuItem>
                 <MenuItem value="AWAITING">Awaiting Reconciliation</MenuItem>
-                <MenuItem value="RECON_PENDING_LEAD">On Lead/HOP Review</MenuItem>
+                <MenuItem value="RECON_PENDING_LEAD">On Departmental Review</MenuItem>
                 <MenuItem value="RECON_PENDING_FINANCE">On Finance Review</MenuItem>
                 <MenuItem value="RECONCILED">Reconciled</MenuItem>
               </TextField>
@@ -1127,7 +1128,7 @@ ${buildDigitalStamp('')}
                               />
                             </TableCell>
                             <TableCell>{log.approver_first_name || log.actor_name} {log.approver_last_name || ''}</TableCell>
-                            <TableCell>{(log.approver_role || log.actor_role || '').replace(/_/g, ' ')}</TableCell>
+                            <TableCell>{formatRoleLabel(log.approver_role || log.actor_role, log.actor_job_title)}</TableCell>
                             <TableCell>{log.comments || log.comment || '-'}</TableCell>
                             <TableCell>{log.created_at ? format(new Date(log.created_at), 'MMM d, yyyy HH:mm') : '-'}</TableCell>
                           </TableRow>

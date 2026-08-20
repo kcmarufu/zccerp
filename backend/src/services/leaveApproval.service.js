@@ -185,9 +185,9 @@ function pendingForApproverWhereClause(approver) {
 
 function humanRole(role) {
   switch (role) {
-    case ROLES.HEAD_OF_PROGRAMS: return 'the Head of Programs of your department';
+    case ROLES.HEAD_OF_PROGRAMS: return 'the Head of Department of your department';
     case ROLES.ADMIN:            return 'a Super Admin';
-    case ROLES.PROGRAM_LEAD:     return 'a Program Lead';
+    case ROLES.PROGRAM_LEAD:     return 'a Department Lead';
     default:                     return role;
   }
 }

@@ -50,11 +50,12 @@ class ReconciliationController {
       const { requestId } = req.params;
       const approverId = req.user.id;
       const approverRole = req.user.role;
+      const approverDeptCode = req.user.department_code;
       const { comments } = req.body;
       const ipAddress = req.ip;
 
       const result = await reconciliationService.approveReconciliation(
-        requestId, approverId, approverRole, comments, ipAddress
+        requestId, approverId, approverRole, comments, ipAddress, approverDeptCode
       );
 
       res.json({
@@ -79,11 +80,12 @@ class ReconciliationController {
       const { requestId } = req.params;
       const approverId = req.user.id;
       const approverRole = req.user.role;
+      const approverDeptCode = req.user.department_code;
       const { comments } = req.body;
       const ipAddress = req.ip;
 
       const result = await reconciliationService.rejectReconciliation(
-        requestId, approverId, approverRole, comments, ipAddress
+        requestId, approverId, approverRole, comments, ipAddress, approverDeptCode
       );
 
       res.json({

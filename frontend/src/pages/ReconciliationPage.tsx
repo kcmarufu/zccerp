@@ -49,6 +49,7 @@ import attachmentService from '../services/attachmentService';
 import { Request, RequestItem } from '../types';
 import { downloadHTMLAsPDF, buildTravelClaimPageHTML, buildDigitalStamp } from '../utils/pdfUtils';
 import perDiemService from '../services/perDiemService';
+import { formatRoleLabel } from '../utils/roleUtils';
 
 interface ReconciliationFormItem {
   requestItemId?: number;
@@ -123,12 +124,12 @@ const AttachmentActions: React.FC<{ attachment: any }> = ({ attachment }) => {
 /** Human label for the desk that rejected a reconciliation. */
 const rejectionStageLabel = (recon: any): string => {
   const stage = recon?.rejected_by_stage;
-  if (stage === 'LEAD') return 'Lead / HOP';
+  if (stage === 'LEAD') return 'Department Lead / Head of Department';
   if (stage === 'FINANCE') return 'Finance';
   // Older records predate stage tracking; fall back to the recorded role.
   const role = recon?.rejected_by_role;
   if (role === 'FINANCE_CLERK') return 'Finance';
-  if (role === 'PROGRAM_LEAD' || role === 'HEAD_OF_PROGRAMS') return 'Lead / HOP';
+  if (role === 'PROGRAM_LEAD' || role === 'HEAD_OF_PROGRAMS') return 'Department Lead / Head of Department';
   return 'Reviewer';
 };
 
@@ -174,7 +175,7 @@ const ReconciliationPage: React.FC = () => {
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const { user, hasRole } = useAuthStore();
+  const { user, hasRole, isFinanceManager } = useAuthStore();
   const isFinance = hasRole('FINANCE_CLERK');
   const isAdmin = hasRole('ADMIN');
   const isLead = hasRole('PROGRAM_LEAD');
@@ -184,8 +185,14 @@ const ReconciliationPage: React.FC = () => {
   const canDirectApprove = isFinance || isAdmin;
   // Lead Review tab: Lead, HOP, and Admin all see RECON_PENDING_LEAD items
   const canReviewLead = isLeadOrHOP || isAdmin;
-  // All finance team + admin can see pending reviews and full history
-  const isFinanceOrAdmin = isFinance || isAdmin || isLead || isHOP;
+  // Finance Review tab: the Finance desk, plus the Finance (FOS) department's own
+  // Lead / Head of Department — who review at the departmental stage as well.
+  // A Lead or HOP from any *other* department has no authority at this stage,
+  // and the server now refuses their approvals, so the tab must not offer it.
+  const canReviewFinance = isFinance || isAdmin || isFinanceManager();
+  // All History stays open to every approver; the server scopes non-Finance
+  // Leads/HOPs to their own department.
+  const canSeeAllHistory = canReviewFinance || canReviewLead;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── HARDCODED BRANDING ─────────────────────────────────────────────────
@@ -238,7 +245,7 @@ const ReconciliationPage: React.FC = () => {
         <tr>
           <td class="act-${t.action}">${t.action}</td>
           <td>${t.approver_first_name || t.actor_name || ''} ${t.approver_last_name || ''}</td>
-          <td>${(t.approver_role || t.actor_role || '').replace(/_/g, ' ')}</td>
+          <td>${formatRoleLabel(t.approver_role || t.actor_role, t.actor_job_title)}</td>
           <td>${t.comments || t.comment || '—'}</td>
           <td>${t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy HH:mm') : '—'}</td>
         </tr>`).join('');
@@ -499,8 +506,8 @@ ${buildDigitalStamp('')}
         }
       }
 
-      // Finance/Admin: fetch pending reconciliations
-      if (isFinanceOrAdmin) {
+      // Finance desk / Finance dept Lead / Admin: fetch pending reconciliations
+      if (canReviewFinance) {
         try {
           const pendingRes = await reconciliationService.getPendingReconciliations();
           if (pendingRes.success && pendingRes.data) {
@@ -509,7 +516,9 @@ ${buildDigitalStamp('')}
         } catch (err) {
           console.error('Error fetching pending reconciliations:', err);
         }
+      }
 
+      if (canSeeAllHistory) {
         try {
           const historyRes = await reconciliationService.getReconciliationHistory();
           if (historyRes.success && historyRes.data) {
@@ -531,7 +540,7 @@ ${buildDigitalStamp('')}
     } finally {
       setIsLoading(false);
     }
-  }, [isFinanceOrAdmin, canReviewLead, isFinance]);
+  }, [canReviewFinance, canSeeAllHistory, canReviewLead, isFinance]);
 
   useEffect(() => {
     fetchData();
@@ -1097,6 +1106,21 @@ ${buildDigitalStamp('')}
     return <Box display="flex" justifyContent="center" py={6}><CircularProgress /></Box>;
   }
 
+  // Tabs are declared once, in render order, and each panel looks its index up
+  // by key. The indices used to be re-derived per panel from role arithmetic
+  // (`canReviewLead ? 4 : 2`), which silently mismatched whenever a role's set
+  // of visible tabs changed.
+  const visibleTabs = [
+    { key: 'myRequests',     show: true,              icon: <DispatchIcon />,  label: 'My Requests' },
+    { key: 'myRecons',       show: true,              icon: <MyReconsIcon />,  label: `My Reconciliations (${myReconciliations.length})` },
+    { key: 'leadReview',     show: canReviewLead,     icon: <ReconcileIcon />, label: `Lead Review (${pendingLeadReviews.length})` },
+    { key: 'leadHistory',    show: canReviewLead,     icon: <HistoryIcon />,   label: `My Approvals History (${leadHistory.length})` },
+    { key: 'financeReview',  show: canReviewFinance,  icon: <ReconcileIcon />, label: `Finance Review (${pendingReviews.length})` },
+    { key: 'financeHistory', show: isFinance,         icon: <HistoryIcon />,   label: `My Review History (${financeReviewHistory.length})` },
+    { key: 'allHistory',     show: canSeeAllHistory,  icon: <HistoryIcon />,   label: 'All History' },
+  ].filter(t => t.show);
+  const tabIndex = (key: string) => visibleTabs.findIndex(t => t.key === key);
+
   return (
     <Box>
       {/* ── Reconciliation Desk Alert for approvers ──────────────────────── */}
@@ -1124,7 +1148,7 @@ ${buildDigitalStamp('')}
             </Typography>
             {myPending > 0 && (
               <Typography variant="body2">
-                Lead / HOP Review: <strong>{myPending}</strong> pending
+                Departmental Review: <strong>{myPending}</strong> pending
               </Typography>
             )}
             {finPending > 0 && (
@@ -1163,20 +1187,14 @@ ${buildDigitalStamp('')}
       {/* Tabs */}
       <Paper elevation={0} sx={{ mb: 3, border: `1px solid ${theme.palette.divider}` }}>
         <Tabs value={activeTab} onChange={(_, v) => { setActiveTab(v); setPage(0); setMyReqPage(0); setHistoryPage(0); }} sx={{ borderBottom: 1, borderColor: 'divider' }} variant="scrollable" scrollButtons="auto">
-          <Tab icon={<DispatchIcon />} label="My Requests" iconPosition="start" />
-          <Tab icon={<MyReconsIcon />} label={`My Reconciliations (${myReconciliations.length})`} iconPosition="start" />
-          {isLeadOrHOP && <Tab icon={<ReconcileIcon />} label={`Lead Review (${pendingLeadReviews.length})`} iconPosition="start" />}
-          {isLeadOrHOP && <Tab icon={<HistoryIcon />} label={`My Approvals History (${leadHistory.length})`} iconPosition="start" />}
-          {isAdmin && !isLeadOrHOP && <Tab icon={<ReconcileIcon />} label={`Lead Review (${pendingLeadReviews.length})`} iconPosition="start" />}
-          {isAdmin && !isLeadOrHOP && <Tab icon={<HistoryIcon />} label={`My Approvals History (${leadHistory.length})`} iconPosition="start" />}
-          {isFinanceOrAdmin && <Tab icon={<ReconcileIcon />} label={`Finance Review (${pendingReviews.length})`} iconPosition="start" />}
-          {isFinance && <Tab icon={<HistoryIcon />} label={`My Review History (${financeReviewHistory.length})`} iconPosition="start" />}
-          {isFinanceOrAdmin && <Tab icon={<HistoryIcon />} label="All History" iconPosition="start" />}
+          {visibleTabs.map(t => (
+            <Tab key={t.key} icon={t.icon} label={t.label} iconPosition="start" />
+          ))}
         </Tabs>
       </Paper>
 
       {/* Tab 0: My Requests (Dispatched + Reconciled) */}
-      {activeTab === 0 && (
+      {activeTab === tabIndex('myRequests') && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {/* Filter bar */}
           <Box px={2} pt={2} pb={1}>
@@ -1316,7 +1334,7 @@ ${buildDigitalStamp('')}
       )}
 
       {/* Tab 1: My Reconciliations */}
-      {activeTab === 1 && (
+      {activeTab === tabIndex('myRecons') && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {/* Filter bar */}
           <Box px={2} pt={2} pb={1} display="flex" gap={2} flexWrap="wrap">
@@ -1361,7 +1379,7 @@ ${buildDigitalStamp('')}
                     <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Timeliness</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>Lead/HOP Comments</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Department Lead Comments</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Finance Comments</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Submitted</TableCell>
                     <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Action</TableCell>
@@ -1480,7 +1498,7 @@ ${buildDigitalStamp('')}
       )}
 
       {/* Tab 2: Lead/HOP/Admin Pending Reviews */}
-      {activeTab === 2 && canReviewLead && (
+      {activeTab === tabIndex('leadReview') && canReviewLead && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {/* Filters */}
           <Box p={2} borderBottom={`1px solid ${theme.palette.divider}`}>
@@ -1586,7 +1604,7 @@ ${buildDigitalStamp('')}
       )}
 
       {/* Tab 3: Lead/HOP/Admin Approved History */}
-      {activeTab === 3 && canReviewLead && (
+      {activeTab === tabIndex('leadHistory') && canReviewLead && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {leadHistory.length === 0 ? (
             <Box py={6} textAlign="center">
@@ -1647,7 +1665,7 @@ ${buildDigitalStamp('')}
       )}
 
       {/* Tab: Finance Pending Reviews (index depends on whether lead tab exists) */}
-      {activeTab === (canReviewLead ? 4 : 2) && isFinanceOrAdmin && (
+      {activeTab === tabIndex('financeReview') && canReviewFinance && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {/* Filters */}
           <Box p={2} borderBottom={`1px solid ${theme.palette.divider}`}>
@@ -1775,7 +1793,7 @@ ${buildDigitalStamp('')}
       )}
 
       {/* Tab: Finance Clerk My Review History (index 3 for Finance Clerk) */}
-      {activeTab === 3 && isFinance && (
+      {activeTab === tabIndex('financeHistory') && isFinance && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {financeReviewHistory.length === 0 ? (
             <Box py={6} textAlign="center">
@@ -1831,7 +1849,7 @@ ${buildDigitalStamp('')}
       )}
 
       {/* Tab: History (index depends on whether lead tab exists) */}
-      {activeTab === (canReviewLead ? 5 : (isFinance ? 4 : 3)) && isFinanceOrAdmin && (
+      {activeTab === tabIndex('allHistory') && canSeeAllHistory && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {history.length === 0 ? (
             <Box py={6} textAlign="center">
@@ -1868,7 +1886,7 @@ ${buildDigitalStamp('')}
                     >
                       <MenuItem value="">All Statuses</MenuItem>
                       <MenuItem value="DISPATCHED">Awaiting Reconciliation</MenuItem>
-                      <MenuItem value="RECON_PENDING_LEAD">Pending Lead/HOP Review</MenuItem>
+                      <MenuItem value="RECON_PENDING_LEAD">Pending Departmental Review</MenuItem>
                       <MenuItem value="RECON_PENDING_FINANCE">Pending Finance Review</MenuItem>
                       <MenuItem value="RECONCILED">Reconciled</MenuItem>
                       <MenuItem value="REJECTED">Rejected (Resubmit)</MenuItem>
@@ -1955,7 +1973,7 @@ ${buildDigitalStamp('')}
                         const reconStatus: string = rec.reconciliation_status || '';
                         const statusChip = (() => {
                           if (reqStatus === 'DISPATCHED') return <Chip label="Awaiting Reconciliation" color="warning" size="small" />;
-                          if (reqStatus === 'RECON_PENDING_LEAD') return <Chip label="Pending Lead/HOP" color="warning" size="small" />;
+                          if (reqStatus === 'RECON_PENDING_LEAD') return <Chip label="Pending Departmental Review" color="warning" size="small" />;
                           if (reqStatus === 'RECON_PENDING_FINANCE') return <Chip label="Pending Finance" color="info" size="small" />;
                           if (reconStatus === 'APPROVED' || reqStatus === 'RECONCILED') return <Chip label="Reconciled / Approved" color="success" size="small" />;
                           if (reconStatus === 'REJECTED') return <Chip label="Rejected" color="error" size="small" />;
@@ -2051,7 +2069,7 @@ ${buildDigitalStamp('')}
                   )}
                   {rejectedAttempt.rejected_by_stage === 'FINANCE' && rejectedAttempt.lead_comments && (
                     <Typography variant="body2" sx={{ mt: 0.5 }}>
-                      <strong>Earlier Lead/HOP comment:</strong> {rejectedAttempt.lead_comments}
+                      <strong>Earlier Department Lead comment:</strong> {rejectedAttempt.lead_comments}
                     </Typography>
                   )}
                   <Typography variant="caption" display="block" sx={{ mt: 0.8 }}>
@@ -2510,7 +2528,7 @@ ${buildDigitalStamp('')}
               {reviewReconciliation?.lead_comments && (
                 <Alert severity={reviewReconciliation.lead_action === 'REJECTED' ? 'error' : 'info'} sx={{ mb: 2 }}>
                   <Typography variant="subtitle2" fontWeight={600}>
-                    Lead/HOP Comments{reviewReconciliation.lead_reviewer_name ? ` (${reviewReconciliation.lead_reviewer_name})` : ''}:
+                    Department Lead Comments{reviewReconciliation.lead_reviewer_name ? ` (${reviewReconciliation.lead_reviewer_name})` : ''}:
                   </Typography>
                   {reviewReconciliation.lead_comments}
                 </Alert>
@@ -2543,7 +2561,7 @@ ${buildDigitalStamp('')}
                 )}
               </Box>
 
-              <TextField label={reviewMode === 'lead' ? 'HOP / Lead Comments' : 'Finance Comments'} multiline rows={3} fullWidth
+              <TextField label={reviewMode === 'lead' ? 'Department Lead / Head of Department Comments' : 'Finance Comments'} multiline rows={3} fullWidth
                 value={reviewComments} onChange={(e) => setReviewComments(e.target.value)}
                 placeholder="Add comments (required for rejection)" sx={{ mt: 1 }} />
             </Box>
@@ -2688,7 +2706,7 @@ ${buildDigitalStamp('')}
                 <Box mt={2}>
                   <Alert severity={viewReconciliation.lead_action === 'REJECTED' ? 'error' : 'info'}>
                     <Typography variant="subtitle2" fontWeight={600}>
-                      Lead/HOP Comments{viewReconciliation.lead_reviewer_name ? ` (${viewReconciliation.lead_reviewer_name})` : ''}:
+                      Department Lead Comments{viewReconciliation.lead_reviewer_name ? ` (${viewReconciliation.lead_reviewer_name})` : ''}:
                     </Typography>
                     <Typography variant="body2">{viewReconciliation.lead_comments}</Typography>
                   </Alert>

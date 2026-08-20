@@ -66,6 +66,7 @@ import { budgetService } from '../services/budgetService';
 import { getProcurementDashboard } from '../services/procurementService';
 import { reconciliationService } from '../services/reconciliationService';
 import { Request, BudgetLine } from '../types';
+import { formatRoleLabel } from '../utils/roleUtils';
 
 const COLORS = ['#4caf50', '#ff9800', '#f44336', '#2196f3', '#9c27b0', '#00bcd4'];
 
@@ -395,7 +396,7 @@ const DashboardPage: React.FC = () => {
               Welcome back, {user?.first_name}!
             </Typography>
             <Typography variant="body2" sx={{ opacity: 0.85, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-              {user?.department_name} &bull; {user?.role?.replace(/_/g, ' ')}
+              {user?.department_name} &bull; {formatRoleLabel(user?.role, (user as any)?.job_title)}
             </Typography>
           </Box>
           <Box display="flex" gap={1} flexWrap="wrap">

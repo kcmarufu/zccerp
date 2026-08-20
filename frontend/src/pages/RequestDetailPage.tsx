@@ -70,7 +70,7 @@ import { formatRoleLabel } from '../utils/roleUtils';
 import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
-  { status: 'PENDING_LEAD_APPROVAL', label: 'Departmental Approval (Lead / HOP)' },
+  { status: 'PENDING_LEAD_APPROVAL', label: 'Departmental Approval (Department Lead / Head of Department)' },
   { status: 'PENDING_FINANCE_APPROVAL', label: 'Finance Clerk Review' },
   { status: 'APPROVED', label: 'Approved' }
 ];
@@ -572,7 +572,7 @@ ${approvalLogs.length > 0 ? `
 <table>
   <thead><tr><th>Date &amp; Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Status Change</th><th>Comments</th></tr></thead>
   <tbody>
-    ${approvalLogs.map(log => `<tr><td>${formatDateTime(log.created_at)}</td><td>${log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}</td><td>${formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '—'}</td><td>${log.comment || log.comments || '—'}</td></tr>`).join('')}
+    ${approvalLogs.map(log => `<tr><td>${formatDateTime(log.created_at)}</td><td>${log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}</td><td>${formatRoleLabel(log.actor_role || log.approver_role, log.actor_job_title)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '—'}</td><td>${log.comment || log.comments || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
 
@@ -650,7 +650,7 @@ ${buildClaimPage()}
       const tRows = approvalLogs.map(log => [
         formatDateTime(log.created_at),
         log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim(),
-        formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code),
+        formatRoleLabel(log.actor_role || log.approver_role, log.actor_job_title),
         log.action,
         log.previous_status && log.new_status ? `${log.previous_status.replace(/_/g, ' ')} → ${log.new_status.replace(/_/g, ' ')}` : '',
         log.comment || log.comments || ''
@@ -1159,7 +1159,7 @@ ${buildClaimPage()}
                 {approvalLogs.filter(l => l.action === 'REJECTED').map(log => (
                   <Box key={log.id} sx={{ mt: 1 }}>
                     <Typography variant="body2">
-                      By: {log.actor_name || `${log.approver_first_name} ${log.approver_last_name}`} ({formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code)})
+                      By: {log.actor_name || `${log.approver_first_name} ${log.approver_last_name}`} ({formatRoleLabel(log.actor_role || log.approver_role, log.actor_job_title)})
                     </Typography>
                     <Typography variant="body2">
                       Date: {formatDate(log.created_at)}
@@ -1285,7 +1285,7 @@ ${buildClaimPage()}
                           </Typography>
                         </Box>
                         <Typography variant="caption" color="text.secondary">
-                          {formatRoleLabel(log.actor_role || log.approver_role, log.actor_department_code)}
+                          {formatRoleLabel(log.actor_role || log.approver_role, log.actor_job_title)}
                         </Typography>
                         {log.previous_status && log.new_status && (
                           <Box sx={{ mt: 0.5 }}>

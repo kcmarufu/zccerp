@@ -443,7 +443,7 @@ const PurchaseRequestDetail: React.FC = () => {
       const tRows = request.approvalTrail.map(log => [
         format(new Date(log.created_at), 'dd MMM yyyy HH:mm'),
         `${log.actor_first_name} ${log.actor_last_name}`,
-        formatRoleLabel(log.actor_role, log.actor_department_code),
+        formatRoleLabel(log.actor_role, log.actor_job_title),
         log.action.replace(/_/g, ' '),
         log.comments || ''
       ]);
@@ -564,7 +564,7 @@ ${trail.length > 0 ? `
 <table>
   <thead><tr><th>Date &amp; Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Comments</th></tr></thead>
   <tbody>
-    ${trail.map(log => `<tr><td>${formatDateTime(log.created_at)}</td><td>${log.actor_first_name} ${log.actor_last_name}</td><td>${formatRoleLabel(log.actor_role, log.actor_department_code)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.comments || '—'}</td></tr>`).join('')}
+    ${trail.map(log => `<tr><td>${formatDateTime(log.created_at)}</td><td>${log.actor_first_name} ${log.actor_last_name}</td><td>${formatRoleLabel(log.actor_role, log.actor_job_title)}</td><td class="action-${log.action}">${log.action.replace(/_/g, ' ')}</td><td>${log.comments || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
 
@@ -899,7 +899,7 @@ ${allCommitteeApproved ? `
                           .find((a: any) => a.seat === seat);
                         const seatName = seat === 'SUPER_ADMIN'
                           ? 'Super Admin'
-                          : 'Department Lead / Head of Programs';
+                          : 'Department Lead / Head of Department';
                         return (
                           <Box key={seat} display="flex" alignItems="center" gap={1}>
                             <Chip
@@ -1227,7 +1227,7 @@ ${allCommitteeApproved ? `
                             <Chip
                               label={log.actor_role === 'PROCUREMENT_COMMITTEE'
                                 ? `Committee Member`
-                                : formatRoleLabel(log.actor_role, log.actor_department_code)}
+                                : formatRoleLabel(log.actor_role, log.actor_job_title)}
                               size="small" variant="outlined" sx={{ fontSize: '0.65rem' }}
                             />
                             <Chip
@@ -1303,7 +1303,7 @@ ${allCommitteeApproved ? `
               <Alert severity="info" sx={{ mb: 2, mt: 1 }}>
                 The Procurement Committee has <strong>recommended</strong> this request.
                 It proceeds to Finance only once <strong>both</strong> the Super Admin and the
-                Lead/Head of Programs of the owning department have approved.
+                Department Lead / Head of Department of the owning department have approved.
                 A rejection by either returns it to be amended and resubmitted.
               </Alert>
               <TextField

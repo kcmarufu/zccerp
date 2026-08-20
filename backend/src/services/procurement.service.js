@@ -540,7 +540,7 @@ class ProcurementService {
       throw new Error('Request is not pending department approval');
     }
     if (![ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN].includes(user.role)) {
-      throw new Error('Only Program Lead or Head of Programs can approve at this stage');
+      throw new Error('Only a Department Lead or Head of Department can approve at this stage');
     }
 
     // The first approval belongs to the Lead/HOD of the department that owns the
@@ -550,7 +550,7 @@ class ProcurementService {
     if (user.role !== ROLES.ADMIN) {
       const owningDepartmentId = Number(req.routing_department_id || req.department_id);
       if (owningDepartmentId !== Number(user.department_id)) {
-        throw new Error('This request must be approved by the Lead/HOD of the department that owns the selected project');
+        throw new Error('This request must be approved by the Department Lead / Head of Department of the department that owns the selected project');
       }
     }
 
@@ -576,7 +576,7 @@ class ProcurementService {
       throw new Error('Can only reverse department approval when request is at Pending Procurement stage');
     }
     if (![ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN].includes(user.role)) {
-      throw new Error('Only the approving role (Program Lead, Head of Programs, or Admin) can reverse a department approval');
+      throw new Error('Only the approving role (Department Lead, Head of Department, or Admin) can reverse a department approval');
     }
     // Enforce 12-hour reversal window
     if (req.dept_approved_at) {
@@ -649,7 +649,7 @@ class ProcurementService {
     ) {
       const owningDepartmentId = Number(req.routing_department_id || req.department_id);
       if (owningDepartmentId !== Number(user.department_id)) {
-        throw new Error('This request must be actioned by the Lead/HOD of the department that owns the selected project');
+        throw new Error('This request must be actioned by the Department Lead / Head of Department of the department that owns the selected project');
       }
     }
 
@@ -848,7 +848,7 @@ class ProcurementService {
       };
 
       const onwardLabel = highValue.isHighValue
-        ? 'the Super Admin and the owning department Lead/HOP for approval'
+        ? 'the Super Admin and the owning Department Lead / Head of Department for approval'
         : 'Finance for final approval';
 
       // An ADMIN acting at the committee stage carries the committee outright.
@@ -863,7 +863,7 @@ class ProcurementService {
         return advance(
           `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee votes received — forwarded to ${onwardLabel}`,
           highValue.isHighValue
-            ? `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. This request is USD ${highValue.amount.toFixed(2)} — recommended for approval and forwarded to the Super Admin and the owning department Lead/HOP.`
+            ? `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. This request is USD ${highValue.amount.toFixed(2)} — recommended for approval and forwarded to the Super Admin and the owning Department Lead / Head of Department.`
             : `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. Request forwarded to Finance for final approval.`
         );
       }
@@ -937,7 +937,7 @@ class ProcurementService {
     const seat = this._highValueSeatFor(user, req);
     if (!seat) {
       throw new Error(
-        'Only the Super Admin or the Lead/Head of Programs of the department that owns the selected project may approve this request'
+        'Only the Super Admin or the Department Lead / Head of Department of the department that owns the selected project may approve this request'
       );
     }
     if (decision === 'REJECTED' && !String(comments || '').trim()) {
@@ -956,7 +956,7 @@ class ProcurementService {
         [requestId, seat, user.id, user.role, user.department_id || null, decision, comments || null]
       );
 
-      const seatLabel = seat === HV_SEAT.SUPER_ADMIN ? 'Super Admin' : 'Department Lead/HOP';
+      const seatLabel = seat === HV_SEAT.SUPER_ADMIN ? 'Super Admin' : 'Department Lead / Head of Department';
 
       // ── Rejection: stop here. The request goes back to be amended. ──────────
       if (decision === 'REJECTED') {
@@ -997,7 +997,7 @@ class ProcurementService {
 
       if (!bothApproved) {
         const waitingOn = approvedSeats.has(HV_SEAT.SUPER_ADMIN)
-          ? 'the department Lead/Head of Programs'
+          ? 'the department Lead / Head of Department'
           : 'the Super Admin';
         return {
           success: true,
@@ -1015,7 +1015,7 @@ class ProcurementService {
         success: true,
         status: PROC_STATUS.PENDING_FINAL_FINANCE,
         approvedSeats: [...approvedSeats],
-        message: 'Both the Super Admin and the department Lead/HOP have approved. Forwarded to Finance for final approval.'
+        message: 'Both the Super Admin and the Department Lead / Head of Department have approved. Forwarded to Finance for final approval.'
       };
     });
   }

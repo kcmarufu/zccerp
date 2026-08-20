@@ -13,5 +13,5 @@
   "require_dept_approval": true,
   "allow_override": false,
   "session_timeout_hours": 1,
-  "max_login_attempts": 3
+  "max_login_attempts": 5
 }

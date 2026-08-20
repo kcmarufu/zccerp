@@ -278,7 +278,7 @@ class ApprovalService {
       const effectiveDeptId = Number(request.routing_department_id || request.department_id);
       if (isAdminDonorRequest && request.status === REQUEST_STATUS.PENDING_ADMIN_APPROVAL) {
         if (request.approver_dept_code !== 'AHR') {
-          throw new Error('Only the Admin/HR Program Lead can approve Admin department requests');
+          throw new Error('Only the Admin/HR Department Lead can approve Admin department requests');
         }
       } else if (!isAdminDonorRequest && effectiveDeptId !== Number(request.approver_dept)) {
         throw new Error('You can only approve requests from your department (or the project-owning department for cross-department requests)');
@@ -303,7 +303,7 @@ class ApprovalService {
 
       return {
         success: true,
-        message: 'Request approved by Program Lead - sent to Finance for final approval',
+        message: 'Request approved by Department Lead - sent to Finance for final approval',
         newStatus: REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
         _notif: { requestCode: request.request_code, requesterId: request.requester_id, approverName: `${request.approver_first} ${request.approver_last}` }
       };
@@ -357,7 +357,7 @@ class ApprovalService {
       // - Other stages: HOP must be in the request's effective department
       if (request.status === REQUEST_STATUS.PENDING_ADMIN_APPROVAL) {
         if (request.approver_dept_code !== 'AHR') {
-          throw new Error('Only the Admin/HR Head of Programs can approve Admin department requests');
+          throw new Error('Only the Admin/HR Head of Department can approve Admin department requests');
         }
       } else {
         const effectiveDeptId = Number(request.routing_department_id || request.department_id);
@@ -385,7 +385,7 @@ class ApprovalService {
 
       return {
         success: true,
-        message: 'Request approved by Head of Programs - sent to Finance for final approval',
+        message: 'Request approved by Head of Department - sent to Finance for final approval',
         newStatus: REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
         _notif: { requestCode: request.request_code, requesterId: request.requester_id, approverName: `${request.approver_first} ${request.approver_last}` }
       };
@@ -769,6 +769,7 @@ class ApprovalService {
         u.first_name as approver_first_name,
         u.last_name as approver_last_name,
         u.email as approver_email,
+        u.job_title as actor_job_title,
         CONCAT(u.first_name, ' ', u.last_name) as actor_name,
         al.approver_role as actor_role,
         al.comments as comment,

@@ -61,7 +61,7 @@ const REQUEST_STATUSES: { value: RequestStatus | ''; label: string }[] = [
   { value: 'DRAFT', label: 'Draft' },
   { value: 'PENDING_ADMIN_APPROVAL', label: 'Pending Admin' },
   { value: 'PENDING_LEAD_APPROVAL', label: 'Pending Lead' },
-  { value: 'PENDING_HOP_APPROVAL', label: 'Pending HOP' },
+  { value: 'PENDING_HOP_APPROVAL', label: 'Pending Head of Department' },
   { value: 'PENDING_FINANCE_APPROVAL', label: 'Pending Finance' },
   { value: 'APPROVED', label: 'Approved' },
   { value: 'DISPATCHED', label: 'Dispatched' },
