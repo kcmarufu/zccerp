@@ -33,6 +33,8 @@ const SUBDIRS = {
   RECONCILIATION: 'reconciliations',
   INVOICE:        'invoices',
   RECEIPT:        'receipts',
+  LEAVE:          'leave',        // supporting documents on leave requests
+  HR_DOCUMENT:    'hr-documents', // employee files: certificates, contracts, IDs
   temp:           'temp',
 };
 

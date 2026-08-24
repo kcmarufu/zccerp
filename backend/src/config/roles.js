@@ -206,6 +206,57 @@ const isAdminHrManager = (user) => {
     user.department_code === ADMIN_HR_DEPT_CODE;
 };
 
+/**
+ * HR module access levels.
+ *
+ *   FULL       — Super Admin, and the HOP/Lead of Admin & HR (the HR Office).
+ *                Sees and administers every department, and may approve leave
+ *                anywhere in the organisation.
+ *   DEPARTMENT — HOP/Lead of any other department (CPJS, FOS, HSD). Sees only
+ *                their own department, and only the Dashboard, Leave Management
+ *                and Leave Analytics areas.
+ *   SELF       — everyone else, including Finance Clerks. They raise their own
+ *                leave and see nothing but their own records.
+ */
+const HR_ACCESS = {
+  FULL: 'FULL',
+  DEPARTMENT: 'DEPARTMENT',
+  SELF: 'SELF',
+};
+
+const hrAccessLevel = (user) => {
+  if (!user || !user.role) return HR_ACCESS.SELF;
+  if (user.role === ROLES.ADMIN) return HR_ACCESS.FULL;
+
+  if ([ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role)) {
+    return user.department_code === ADMIN_HR_DEPT_CODE
+      ? HR_ACCESS.FULL
+      : HR_ACCESS.DEPARTMENT;
+  }
+
+  // FINANCE_CLERK and PROCUREMENT_* hold finance/procurement privileges, but in
+  // the HR module they are ordinary staff.
+  return HR_ACCESS.SELF;
+};
+
+/** Sees every department's HR data. */
+const hasFullHrAccess = (user) => hrAccessLevel(user) === HR_ACCESS.FULL;
+
+/** Sees HR data, but only for their own department. */
+const hasDepartmentHrAccess = (user) => hrAccessLevel(user) === HR_ACCESS.DEPARTMENT;
+
+/** Sees any HR data beyond their own records. */
+const hasHrOversight = (user) => hrAccessLevel(user) !== HR_ACCESS.SELF;
+
+/**
+ * The department filter to apply for this user, or null for "no restriction".
+ * `requested` lets a FULL-access user narrow to one department explicitly.
+ */
+const hrDepartmentScope = (user, requested = null) => {
+  if (hasFullHrAccess(user)) return requested ? Number(requested) : null;
+  return user && user.department_id ? Number(user.department_id) : -1;
+};
+
 const hasPermission = (role, permission) => {
   const permissions = ROLE_PERMISSIONS[role];
   return permissions && permissions.includes(permission);
@@ -259,6 +310,12 @@ module.exports = {
   hasPermission,
   isFinanceManager,
   isAdminHrManager,
+  HR_ACCESS,
+  hrAccessLevel,
+  hasFullHrAccess,
+  hasDepartmentHrAccess,
+  hasHrOversight,
+  hrDepartmentScope,
   isValidTransition,
   getRequiredApprovalRole,
   getNextApprovalStatus

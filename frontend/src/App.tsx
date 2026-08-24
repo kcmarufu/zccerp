@@ -14,6 +14,7 @@ import 'react-toastify/dist/ReactToastify.css';
 // Components
 import Navigation from './components/layout/Navigation';
 import ProtectedRoute from './components/common/ProtectedRoute';
+import { HrOfficeRoute, HrOversightRoute } from './components/common/HrRoutes';
 import InactivityTimer from './components/common/InactivityTimer';
 
 // Pages
@@ -52,6 +53,7 @@ const SystemSettingsPage = React.lazy(() => import('./pages/admin/SystemSettings
 const HRDashboardPage = React.lazy(() => import('./pages/hr/HRDashboardPage'));
 const EmployeeDirectoryPage = React.lazy(() => import('./pages/hr/EmployeeDirectoryPage'));
 const LeaveManagementPage = React.lazy(() => import('./pages/hr/LeaveManagementPage'));
+const LeaveAnalyticsPage = React.lazy(() => import('./pages/hr/LeaveAnalyticsPage'));
 const TimesheetManagementPage = React.lazy(() => import('./pages/hr/TimesheetManagementPage'));
 const PerformanceReviewPage = React.lazy(() => import('./pages/hr/PerformanceReviewPage'));
 const TrainingRecordsPage = React.lazy(() => import('./pages/hr/TrainingRecordsPage'));
@@ -127,6 +129,10 @@ const FINANCE_ROLES: UserRole[] = ['FINANCE_CLERK'];
 const ADMIN_ROLES: UserRole[] = ['ADMIN'];
 const FINANCE_MANAGERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'];
 const ALL_FINANCE_ROLES: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'];
+// HR oversight: Super Admin plus department heads/leads. Record-level scoping
+// (own vs department vs organisation) is enforced by the API, not here.
+const HR_MANAGERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'];
+const HR_APPROVERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS'];
 
 /**
  * The request form is reachable from two routes and for any request id. React
@@ -173,8 +179,26 @@ const App: React.FC = () => {
                       <Route path="/assets" element={<ComingSoonPage module="Asset Management" />} />
                       <Route path="/assets/*" element={<ComingSoonPage module="Asset Management" />} />
 
-                      <Route path="/hr" element={<ComingSoonPage module="Human Resources" />} />
-                      <Route path="/hr/*" element={<ComingSoonPage module="Human Resources" />} />
+                      {/* HR MODULE */}
+                      <Route path="/hr" element={<Suspense fallback={<div>Loading...</div>}><HRDashboardPage /></Suspense>} />
+                      <Route path="/hr/dashboard" element={<Suspense fallback={<div>Loading...</div>}><HRDashboardPage /></Suspense>} />
+                      {/* Every user reaches Leave — the page itself shows "My Leave" to
+                          general users and adds the approval queue for HOP/Admin. */}
+                      <Route path="/hr/leave" element={<Suspense fallback={<div>Loading...</div>}><LeaveManagementPage /></Suspense>} />
+                      <Route path="/hr/leave-analytics" element={<HrOversightRoute><Suspense fallback={<div>Loading...</div>}><LeaveAnalyticsPage /></Suspense></HrOversightRoute>} />
+                      {/* Reserved for the HR Office (Super Admin, or Admin & HR HOP/Lead).
+                          HrOfficeRoute sends anyone else to /unauthorized rather than
+                          letting them load a page the API will refuse. */}
+                      <Route path="/hr/employees" element={<HrOfficeRoute><Suspense fallback={<div>Loading...</div>}><EmployeeDirectoryPage /></Suspense></HrOfficeRoute>} />
+                      <Route path="/hr/exit-clearance" element={<HrOfficeRoute><Suspense fallback={<div>Loading...</div>}><ExitClearancePage /></Suspense></HrOfficeRoute>} />
+                      <Route path="/hr/payroll" element={<ComingSoonPage module="Payroll" />} />
+
+                      {/* Not built out yet — shown as Coming Soon rather than half-working. */}
+                      <Route path="/hr/timesheets" element={<ComingSoonPage module="Timesheet Management" />} />
+                      <Route path="/hr/performance" element={<ComingSoonPage module="Performance Reviews" />} />
+                      <Route path="/hr/training" element={<ComingSoonPage module="Training & Development" />} />
+                      <Route path="/hr/disciplinary" element={<ComingSoonPage module="Disciplinary Records" />} />
+                      <Route path="/hr/*" element={<Navigate to="/hr/dashboard" replace />} />
 
                       <Route path="/reports/finance" element={<FinancialReportsPage />} />
                       <Route path="/reports/budgets" element={<FinancialReportsPage />} />

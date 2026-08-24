@@ -495,6 +495,22 @@ export type LeaveStatus = 'PENDING' | 'DEPT_APPROVED' | 'APPROVED' | 'REJECTED' 
 export type TimesheetStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
 export interface HREmployee {
+  // --- Accrual settings -----------------------------------------------------
+  /** False for accounts that must never earn leave (service, contractor). */
+  accrual_enabled?: boolean | number;
+  /** Days earned per month by THIS person; null = the standard rate. */
+  monthly_accrual_days?: number | string | null;
+  /** Why this person's rate differs, e.g. "Level of effort — 50%". */
+  accrual_note?: string | null;
+
+  // --- Education / qualifications -------------------------------------------
+  // Summary fields; the certificates themselves are files in hr_documents.
+  highest_qualification?: string | null;
+  field_of_study?: string | null;
+  institution?: string | null;
+  year_qualified?: number | string | null;
+  professional_body?: string | null;
+
   id: number;
   employee_number: string;
   user_id: number | null;
@@ -548,6 +564,14 @@ export interface HRContract {
 }
 
 export interface HRLeaveType {
+  /** Types like Study Leave cannot be submitted without a document. */
+  requires_document?: boolean | number;
+  /** Days granted before the vacation balance is charged (Compassionate 12, Sick 90). */
+  free_days_limit?: number | null;
+  /** Rolling window the allowance is measured over, in months. */
+  free_days_window_months?: number | null;
+  is_deductible?: boolean | number;
+  is_accrual_target?: boolean | number;
   id: number;
   name: string;
   leave_name?: string;            // alias used in some pages
@@ -590,7 +614,258 @@ export interface HRLeaveRequest {
   approval_comments?: string | null; // alias
   approved_at: string | null;
   hr_rejection_reason?: string | null;
+  rejection_reason?: string | null;
   created_at: string;
+
+  // --- Balance snapshot -----------------------------------------------------
+  /** Standing balance at the moment the request was raised (deductible types only). */
+  balance_before?: number | null;
+  /** Balance that remains once the request is approved (deductible types only). */
+  balance_after?: number | null;
+  /** Live balance for this employee/leave-type/year, recomputed on read. */
+  current_balance?: number | null;
+  /** Days actually charged to the vacation pool (may be less than requested). */
+  deductible_days?: number;
+  /** Days covered by the leave type's free allowance. */
+  free_days_used?: number;
+  free_days_limit?: number | null;
+  free_days_window_months?: number | null;
+  updated_at?: string;
+  /** True when at least one day of this request is charged to the balance. */
+  is_deductible?: boolean | number;
+  is_accrual_target?: boolean | number;
+  /** Role the requester held, used to explain who must approve. */
+  requester_role?: UserRole | string;
+  employee_number?: string | null;
+  department_id?: number | null;
+  employee_user_id?: number | null;
+}
+
+/**
+ * One immutable entry in a leave request's audit trail.
+ */
+export interface HRLeaveAuditEntry {
+  id: number;
+  leave_request_id: number;
+  employee_id: number;
+  leave_type_id: number;
+  leave_type_name?: string | null;
+  action: 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'ACCRUAL_ADJUSTMENT' | string;
+  from_status: string | null;
+  to_status: string | null;
+  actor_user_id: number | null;
+  /** Null when the entry was written by an automated job. */
+  actor_name?: string | null;
+  actor_role: string | null;
+  comments: string | null;
+  days_affected: number;
+  is_deductible: boolean | number;
+  balance_before: number | null;
+  balance_after: number | null;
+  entitlement_at: number | null;
+  taken_at: number | null;
+  pending_at: number | null;
+  fiscal_year: number | null;
+  created_at: string;
+}
+
+/** A supporting document attached to a leave request. */
+export interface HRLeaveAttachment {
+  id: number;
+  leave_request_id: number;
+  file_name: string;
+  file_size: number;
+  mime_type: string | null;
+  description: string | null;
+  uploaded_by_name?: string | null;
+  created_at: string;
+}
+
+/** A manual credit or debit applied to someone's leave balance. */
+export interface HRLeaveAdjustment {
+  id: number;
+  employee_id: number;
+  employee_name?: string;
+  employee_number?: string | null;
+  department_name?: string | null;
+  leave_type_id: number;
+  leave_type_name?: string;
+  fiscal_year: number;
+  /** Positive = top-up, negative = deduction. */
+  adjustment_days: number;
+  reason: string;
+  balance_before: number | null;
+  balance_after: number | null;
+  adjusted_by: number | null;
+  adjusted_by_name?: string | null;
+  adjusted_by_role: string | null;
+  created_at: string;
+}
+
+/** One employee's standing leave position, for the register view. */
+export interface HRLeaveRegisterRow {
+  employee_id: number;
+  employee_number: string | null;
+  employee_name: string;
+  department_id: number | null;
+  department_name: string | null;
+  position_title: string | null;
+  role_name: string;
+  entitlement: number;
+  carried_forward: number;
+  taken: number;
+  pending: number;
+  remaining_days: number;
+  /** Days credited by the monthly accrual job this year. */
+  accrued_this_year: number;
+  /** Net of every manual top-up and deduction this year. */
+  manual_adjustments: number;
+  /** Whether this employee earns leave monthly. */
+  accrual_enabled?: boolean | number;
+  /** Their own rate, when it differs from the standard one. */
+  accrual_rate_override?: number | string | null;
+  accrual_note?: string | null;
+}
+
+/**
+ * One person's accrual statement: every credit, adjustment and deduction over
+ * a year, with a running balance.
+ */
+export interface HRAccrualHistory {
+  fiscal_year: number;
+  months_covered: number;
+  totals: {
+    accrued: number;
+    adjusted: number;
+    taken: number;
+    net: number;
+  };
+  accruals: Array<{
+    fiscal_year: number;
+    accrual_month: number;
+    days_added: number;
+    created_at: string;
+    leave_type_name: string;
+    triggered_by_name: string | null;
+  }>;
+  adjustments: Array<{
+    adjustment_days: number;
+    reason: string;
+    created_at: string;
+    leave_type_name: string;
+    adjusted_by_name: string | null;
+  }>;
+  /** Chronological statement; `days` is signed and `balance_after` runs. */
+  events: Array<{
+    date: string;
+    type: 'ACCRUAL' | 'TOP_UP' | 'DEDUCTION' | 'LEAVE_TAKEN';
+    label: string;
+    days: number;
+    detail: string;
+    balance_after: number;
+  }>;
+  employee?: HREmployee;
+}
+
+/** Accrual totals per department and per month. */
+export interface HRAccrualReport {
+  fiscal_year: number;
+  totals: {
+    credit_events: number;
+    employees: number;
+    days_accrued: number;
+  };
+  byDepartment: Array<{
+    department_id: number | null;
+    department_name: string;
+    employees_credited: number;
+    days_accrued: number;
+  }>;
+  byMonth: Array<{
+    month: number;
+    employees_credited: number;
+    days_accrued: number;
+    last_run: string;
+  }>;
+  adjustments: Array<{
+    department_name: string;
+    days_added: number;
+    days_removed: number;
+    adjustment_count: number;
+  }>;
+}
+
+/**
+ * Leave analytics for the HR Office / Super Admin oversight views.
+ */
+export interface HRLeaveAnalytics {
+  fiscal_year: number;
+  high_balance_threshold: number;
+  summary: {
+    employees: number;
+    total_entitlement: number;
+    total_taken: number;
+    total_pending: number;
+    total_remaining: number;
+    avg_remaining: number;
+  };
+  /** Employees banking more days than the threshold allows. */
+  highBalances: Array<{
+    employee_id: number;
+    employee_number: string | null;
+    employee_name: string;
+    department_name: string | null;
+    leave_type_name: string;
+    entitlement: number;
+    carried_forward: number;
+    taken: number;
+    pending: number;
+    remaining_days: number;
+  }>;
+  /** Employees who have taken 5 days or fewer all year. */
+  lowUtilisation: Array<{
+    employee_id: number;
+    employee_number: string | null;
+    employee_name: string;
+    department_name: string | null;
+    days_taken: number;
+  }>;
+  byDepartment: Array<{
+    department_id: number | null;
+    department_name: string | null;
+    employees: number;
+    days_taken: number;
+    days_remaining: number;
+  }>;
+  byLeaveType: Array<{
+    leave_type_id: number;
+    leave_name: string;
+    leave_code: string;
+    is_deductible: boolean | number;
+    request_count: number;
+    days_approved: number;
+    days_pending: number;
+  }>;
+  monthlyTrend: Array<{ month: number; request_count: number; days: number }>;
+  /** Pending requests, oldest first, with how long they have been waiting. */
+  pendingAging: Array<{
+    id: number;
+    employee_name: string;
+    department_name: string | null;
+    leave_type_name: string;
+    start_date: string;
+    total_days: number;
+    created_at: string;
+    days_waiting: number;
+  }>;
+  /** Recent runs of the 25th-of-month accrual job. */
+  accrualHistory: Array<{
+    fiscal_year: number;
+    accrual_month: number;
+    run_at: string;
+    employees_credited: number;
+    days_added: number;
+  }>;
 }
 
 export interface HRLeaveBalance {

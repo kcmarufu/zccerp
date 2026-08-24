@@ -8,18 +8,111 @@ import {
   Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TablePagination, Chip, MenuItem, Stack, IconButton,
   Dialog, DialogTitle, DialogContent, DialogActions, Grid, TextField,
-  CircularProgress, Checkbox, FormControlLabel, Divider
+  CircularProgress, Checkbox, FormControlLabel, Divider,
+  Autocomplete, InputAdornment, CircularProgress as Spinner
 } from '@mui/material';
 import {
   Add as AddIcon, Visibility as ViewIcon, Edit as EditIcon,
-  ExitToApp as ExitIcon, CheckCircle as CheckIcon
+  ExitToApp as ExitIcon, CheckCircle as CheckIcon,
+  Search as SearchIcon, UploadFile as UploadIcon,
+  FileDownload as DownloadIcon, AttachFile as AttachIcon
 } from '@mui/icons-material';
 import { useForm, Controller } from 'react-hook-form';
 import { toast } from 'react-toastify';
-import { getExitClearances, initiateExitClearance, updateExitClearance } from '../../services/hrService';
+import {
+  getExitClearances, initiateExitClearance, updateExitClearance,
+  getEmployees, getExitAttachments, uploadExitAttachment,
+  viewEmployeeDocument, downloadEmployeeDocument,
+} from '../../services/hrService';
+import { HRDocument, HREmployee } from '../../types';
 import { HRExitClearance } from '../../types';
 import { useAuthStore } from '../../store/authStore';
 import { formatDate } from '../../utils/datetime';
+
+/** Documents held against one exit clearance. */
+const ExitAttachments: React.FC<{ clearanceId: number; canEdit: boolean }> = ({ clearanceId, canEdit }) => {
+  const [docs, setDocs] = useState<HRDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setDocs(await getExitAttachments(clearanceId)); }
+    catch { setDocs([]); }
+    finally { setLoading(false); }
+  }, [clearanceId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      await uploadExitAttachment(clearanceId, file);
+      toast.success('Document attached');
+      load();
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to attach document');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const act = async (d: HRDocument, fn: (x: HRDocument) => Promise<void>) => {
+    setBusy(d.id);
+    try { await fn(d); }
+    catch (err: any) { toast.error(err.response?.data?.error || 'Could not open the document'); }
+    finally { setBusy(null); }
+  };
+
+  if (loading) {
+    return <Box display="flex" justifyContent="center" py={2}><CircularProgress size={20} /></Box>;
+  }
+
+  return (
+    <Box>
+      {docs.length === 0 ? (
+        <Typography variant="body2" color="text.disabled">No documents attached.</Typography>
+      ) : (
+        <Stack spacing={0.75}>
+          {docs.map((d) => (
+            <Paper key={d.id} elevation={0}
+              sx={{ p: 1, display: 'flex', alignItems: 'center', gap: 1, border: '1px solid', borderColor: 'divider' }}>
+              <AttachIcon fontSize="small" color="action" />
+              <Box flex={1} minWidth={0}>
+                <Typography variant="body2" fontWeight={600} noWrap>{d.document_name}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {formatDate(d.created_at)}
+                </Typography>
+              </Box>
+              {busy === d.id ? <CircularProgress size={18} /> : (
+                <>
+                  <IconButton size="small" title="View" onClick={() => act(d, viewEmployeeDocument)}>
+                    <ViewIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton size="small" title="Download" onClick={() => act(d, downloadEmployeeDocument)}>
+                    <DownloadIcon fontSize="small" />
+                  </IconButton>
+                </>
+              )}
+            </Paper>
+          ))}
+        </Stack>
+      )}
+
+      {canEdit && (
+        <Button component="label" size="small" sx={{ mt: 1 }} disabled={uploading}
+          startIcon={uploading ? <CircularProgress size={14} /> : <UploadIcon />}>
+          Attach document
+          <input type="file" hidden onChange={onUpload} />
+        </Button>
+      )}
+    </Box>
+  );
+};
 
 const STATUS_COLORS: Record<string, 'warning' | 'info' | 'success' | 'error' | 'default'> = {
   INITIATED: 'warning', IN_PROGRESS: 'info', COMPLETED: 'success', CANCELLED: 'error'
@@ -38,6 +131,13 @@ const ExitClearancePage: React.FC = () => {
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+
+  // Employee picker for a new clearance.
+  const [empOptions, setEmpOptions] = useState<HREmployee[]>([]);
+  const [empLoading, setEmpLoading] = useState(false);
+  const [selectedEmp, setSelectedEmp] = useState<HREmployee | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -52,7 +152,9 @@ const ExitClearancePage: React.FC = () => {
     try {
       setLoading(true);
       const result = await getExitClearances({
-        page: page + 1, limit: rowsPerPage, status: statusFilter || undefined
+        page: page + 1, limit: rowsPerPage,
+        status: statusFilter || undefined,
+        search: search || undefined,
       });
       setClearances(result.data);
       setTotal(result.pagination.total);
@@ -61,20 +163,42 @@ const ExitClearancePage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, rowsPerPage, statusFilter]);
+  }, [page, rowsPerPage, statusFilter, search]);
 
   useEffect(() => { loadClearances(); }, [loadClearances]);
 
+  /** Look employees up by name or number for the new-clearance picker. */
+  const lookupEmployees = useCallback(async (term: string) => {
+    setEmpLoading(true);
+    try {
+      const res = await getEmployees({ search: term || undefined, limit: 25 });
+      setEmpOptions(res.data);
+    } catch {
+      setEmpOptions([]);
+    } finally {
+      setEmpLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (dialogOpen) lookupEmployees('');
+  }, [dialogOpen, lookupEmployees]);
+
   const onSubmitNew = async (data: any) => {
     try {
+      if (!selectedEmp) {
+        toast.error('Choose the employee this clearance is for');
+        return;
+      }
       await initiateExitClearance({
-        employee_id: parseInt(data.employee_id),
+        employee_id: Number(selectedEmp.id),
         exit_type: data.exit_type,
         last_working_day: data.last_working_date,
         reason: data.reason
       });
       toast.success('Exit clearance initiated');
       setDialogOpen(false);
+      setSelectedEmp(null);
       reset();
       loadClearances();
     } catch (err: any) {
@@ -142,6 +266,20 @@ const ExitClearancePage: React.FC = () => {
             <MenuItem value="COMPLETED">Completed</MenuItem>
             <MenuItem value="CANCELLED">Cancelled</MenuItem>
           </TextField>
+          <TextField
+            size="small"
+            placeholder="Search name, number or username…"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { setSearch(searchInput); setPage(0); } }}
+            onBlur={() => { if (searchInput !== search) { setSearch(searchInput); setPage(0); } }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+              ),
+            }}
+            sx={{ minWidth: 280, ml: 2 }}
+          />
         </Stack>
       </Paper>
 
@@ -235,8 +373,48 @@ const ExitClearancePage: React.FC = () => {
           <DialogContent>
             <Grid container spacing={2}>
               <Grid item xs={12}>
-                <Controller name="employee_id" control={control} rules={{ required: 'Required' }}
-                  render={({ field }) => <TextField {...field} label="Employee ID *" type="number" fullWidth size="small" error={!!errors.employee_id} />} />
+                {/* Search by name or employee number rather than making the
+                    user know an internal id. */}
+                <Autocomplete
+                  size="small"
+                  options={empOptions}
+                  loading={empLoading}
+                  value={selectedEmp}
+                  onChange={(_, v) => setSelectedEmp(v)}
+                  onInputChange={(_, v, reason) => { if (reason === 'input') lookupEmployees(v); }}
+                  getOptionLabel={(o) =>
+                    `${o.first_name} ${o.last_name}${o.employee_number ? ` (${o.employee_number})` : ''}`}
+                  isOptionEqualToValue={(o, v) => o.id === v.id}
+                  renderOption={(props, o) => (
+                    <li {...props} key={o.id}>
+                      <Box>
+                        <Typography variant="body2" fontWeight={600}>
+                          {o.first_name} {o.last_name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {o.employee_number || '—'}
+                          {(o as any).department_name ? ` • ${(o as any).department_name}` : ''}
+                        </Typography>
+                      </Box>
+                    </li>
+                  )}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Employee *"
+                      placeholder="Search by name or employee number"
+                      InputProps={{
+                        ...params.InputProps,
+                        endAdornment: (
+                          <>
+                            {empLoading ? <Spinner size={16} /> : null}
+                            {params.InputProps.endAdornment}
+                          </>
+                        ),
+                      }}
+                    />
+                  )}
+                />
               </Grid>
               <Grid item xs={6}>
                 <Controller name="exit_type" control={control}
@@ -463,6 +641,12 @@ const ExitClearancePage: React.FC = () => {
                   <Typography variant="body2">{(viewClearance as any).reason}</Typography>
                 </>
               )}
+
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle2" fontWeight="bold" mb={1}>
+                Supporting Documents
+              </Typography>
+              <ExitAttachments clearanceId={viewClearance.id} canEdit={isManager} />
             </>
           )}
         </DialogContent>

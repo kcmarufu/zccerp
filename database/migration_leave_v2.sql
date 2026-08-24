@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS `hr_leave_accrual_log` (
   `accrual_month`  TINYINT      NOT NULL, -- 1..12
   `days_added`     DECIMAL(5,2) NOT NULL,
   `triggered_by`   INT          NULL,     -- user id (NULL = automated job)
-  `run_at`         DATETIME(3)  NOT NULL  DEFAULT CURRENT_TIMESTAMP(3),
+  `created_at`     DATETIME(3)  NOT NULL  DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE INDEX `hr_leave_accrual_unique`
     (`employee_id`, `leave_type_id`, `fiscal_year`, `accrual_month`),

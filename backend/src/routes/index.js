@@ -18,6 +18,7 @@ const reconciliationController = require('../controllers/reconciliation.controll
 const adminController = require('../controllers/admin.controller');
 const assetController = require('../controllers/asset.controller');
 const hrController = require('../controllers/hr.controller');
+const hrExportController = require('../controllers/hrExport.controller');
 const perDiemController = require('../controllers/perdiem.controller');
 const projectController = require('../controllers/project.controller');
 const procurementController = require('../controllers/procurement.controller');
@@ -321,6 +322,117 @@ router.put('/admin/settings', authenticateToken, requireRole(ROLES.ADMIN), (req,
     res.status(500).json({ success: false, error: 'Failed to save settings' });
   }
 });
+
+// ============================================================================
+// HR MODULE ROUTES
+// ----------------------------------------------------------------------------
+// Record-level scoping (own / department / organisation) is enforced inside
+// hr.controller.js, because it depends on the caller's employee record rather
+// than on the role alone. The guards here are the coarse role gate only.
+// ============================================================================
+
+// --- Dashboard --------------------------------------------------------------
+router.get('/hr/dashboard', authenticateToken, hrController.getDashboardStats.bind(hrController));
+
+// --- Employees --------------------------------------------------------------
+router.get('/hr/employees', authenticateToken, hrController.getEmployees.bind(hrController));
+router.post('/hr/employees', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS), hrController.createEmployee.bind(hrController));
+router.get('/hr/employees/:id', authenticateToken, hrController.getEmployeeById.bind(hrController));
+router.put('/hr/employees/:id', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS), hrController.updateEmployee.bind(hrController));
+
+// --- Contracts --------------------------------------------------------------
+router.get('/hr/employees/:employeeId/contracts', authenticateToken, hrController.getContracts.bind(hrController));
+router.post('/hr/contracts', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS), hrController.createContract.bind(hrController));
+router.post('/hr/contracts/:contractId/renew', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS), hrController.renewContract.bind(hrController));
+
+// --- Leave types ------------------------------------------------------------
+// Deductibility and the monthly accrual target are configured here, so only
+// Super Admin may change them.
+router.get('/hr/leave-types', authenticateToken, hrController.getLeaveTypes.bind(hrController));
+router.put('/hr/leave-types/:id', authenticateToken, requireRole(ROLES.ADMIN), hrController.updateLeaveType.bind(hrController));
+
+// --- Leave requests ---------------------------------------------------------
+// NOTE: the literal '/hr/leave-requests/analytics'-style paths must not collide
+// with ':leaveId'; analytics lives under its own /hr/leave-analytics path.
+router.get('/hr/leave-requests', authenticateToken, hrController.getLeaveRequests.bind(hrController));
+router.post('/hr/leave-requests', authenticateToken, uploadMultiple, handleUploadError, hrController.createLeaveRequest.bind(hrController));
+router.get('/hr/leave-requests/:leaveId', authenticateToken, hrController.getLeaveRequestById.bind(hrController));
+router.get('/hr/leave-requests/:leaveId/audit', authenticateToken, hrController.getLeaveAuditTrail.bind(hrController));
+// Edit a pending request, or resubmit a rejected one (owner, or HR Office).
+router.put('/hr/leave-requests/:leaveId', authenticateToken, uploadMultiple, handleUploadError, hrController.updateLeaveRequest.bind(hrController));
+// PROGRAM_LEAD is allowed through the role gate because the Admin & HR Lead is
+// part of the HR Office; leaveApproval.service enforces the real routing.
+router.put('/hr/leave-requests/:leaveId/approve', authenticateToken, requireRole(ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD, ROLES.ADMIN), hrController.approveLeaveRequest.bind(hrController));
+
+// --- Leave balances & accrual ----------------------------------------------
+router.get('/hr/employees/:employeeId/leave-balances', authenticateToken, hrController.getLeaveBalances.bind(hrController));
+router.post('/hr/leave-accrual/run', authenticateToken, requireRole(ROLES.ADMIN), hrController.runLeaveAccrual.bind(hrController));
+
+// --- Leave analytics (HR Office / Super Admin; HOP sees own department) -----
+router.get('/hr/leave-analytics', authenticateToken, hrController.getLeaveAnalytics.bind(hrController));
+
+// --- Accrual history (own, or an individual you can already see) -----------
+router.get('/hr/my-accruals', authenticateToken, hrController.getMyAccrualHistory.bind(hrController));
+router.get('/hr/employees/:employeeId/accruals', authenticateToken, hrController.getEmployeeAccrualHistory.bind(hrController));
+// Who accrues, and how fast — HR Office / Super Admin only.
+router.put('/hr/employees/:employeeId/accrual-settings', authenticateToken, hrController.updateAccrualSettings.bind(hrController));
+
+// --- Leave supporting documents --------------------------------------------
+router.get('/hr/leave-requests/:leaveId/attachments', authenticateToken, hrController.getLeaveAttachments.bind(hrController));
+router.post('/hr/leave-requests/:leaveId/attachments', authenticateToken, uploadSingle, handleUploadError, hrController.uploadLeaveAttachment.bind(hrController));
+router.get('/hr/leave-attachments/:attachmentId/download', authenticateToken, hrController.downloadLeaveAttachment.bind(hrController));
+router.delete('/hr/leave-attachments/:attachmentId', authenticateToken, hrController.deleteLeaveAttachment.bind(hrController));
+
+// --- Manual balance adjustments (HR / Admin / HOP / Lead) -------------------
+router.post('/hr/leave-adjustments', authenticateToken, hrController.adjustLeaveBalance.bind(hrController));
+router.get('/hr/leave-adjustments', authenticateToken, hrController.getLeaveAdjustments.bind(hrController));
+
+// --- Leave register & accrual reporting ------------------------------------
+router.get('/hr/leave-register', authenticateToken, hrController.getLeaveRegister.bind(hrController));
+router.get('/hr/reports/accruals', authenticateToken, hrController.getAccrualReport.bind(hrController));
+
+// --- Leave exports ----------------------------------------------------------
+router.get('/hr/leave-requests/:leaveId/export/pdf', authenticateToken, hrExportController.generateLeaveRequestPDF.bind(hrExportController));
+router.get('/hr/exports/leave-register/pdf', authenticateToken, hrExportController.generateLeaveRegisterPDF.bind(hrExportController));
+router.get('/hr/exports/leave-report/excel', authenticateToken, hrExportController.generateLeaveExcel.bind(hrExportController));
+
+// --- Timesheets -------------------------------------------------------------
+router.get('/hr/timesheets', authenticateToken, hrController.getTimesheets.bind(hrController));
+router.post('/hr/timesheets', authenticateToken, hrController.createTimesheet.bind(hrController));
+router.get('/hr/timesheets/:id', authenticateToken, hrController.getTimesheetById.bind(hrController));
+router.put('/hr/timesheets/:id/submit', authenticateToken, hrController.submitTimesheet.bind(hrController));
+router.put('/hr/timesheets/:id/approve', authenticateToken, requireRole(ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD, ROLES.ADMIN), hrController.approveTimesheet.bind(hrController));
+
+// --- Payroll ----------------------------------------------------------------
+router.get('/hr/payroll-periods', authenticateToken, requireRole(ROLES.ADMIN, ROLES.FINANCE_CLERK), hrController.getPayrollPeriods.bind(hrController));
+router.get('/hr/payroll-periods/:periodId/records', authenticateToken, requireRole(ROLES.ADMIN, ROLES.FINANCE_CLERK), hrController.getPayrollRecords.bind(hrController));
+
+// --- Performance reviews ----------------------------------------------------
+router.get('/hr/performance-reviews', authenticateToken, hrController.getPerformanceReviews.bind(hrController));
+router.post('/hr/performance-reviews', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD), hrController.createPerformanceReview.bind(hrController));
+router.put('/hr/performance-reviews/:id', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD), hrController.updatePerformanceReview.bind(hrController));
+
+// --- Training ---------------------------------------------------------------
+router.get('/hr/training-records', authenticateToken, hrController.getTrainingRecords.bind(hrController));
+router.post('/hr/training-records', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS), hrController.createTrainingRecord.bind(hrController));
+
+// --- Disciplinary (restricted) ---------------------------------------------
+router.get('/hr/disciplinary-records', authenticateToken, hrController.getDisciplinaryRecords.bind(hrController));
+router.post('/hr/disciplinary-records', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS), hrController.createDisciplinaryRecord.bind(hrController));
+
+// --- Exit clearance ---------------------------------------------------------
+router.get('/hr/exit-clearances', authenticateToken, hrController.getExitClearances.bind(hrController));
+router.post('/hr/exit-clearances', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD), hrController.initiateExitClearance.bind(hrController));
+router.put('/hr/exit-clearances/:id', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD), hrController.updateExitClearance.bind(hrController));
+router.get('/hr/exit-clearances/:id/attachments', authenticateToken, hrController.getExitAttachments.bind(hrController));
+router.post('/hr/exit-clearances/:id/attachments', authenticateToken, uploadSingle, handleUploadError, hrController.uploadExitAttachment.bind(hrController));
+
+// --- Employee documents -----------------------------------------------------
+router.get('/hr/employees/:employeeId/documents', authenticateToken, hrController.getDocuments.bind(hrController));
+router.post('/hr/documents', authenticateToken, uploadSingle, handleUploadError, hrController.createDocument.bind(hrController));
+router.get('/hr/documents/:documentId/download', authenticateToken, hrController.downloadEmployeeDocument.bind(hrController));
+router.delete('/hr/documents/:documentId', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS), hrController.deleteDocument.bind(hrController));
+
 
 // ============================================================================
 // LOOKUP ROUTES

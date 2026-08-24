@@ -75,6 +75,7 @@ import {
   ManageAccounts as UserMgmtIcon
 } from '@mui/icons-material';
 import { useAuthStore } from '../../store/authStore';
+import { hasFullHrAccess, hasHrOversight } from '../../utils/hrAccess';
 import { UserRole } from '../../types';
 import api from '../../services/api';
 import { formatDateTime } from '../../utils/datetime';
@@ -283,55 +284,75 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       ]
     },
     {
+      // Visibility is driven by HR access level, not role alone: the HOP/Lead of
+      // Admin & HR is the HR Office and sees everything, while the HOP/Lead of
+      // CPJS, FOS or HSD sees only Dashboard, Leave and Leave Analytics for
+      // their own department. Everyone else sees Dashboard and Leave.
       id: 'hr',
       label: 'Human Resources',
       icon: <HRIcon />,
-      comingSoon: true,
       items: [
         {
-          path: '/hr',
+          path: '/hr/dashboard',
           label: 'HR Dashboard',
           icon: <DashboardIcon />
         },
         {
-          path: '/hr/employees',
-          label: 'Employee Directory',
-          icon: <PersonIcon />
-        },
-        {
+          // Every role applies for leave here; approvers also get their queue.
           path: '/hr/leave',
           label: 'Leave Management',
           icon: <FolderIcon />
         },
         {
-          path: '/hr/timesheets',
-          label: 'Timesheets',
-          icon: <FolderIcon />
+          // Balance liability, high-balance watch list and accrual health.
+          path: '/hr/leave-analytics',
+          label: 'Leave Analytics',
+          icon: <AnalyticsIcon />,
+          condition: () => hasHrOversight(user)
         },
         {
-          path: '/hr/performance',
-          label: 'Performance Reviews',
-          icon: <AnalyticsIcon />
+          path: '/hr/employees',
+          label: 'Employee Directory',
+          icon: <PersonIcon />,
+          condition: () => hasFullHrAccess(user)
         },
         {
-          path: '/hr/training',
-          label: 'Training & Development',
-          icon: <FolderIcon />
+          path: '/hr/exit-clearance',
+          label: 'Exit Clearance',
+          icon: <FolderIcon />,
+          condition: () => hasFullHrAccess(user)
         },
         {
           path: '/hr/payroll',
           label: 'Payroll',
-          icon: <FolderIcon />
+          icon: <FolderIcon />,
+          condition: () => hasFullHrAccess(user)
+        },
+        // Not built out yet — hidden from everyone but the HR Office, where they
+        // resolve to a Coming Soon page.
+        {
+          path: '/hr/timesheets',
+          label: 'Timesheets',
+          icon: <FolderIcon />,
+          condition: () => hasFullHrAccess(user)
+        },
+        {
+          path: '/hr/performance',
+          label: 'Performance Reviews',
+          icon: <AnalyticsIcon />,
+          condition: () => hasFullHrAccess(user)
+        },
+        {
+          path: '/hr/training',
+          label: 'Training & Development',
+          icon: <FolderIcon />,
+          condition: () => hasFullHrAccess(user)
         },
         {
           path: '/hr/disciplinary',
           label: 'Disciplinary Records',
-          icon: <FolderIcon />
-        },
-        {
-          path: '/hr/exit',
-          label: 'Exit Clearance',
-          icon: <FolderIcon />
+          icon: <FolderIcon />,
+          condition: () => hasFullHrAccess(user)
         }
       ]
     },

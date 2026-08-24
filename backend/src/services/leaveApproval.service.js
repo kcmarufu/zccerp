@@ -15,7 +15,7 @@
  */
 
 const { query } = require('../config/database');
-const { ROLES } = require('../config/roles');
+const { ROLES, hasFullHrAccess, hasDepartmentHrAccess } = require('../config/roles');
 
 const NON_PRIVILEGED_ROLES = [
   ROLES.GENERAL_USER,
@@ -101,6 +101,12 @@ async function assertCanApprove(approver, requester) {
     throw new Error('You cannot approve your own leave request');
   }
 
+  // The HR Office — Super Admin, and the HOP/Lead of Admin & HR — may approve
+  // leave for any department. Everyone else follows the routing table below.
+  if (hasFullHrAccess(approver)) {
+    return;
+  }
+
   const target = await resolveApprover(requester);
 
   // Approver must hold the required role.
@@ -132,9 +138,46 @@ async function assertCanApprove(approver, requester) {
  *                   LEFT JOIN users  req_u ON e.user_id  = req_u.id
  *                   LEFT JOIN roles  req_r ON req_u.role_id = req_r.id
  */
-function pendingForApproverWhereClause(approver) {
+function pendingForApproverWhereClause(approver, scope = 'department') {
   if (!approver || !approver.role) {
     return { sql: '1 = 0', params: [] };
+  }
+
+  // ── HR Office (Super Admin / Admin & HR HOP or Lead) ────────────────────
+  // Their queue defaults to their own department so day-to-day work stays
+  // focused; 'all' opens it to every pending request in the organisation,
+  // which is how they approve on another department's behalf. Their own
+  // request never appears in either view.
+  if (hasFullHrAccess(approver)) {
+    if (scope === 'all') {
+      return {
+        sql: '(req_u.id IS NULL OR req_u.id <> ?)',
+        params: [approver.id],
+      };
+    }
+    return {
+      sql: '(e.department_id = ? AND (req_u.id IS NULL OR req_u.id <> ?))',
+      params: [approver.department_id, approver.id],
+    };
+  }
+
+  // ── Department HOP/Lead (CPJS, FOS, HSD) ────────────────────────────────
+  // Their own department only. Requests raised by a HOP or Admin route upward
+  // to the HR Office instead, so they are excluded here.
+  if (hasDepartmentHrAccess(approver)) {
+    return {
+      sql: `(
+        e.department_id = ?
+        AND COALESCE(req_r.role_name, ?) NOT IN (?, ?)
+        AND (req_u.id IS NULL OR req_u.id <> ?)
+      )`,
+      params: [
+        approver.department_id,
+        ROLES.GENERAL_USER,
+        ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN,
+        approver.id,
+      ],
+    };
   }
 
   if (approver.role === ROLES.HEAD_OF_PROGRAMS) {
