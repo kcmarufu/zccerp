@@ -232,6 +232,7 @@ class HRController {
         search:       req.query.search || undefined,
         startFrom:    req.query.startFrom || undefined,
         startTo:      req.query.startTo || undefined,
+        role:         req.query.role || undefined,
       };
 
       const scope = String(req.query.scope || '').toLowerCase();
@@ -903,6 +904,8 @@ class HRController {
         year: req.query.year ? Number(req.query.year) : undefined,
         departmentId: hrDepartmentScope(req.user, req.query.departmentId),
         search: req.query.search || null,
+        dateFrom: req.query.dateFrom || null,
+        dateTo: req.query.dateTo || null,
       });
       res.json({ success: true, data });
     } catch (error) {

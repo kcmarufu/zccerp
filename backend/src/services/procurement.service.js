@@ -5,7 +5,7 @@
  */
 
 const { query, transaction } = require('../config/database');
-const { ROLES, isAdminHrManager } = require('../config/roles');
+const { ROLES, isAdminHrManager, FINANCE_DEPT_CODE } = require('../config/roles');
 const notificationService = require('./notification.service');
 
 const PROC_STATUS = {
@@ -27,11 +27,14 @@ const PROC_STATUS = {
 // needs two further approvals, granted independently and in either order:
 //
 //   SUPER_ADMIN  — any ADMIN account
-//   DEPARTMENT   — the Lead OR Head of Programs of the department that owns the
-//                  selected project (routing_department_id); either one suffices
+//   FINANCE      — the Lead OR Head of Department of Finance (FOS); either one
+//                  suffices. Every high-value request crosses the same Finance
+//                  desk regardless of which department raised it, so the
+//                  organisation's money is signed off in one place.
 //
-// Only when BOTH have approved does it move to Finance. A rejection by either
-// sends it back to be amended; on resubmission it returns to this same stage.
+// Only when BOTH have approved does it move on to the Finance desk for the
+// final approval. A rejection by either sends it back to be amended; on
+// resubmission it returns to this same stage.
 //
 // Everything below the threshold keeps the ordinary "any 3 committee members"
 // flow, decided by the committee alone.
@@ -41,7 +44,7 @@ const HIGH_VALUE_THRESHOLD_USD = 5000;
 // both the ordinary flow and the high-value recommendation stage.
 const COMMITTEE_APPROVALS_REQUIRED = 3;
 
-const HV_SEAT = { SUPER_ADMIN: 'SUPER_ADMIN', DEPARTMENT: 'DEPARTMENT' };
+const HV_SEAT = { SUPER_ADMIN: 'SUPER_ADMIN', FINANCE: 'FINANCE' };
 
 class ProcurementService {
 
@@ -239,10 +242,17 @@ class ProcurementService {
         //   2. At every other stage, requests originating from their own department
         //      or routed to it (for follow-up and reporting)
         //   3. Any request they have personally acted on (history)
+        //   4. Finance's Lead/HOD additionally sees every high-value request
+        //      awaiting the dual approval, whichever department raised it —
+        //      they hold one of the two seats, so it has to reach their desk
+        const financeSeat = user.department_code === FINANCE_DEPT_CODE
+          ? `OR pr.status = 'PENDING_HIGH_VALUE_APPROVAL'`
+          : '';
         where = `WHERE (
           (pr.status = 'PENDING_DEPT_APPROVAL' AND COALESCE(pr.routing_department_id, pr.department_id) = ?) OR
           (pr.status <> 'PENDING_DEPT_APPROVAL' AND (pr.department_id = ? OR pr.routing_department_id = ?)) OR
           pr.id IN (SELECT DISTINCT pal.request_id FROM proc_approval_logs pal WHERE pal.actor_id = ?)
+          ${financeSeat}
         )`;
         params.push(user.department_id, user.department_id, user.department_id, user.id);
       }
@@ -840,15 +850,14 @@ class ProcurementService {
         if (highValue.isHighValue) {
           // Fire-and-forget: a notification failure must not roll back the vote.
           notificationService.onProcurementHighValuePending(
-            requestId, req.request_code, highValue.amount,
-            req.routing_department_id || req.department_id
+            requestId, req.request_code, highValue.amount
           ).catch(() => {});
         }
         return { success: true, status: onwardStatus, highValue: highValue.isHighValue, message: resultMessage };
       };
 
       const onwardLabel = highValue.isHighValue
-        ? 'the Super Admin and the owning Department Lead / Head of Department for approval'
+        ? 'the Super Admin and the Finance Lead / Head of Department for approval'
         : 'Finance for final approval';
 
       // An ADMIN acting at the committee stage carries the committee outright.
@@ -863,7 +872,7 @@ class ProcurementService {
         return advance(
           `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee votes received — forwarded to ${onwardLabel}`,
           highValue.isHighValue
-            ? `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. This request is USD ${highValue.amount.toFixed(2)} — recommended for approval and forwarded to the Super Admin and the owning Department Lead / Head of Department.`
+            ? `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. This request is USD ${highValue.amount.toFixed(2)} — recommended for approval and forwarded to the Super Admin and the Finance Lead / Head of Department.`
             : `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. Request forwarded to Finance for final approval.`
         );
       }
@@ -886,23 +895,26 @@ class ProcurementService {
   }
 
   // ============================================================
-  // HIGH-VALUE DUAL APPROVAL (Super Admin + owning department Lead/HOP)
+  // HIGH-VALUE DUAL APPROVAL (Super Admin + Finance Lead/HOP)
   // ============================================================
 
   /**
    * Which seat, if any, this user occupies for the given request.
    * Returns null when the user has no standing to act at this stage.
+   *
+   * The second seat used to follow the department that owns the project. It is
+   * now Finance's, wherever the request came from: high-value spending is
+   * signed off by the Super Admin and the Finance Lead / Head of Department
+   * together, and only then does it reach the Finance desk for final approval.
    */
   _highValueSeatFor(user, request) {
     if (user.role === ROLES.ADMIN) return HV_SEAT.SUPER_ADMIN;
 
-    if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role)) {
-      // Either the Lead or the Head of Programs may fill the department seat —
+    if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role) &&
+        user.department_code === FINANCE_DEPT_CODE) {
+      // Either the Lead or the Head of Department of Finance may fill the seat —
       // whichever acts first settles it.
-      const owningDepartmentId = Number(request.routing_department_id || request.department_id);
-      if (owningDepartmentId && Number(user.department_id) === owningDepartmentId) {
-        return HV_SEAT.DEPARTMENT;
-      }
+      return HV_SEAT.FINANCE;
     }
     return null;
   }
@@ -937,7 +949,7 @@ class ProcurementService {
     const seat = this._highValueSeatFor(user, req);
     if (!seat) {
       throw new Error(
-        'Only the Super Admin or the Department Lead / Head of Department of the department that owns the selected project may approve this request'
+        'Only the Super Admin or the Finance Department Lead / Head of Department may approve a high-value request'
       );
     }
     if (decision === 'REJECTED' && !String(comments || '').trim()) {
@@ -956,7 +968,7 @@ class ProcurementService {
         [requestId, seat, user.id, user.role, user.department_id || null, decision, comments || null]
       );
 
-      const seatLabel = seat === HV_SEAT.SUPER_ADMIN ? 'Super Admin' : 'Department Lead / Head of Department';
+      const seatLabel = seat === HV_SEAT.SUPER_ADMIN ? 'Super Admin' : 'Finance Lead / Head of Department';
 
       // ── Rejection: stop here. The request goes back to be amended. ──────────
       if (decision === 'REJECTED') {
@@ -985,7 +997,7 @@ class ProcurementService {
         [requestId]
       );
       const approvedSeats = new Set(rows.filter(r => r.decision === 'APPROVED').map(r => r.seat));
-      const bothApproved = approvedSeats.has(HV_SEAT.SUPER_ADMIN) && approvedSeats.has(HV_SEAT.DEPARTMENT);
+      const bothApproved = approvedSeats.has(HV_SEAT.SUPER_ADMIN) && approvedSeats.has(HV_SEAT.FINANCE);
 
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
@@ -997,7 +1009,7 @@ class ProcurementService {
 
       if (!bothApproved) {
         const waitingOn = approvedSeats.has(HV_SEAT.SUPER_ADMIN)
-          ? 'the department Lead / Head of Department'
+          ? 'the Finance Lead / Head of Department'
           : 'the Super Admin';
         return {
           success: true,
@@ -1015,7 +1027,7 @@ class ProcurementService {
         success: true,
         status: PROC_STATUS.PENDING_FINAL_FINANCE,
         approvedSeats: [...approvedSeats],
-        message: 'Both the Super Admin and the Department Lead / Head of Department have approved. Forwarded to Finance for final approval.'
+        message: 'Both the Super Admin and the Finance Lead / Head of Department have approved. Forwarded to Finance for final approval.'
       };
     });
   }

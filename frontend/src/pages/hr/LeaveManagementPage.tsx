@@ -63,6 +63,8 @@ import {
   HRLeaveAttachment, LeaveStatus,
 } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import api from '../../services/api';
+import { ROLE_TITLES, formatRoleLabel } from '../../utils/roleUtils';
 import { formatDate, formatDateTime } from '../../utils/datetime';
 import {
   hasFullHrAccess, hasDepartmentHrAccess, hasHrOversight,
@@ -597,6 +599,9 @@ const LeaveManagementPage: React.FC = () => {
   const [searchInput, setSearchInput] = useState('');
   const [fromDate, setFromDate]       = useState('');
   const [toDate, setToDate]           = useState('');
+  const [deptFilter, setDeptFilter]   = useState('');
+  const [roleFilter, setRoleFilter]   = useState('');
+  const [departments, setDepartments] = useState<{ id: number; department_name: string }[]>([]);
 
   /** Approval queue breadth: own department, or the whole organisation. */
   const [queueScope, setQueueScope] = useState<'department' | 'all'>('department');
@@ -649,6 +654,15 @@ const LeaveManagementPage: React.FC = () => {
         startTo: toDate || undefined,
       };
 
+      // Department and role narrow a view of other people's leave, so they are
+      // only sent from the tabs that show it — left on, they would silently
+      // empty the caller's own list. A department head is already pinned to
+      // their own department server-side.
+      if (tab !== TAB_MY) {
+        if (deptFilter) filters.departmentId = Number(deptFilter);
+        if (roleFilter) filters.role = roleFilter;
+      }
+
       // TAB_MY       → the caller's own requests
       // TAB_APPROVAL → only requests this user is the designated approver for
       // TAB_ALL      → default scope (Admin: everything, HOP: their department)
@@ -692,9 +706,19 @@ const LeaveManagementPage: React.FC = () => {
       setLoading(false);
     }
   }, [page, rowsPerPage, statusFilter, yearFilter, tab, isApprover,
-      typeFilter, searchTerm, fromDate, toDate, queueScope, isHrOffice]);
+      typeFilter, searchTerm, fromDate, toDate, queueScope, isHrOffice,
+      deptFilter, roleFilter]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Departments for the picker. A department head sees only their own, so the
+  // picker is left out for them entirely.
+  useEffect(() => {
+    if (!isHrOffice) return;
+    api.get('/departments')
+      .then((res) => { if (res.data?.success) setDepartments(res.data.data); })
+      .catch(() => setDepartments([]));
+  }, [isHrOffice]);
 
   // ── submit leave ────────────────────────────────────────────────────────────
 
@@ -765,10 +789,19 @@ const LeaveManagementPage: React.FC = () => {
 
   // ── edit / resubmit ─────────────────────────────────────────────────────────
 
-  /** A request may be corrected while pending, or fixed and resubmitted once rejected. */
+  /**
+   * A request may be corrected while pending, or fixed and resubmitted once
+   * rejected — but only by the person who raised it.
+   *
+   * Approvers (the HR Office included) deliberately have no edit: an approver
+   * who can rewrite a request before approving it is approving their own
+   * wording, not the employee's, and the audit trail then shows a decision on
+   * something the employee never submitted. What an approver disagrees with,
+   * they reject with a reason, and the employee amends and resubmits.
+   */
   const canEdit = (req: HRLeaveRequest) =>
     ['PENDING', 'REJECTED'].includes(req.status)
-    && (isHrOffice || Number(req.employee_user_id) === Number(user?.id));
+    && Number(req.employee_user_id) === Number(user?.id);
 
   const openEditor = (req: HRLeaveRequest) => {
     setEditForm({
@@ -817,11 +850,12 @@ const LeaveManagementPage: React.FC = () => {
 
   const clearFilters = () => {
     setStatusFilter(''); setTypeFilter(''); setSearchTerm(''); setSearchInput('');
-    setFromDate(''); setToDate(''); setPage(0);
+    setFromDate(''); setToDate(''); setDeptFilter(''); setRoleFilter(''); setPage(0);
   };
 
   const activeFilterCount =
-    [statusFilter, typeFilter, searchTerm, fromDate, toDate].filter(Boolean).length;
+    [statusFilter, typeFilter, searchTerm, fromDate, toDate, deptFilter, roleFilter]
+      .filter(Boolean).length;
 
   // ── exports ─────────────────────────────────────────────────────────────────
 
@@ -1041,6 +1075,40 @@ const LeaveManagementPage: React.FC = () => {
               ))}
             </Select>
           </FormControl>
+
+          {/* Department and role only mean anything once the view reaches past
+              the caller's own requests. */}
+          {tab !== TAB_MY && isHrOffice && departments.length > 1 && (
+            <FormControl size="small" sx={{ minWidth: 190 }}>
+              <InputLabel>Department</InputLabel>
+              <Select
+                value={deptFilter}
+                label="Department"
+                onChange={(e) => { setDeptFilter(String(e.target.value)); setPage(0); }}
+              >
+                <MenuItem value="">All Departments</MenuItem>
+                {departments.map((d) => (
+                  <MenuItem key={d.id} value={String(d.id)}>{d.department_name}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
+
+          {tab !== TAB_MY && (
+            <FormControl size="small" sx={{ minWidth: 180 }}>
+              <InputLabel>Role</InputLabel>
+              <Select
+                value={roleFilter}
+                label="Role"
+                onChange={(e) => { setRoleFilter(String(e.target.value)); setPage(0); }}
+              >
+                <MenuItem value="">All Roles</MenuItem>
+                {Object.keys(ROLE_TITLES).map((r) => (
+                  <MenuItem key={r} value={r}>{formatRoleLabel(r)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
 
           <FormControl size="small" sx={{ minWidth: 110 }}>
             <InputLabel>Year</InputLabel>
@@ -1688,9 +1756,12 @@ const LeaveManagementPage: React.FC = () => {
         request={detailReq}
         onClose={() => setDetailReq(null)}
         canEditDocs={
+          // Filing evidence is not editing the request: the HR Office keeps the
+          // personnel file (a certificate often arrives after the leave), while
+          // the employee attaches to their own request until it is decided.
           !!detailReq && (
             isHrOffice
-            || (detailReq.status === 'PENDING'
+            || (['PENDING', 'REJECTED'].includes(detailReq.status)
                 && Number(detailReq.employee_user_id) === Number(user?.id))
           )
         }

@@ -65,6 +65,37 @@ function canReviewReconAsFinance(role, deptCode) {
 }
 
 /**
+ * The reconciliation deadline: four working days after the money was used.
+ *
+ * The clock starts from the day the activity ended (activity requests) or the
+ * day the float was dispatched (everything else), matching getOverdueCount().
+ * Expressed in SQL so a list view can show, per row, when a reconciliation was
+ * due and whether it is late — without shipping the rule to the client.
+ */
+const RECON_DUE_BASE_SQL = `
+  CASE WHEN r.is_activity_request = 1 AND r.activity_end_date IS NOT NULL
+       THEN r.activity_end_date
+       ELSE DATE(r.dispatched_at)
+  END`;
+
+/**
+ * Date of the 4th working day after `base`.
+ *
+ * A base landing on a weekend is first slid back to the Friday (nothing accrues
+ * over a weekend), which leaves a Mon-Fri base; from there the 4th working day
+ * is 4 days later from a Monday and 6 from any other weekday, since exactly one
+ * weekend falls inside the span.
+ */
+const reconDueDateSql = (base) => {
+  const weekdayBase = `DATE_SUB(${base}, INTERVAL GREATEST(WEEKDAY(${base}) - 4, 0) DAY)`;
+  return `
+    CASE WHEN ${base} IS NULL THEN NULL ELSE
+      DATE_ADD(${weekdayBase},
+               INTERVAL (4 + 2 * FLOOR((WEEKDAY(${weekdayBase}) + 4) / 5)) DAY)
+    END`;
+};
+
+/**
  * Calculate number of working days (Mon-Fri) between two dates.
  * Counts from the day after startDate up to and including endDate.
  * @param {Date|string} startDate - The dispatch date
@@ -171,17 +202,67 @@ class ReconciliationService {
         ? REQUEST_STATUS.RECON_PENDING_FINANCE
         : REQUEST_STATUS.RECON_PENDING_LEAD;
 
-      // Create reconciliation record
-      const [reconResult] = await connection.execute(
-        `INSERT INTO reconciliations
-         (request_id, reconciled_by, status, total_spent, total_returned, notes, overspend_notes, submission_timeliness, working_days_taken, actual_start_date, actual_end_date, created_at, updated_at)
-         VALUES (?, ?, 'SUBMITTED', ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-        [requestId, userId, totalSpent || 0, totalReturned || 0, notes || null, overspendNotes || null,
-         submissionTimeliness, workingDaysFromBase ?? workingDaysTaken,
-         actualStartDate || null, actualEndDate || null]
+      // A request has exactly ONE reconciliation record, which is amended in
+      // place each time it is resubmitted. Inserting a fresh row per attempt
+      // left the requester looking at a pile of near-identical records — one
+      // per rejection — with no way to tell which one was live.
+      const [priorRecons] = await connection.execute(
+        `SELECT id FROM reconciliations WHERE request_id = ? ORDER BY id DESC LIMIT 1`,
+        [requestId]
       );
+      const priorRecon = priorRecons[0] || null;
 
-      const reconciliationId = reconResult.insertId;
+      // Which attempt this is. Counted from the audit trail rather than held on
+      // the record, so it stays right for requests that were resubmitted before
+      // reconciliations became single-record. Every reconciliation submission
+      // logs SUBMITTED out of DISPATCHED, and nothing else does.
+      const [[submissionCount]] = await connection.execute(
+        `SELECT COUNT(*) AS n FROM approval_logs
+          WHERE request_id = ? AND action = 'SUBMITTED' AND previous_status = ?`,
+        [requestId, REQUEST_STATUS.DISPATCHED]
+      );
+      const attemptNo = Number(submissionCount.n || 0) + 1;
+
+      let reconciliationId;
+
+      if (priorRecon) {
+        // Resubmission after a rejection: revive the same row. The reviewer's
+        // verdict on the previous attempt is cleared because it no longer
+        // describes what is being reviewed; approval_logs keeps the full
+        // history of every decision taken along the way.
+        //
+        // created_at is moved to the submission time of THIS attempt: the
+        // history views date an attempt by it and match it to the decisions
+        // taken during its lifetime.
+        reconciliationId = priorRecon.id;
+        await connection.execute(
+          `UPDATE reconciliations
+              SET reconciled_by = ?, status = 'SUBMITTED',
+                  total_spent = ?, total_returned = ?, notes = ?, overspend_notes = ?,
+                  submission_timeliness = ?, working_days_taken = ?,
+                  actual_start_date = ?, actual_end_date = ?,
+                  finance_reviewer_id = NULL, finance_comments = NULL, reviewed_at = NULL,
+                  created_at = NOW(), updated_at = NOW()
+            WHERE id = ?`,
+          [userId, totalSpent || 0, totalReturned || 0, notes || null, overspendNotes || null,
+           submissionTimeliness, workingDaysFromBase ?? workingDaysTaken,
+           actualStartDate || null, actualEndDate || null, reconciliationId]
+        );
+        await connection.execute(
+          `DELETE FROM reconciliation_items WHERE reconciliation_id = ?`,
+          [reconciliationId]
+        );
+      } else {
+        const [reconResult] = await connection.execute(
+          `INSERT INTO reconciliations
+           (request_id, reconciled_by, status, total_spent, total_returned, notes, overspend_notes, submission_timeliness, working_days_taken, actual_start_date, actual_end_date, created_at, updated_at)
+           VALUES (?, ?, 'SUBMITTED', ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+          [requestId, userId, totalSpent || 0, totalReturned || 0, notes || null, overspendNotes || null,
+           submissionTimeliness, workingDaysFromBase ?? workingDaysTaken,
+           actualStartDate || null, actualEndDate || null]
+        );
+        reconciliationId = reconResult.insertId;
+      }
 
       // Insert reconciliation items
       if (items && items.length > 0) {
@@ -210,15 +291,21 @@ class ReconciliationService {
          (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
          VALUES (?, ?, 'GENERAL_USER', 'SUBMITTED', ?, ?, ?, ?)`,
         [requestId, userId, REQUEST_STATUS.DISPATCHED, nextStatus,
-         wasFinanceRejected ? 'Reconciliation resubmitted (Finance review resumed)' : 'Reconciliation submitted', ipAddress]
+         attemptNo > 1
+           ? `Reconciliation resubmitted (attempt ${attemptNo})${wasFinanceRejected ? ' — Finance review resumed' : ''}`
+           : 'Reconciliation submitted',
+         ipAddress]
       );
 
       return {
         success: true,
         message: wasFinanceRejected
           ? 'Reconciliation resubmitted — sent directly to Finance for review'
-          : 'Reconciliation submitted successfully',
+          : attemptNo > 1
+            ? 'Reconciliation resubmitted for review'
+            : 'Reconciliation submitted successfully',
         reconciliationId,
+        attemptNo,
         newStatus: nextStatus,
         _notif: { requestCode: request.request_code, requesterId: userId, deptId: request.department_id, timeliness: submissionTimeliness, routingDeptId: request.routing_department_id || null }
       };
@@ -1174,6 +1261,11 @@ class ReconciliationService {
               r.request_code,
               r.status AS request_status,
               r.total_amount as request_amount,
+              -- How many times this reconciliation has been submitted; every
+              -- submission logs SUBMITTED out of DISPATCHED and nothing else does.
+              (SELECT COUNT(*) FROM approval_logs sal
+                WHERE sal.request_id = rec.request_id
+                  AND sal.action = 'SUBMITTED' AND sal.previous_status = 'DISPATCHED') AS attempt_no,
               d.department_name, d.department_code,
               fr.first_name as reviewer_first_name,
               fr.last_name as reviewer_last_name,
@@ -1227,6 +1319,11 @@ class ReconciliationService {
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN users fr ON rec.finance_reviewer_id = fr.id
        WHERE rec.reconciled_by = ?
+         -- One row per request. A resubmission now amends the request's own
+         -- record, but requests resubmitted before that change still carry a
+         -- row per attempt; only the live one belongs in this list.
+         AND rec.id = (SELECT MAX(r3.id) FROM reconciliations r3
+                        WHERE r3.request_id = rec.request_id)
        ORDER BY rec.created_at DESC`,
       [userId, userId]
     );
@@ -1262,16 +1359,17 @@ class ReconciliationService {
               rec.reviewed_at,
               rec.submission_timeliness,
               rec.working_days_taken,
+              rec.created_at as reconciliation_submitted_at,
               fr.first_name as reviewer_first_name,
-              fr.last_name as reviewer_last_name
+              fr.last_name as reviewer_last_name,
+              -- The day the reconciliation is/was due: 4 working days after the
+              -- activity ended (activity requests) or after dispatch (all others).
+              ${reconDueDateSql(RECON_DUE_BASE_SQL)} AS reconciliation_due_date
        FROM requests r
        JOIN users u ON r.requester_id = u.id
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN reconciliations rec ON rec.id = (
-         SELECT id FROM reconciliations
-         WHERE request_id = r.id
-         ORDER BY created_at DESC
-         LIMIT 1
+         SELECT MAX(id) FROM reconciliations WHERE request_id = r.id
        )
        LEFT JOIN users fr ON rec.finance_reviewer_id = fr.id
        WHERE (r.status IN ('DISPATCHED','RECON_PENDING_LEAD','RECON_PENDING_FINANCE','RECONCILED')

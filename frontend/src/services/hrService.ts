@@ -117,6 +117,8 @@ export const getLeaveRequests = async (filters: {
   /** Start-date window. */
   startFrom?: string;
   startTo?: string;
+  /** Narrow by the role the requester holds, e.g. 'PROGRAM_LEAD'. */
+  role?: string;
 } = {}): Promise<{ data: HRLeaveRequest[]; pagination: any }> => {
   const { pendingOnly, scope, ...rest } = filters;
   const params: Record<string, any> = { ...rest };
@@ -264,6 +266,9 @@ export const getLeaveRegister = async (params: {
   year?: number;
   departmentId?: number;
   search?: string;
+  /** Reporting period — scopes the taken/pending figures to leave overlapping it. */
+  dateFrom?: string;
+  dateTo?: string;
 } = {}): Promise<HRLeaveRegisterRow[]> => {
   const response = await api.get('/hr/leave-register', { params });
   return response.data.data;

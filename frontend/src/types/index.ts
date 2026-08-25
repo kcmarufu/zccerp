@@ -725,6 +725,12 @@ export interface HRLeaveRegisterRow {
   /** Their own rate, when it differs from the standard one. */
   accrual_rate_override?: number | string | null;
   accrual_note?: string | null;
+  /** Approved days overlapping the requested reporting period. */
+  taken_in_period: number;
+  /** Days awaiting approval that overlap the reporting period. */
+  pending_in_period: number;
+  /** How many approved or pending requests overlap the reporting period. */
+  requests_in_period: number;
 }
 
 /**
@@ -1067,7 +1073,7 @@ export type ProcurementStatus =
   | 'PENDING_PROCUREMENT'
   | 'PENDING_COMMITTEE'
   // Selected quotation >= USD 5,000: recommended by the committee, awaiting the
-  // Super Admin and the owning department's Lead/HOP (both required).
+  // Super Admin and the Finance Lead / Head of Department (both required).
   | 'PENDING_HIGH_VALUE_APPROVAL'
   | 'PENDING_FINAL_FINANCE'
   | 'COMPLETED'

@@ -133,6 +133,88 @@ const rejectionStageLabel = (recon: any): string => {
   return 'Reviewer';
 };
 
+/** Working days (Mon-Fri) strictly after `from`, up to and including `to`. */
+const workingDaysBetween = (from: Date, to: Date) => {
+  let count = 0;
+  const cursor = new Date(from);
+  cursor.setHours(0, 0, 0, 0);
+  cursor.setDate(cursor.getDate() + 1);
+  const end = new Date(to);
+  end.setHours(0, 0, 0, 0);
+  while (cursor <= end) {
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) count++;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return count;
+};
+
+/**
+ * Where a reconciliation that has NOT been submitted stands against its
+ * deadline — four working days after the activity ended, or after dispatch.
+ *
+ * These rows used to read a flat "Not Submitted", which said nothing about
+ * whether the requester was still inside the window or months past it. The due
+ * date itself comes from the server so the deadline is defined in one place.
+ */
+const OutstandingSubmission: React.FC<{ dueDate?: string | null }> = ({ dueDate }) => {
+  if (!dueDate) {
+    return <Chip label="Not Submitted" size="small" variant="outlined" color="default" />;
+  }
+  const due = new Date(`${String(dueDate).substring(0, 10)}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const overdue = today > due;
+  const lateBy = overdue ? workingDaysBetween(due, today) : 0;
+  const dueIn = overdue ? 0 : workingDaysBetween(today, due);
+
+  return (
+    <Box display="flex" flexDirection="column" alignItems="flex-start" gap={0.3}>
+      <Chip
+        size="small"
+        color={overdue ? 'error' : 'warning'}
+        variant={overdue ? 'filled' : 'outlined'}
+        icon={overdue ? <WarningIcon /> : undefined}
+        label={overdue
+          ? `Overdue by ${lateBy} working day${lateBy !== 1 ? 's' : ''}`
+          : dueIn === 0 ? 'Due today' : `Due in ${dueIn} working day${dueIn !== 1 ? 's' : ''}`}
+      />
+      <Typography variant="caption" color="text.secondary">
+        Due {format(due, 'MMM d, yyyy')}
+      </Typography>
+    </Box>
+  );
+};
+
+/**
+ * When a history row was submitted, or — if it has not been — when it was due
+ * and how far past that it now is. Used by the printed and spreadsheet exports.
+ */
+const reconSubmissionLabel = (rec: any) => {
+  if (rec.reconciliation_id) {
+    return rec.reconciliation_submitted_at
+      ? format(new Date(rec.reconciliation_submitted_at), 'dd MMM yyyy')
+      : '—';
+  }
+  if (!rec.reconciliation_due_date) return 'Not submitted';
+  const due = new Date(`${String(rec.reconciliation_due_date).substring(0, 10)}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dueLabel = format(due, 'dd MMM yyyy');
+  if (today <= due) return `Due ${dueLabel}`;
+  const lateBy = workingDaysBetween(due, today);
+  return `OVERDUE — due ${dueLabel} (${lateBy} working day${lateBy !== 1 ? 's' : ''} late)`;
+};
+
+/** True when this history row is an unsubmitted reconciliation past its deadline. */
+const isOverdueRow = (rec: any) => {
+  if (rec.reconciliation_id || !rec.reconciliation_due_date) return false;
+  const due = new Date(`${String(rec.reconciliation_due_date).substring(0, 10)}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today > due;
+};
+
 const SubmissionTimeliness: React.FC<{ timeliness?: string | null; days?: number | null }> = ({ timeliness, days }) => {
   if (!timeliness) return null;
   const isLate = timeliness === 'LATE';
@@ -334,6 +416,7 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
         <td align="right">$${Number(rec.total_spent || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
         <td align="right">${overspendOf(rec) > 0 ? `<span style="color:#c62828;font-weight:bold">${money(overspendOf(rec))} over</span>` : money(Number(rec.total_returned || 0))}</td>
         <td>${rec.reconciliation_status || '—'}</td>
+        <td>${reconSubmissionLabel(rec)}</td>
         <td>${`${rec.reviewer_first_name || ''} ${rec.reviewer_last_name || ''}`.trim()}</td>
         <td>${rec.reviewed_at ? format(new Date(rec.reviewed_at), 'dd MMM yyyy') : '—'}</td>
       </tr>`).join('');
@@ -358,9 +441,9 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
 </div>
 <h3>Reconciliation History (${history.length} records)</h3>
 <table>
-  <thead><tr><th>#</th><th>Reference</th><th>Requester</th><th align="right">Spent ($)</th><th align="right">Returned ($)</th><th>Status</th><th>Reviewed By</th><th>Date</th></tr></thead>
+  <thead><tr><th>#</th><th>Reference</th><th>Requester</th><th align="right">Spent ($)</th><th align="right">Returned ($)</th><th>Status</th><th>Submitted / Due</th><th>Reviewed By</th><th>Date</th></tr></thead>
   <tbody>${tableRows}
-  <tr class="total-row"><td colspan="3" align="right">TOTALS:</td><td align="right">$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</td><td align="right">$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}</td><td colspan="3"></td></tr>
+  <tr class="total-row"><td colspan="3" align="right">TOTALS:</td><td align="right">$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</td><td align="right">$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}</td><td colspan="4"></td></tr>
   </tbody>
 </table>
 ${buildDigitalStamp('')}
@@ -375,17 +458,18 @@ ${buildDigitalStamp('')}
   const handleHistoryBulkExcel = () => {
     if (history.length === 0) { toast.warning('No records to export'); return; }
     const wb = XLSX.utils.book_new();
-    const headers = ['#', 'Request #', 'Requester', 'Spent ($)', 'Returned ($)', 'Status', 'Reviewed By', 'Reviewed Date'];
+    const headers = ['#', 'Request #', 'Requester', 'Spent ($)', 'Returned ($)', 'Status', 'Submitted / Due', 'Reviewed By', 'Reviewed Date'];
     const rows = history.map((rec: any, i: number) => [
       i + 1, rec.request_code,
       `${rec.requester_first_name || ''} ${rec.requester_last_name || ''}`.trim(),
       Number(rec.total_spent || 0), Number(rec.total_returned || 0),
       rec.reconciliation_status || '',
+      reconSubmissionLabel(rec),
       `${rec.reviewer_first_name || ''} ${rec.reviewer_last_name || ''}`.trim(),
       rec.reviewed_at ? format(new Date(rec.reviewed_at), 'dd MMM yyyy') : ''
     ]);
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws['!cols'] = [4, 16, 22, 14, 14, 16, 22, 14].map(w => ({ wch: w }));
+    ws['!cols'] = [4, 16, 22, 14, 14, 16, 24, 22, 14].map(w => ({ wch: w }));
     XLSX.utils.book_append_sheet(wb, ws, 'Reconciliation History');
     XLSX.writeFile(wb, `reconciliation-history-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
     toast.success(`Exported ${history.length} records to Excel`);
@@ -827,6 +911,8 @@ ${buildDigitalStamp('')}
   const totalActualExtra = extraItems.reduce((s, i) => s + (Number(i.actualAmount) || 0), 0);
   const totalActual = totalActualOriginal + totalActualExtra;
   const totalVariance = totalBudgeted - totalActual;
+  /** Nothing was spent: the whole float comes back. */
+  const nothingSpent = totalActual === 0;
 
   const handleSubmitReconciliation = async () => {
     if (!selectedRequest) return;
@@ -835,15 +921,19 @@ ${buildDigitalStamp('')}
       return;
     }
 
-    // Validate: at least one actual amount must be entered
-    const hasAmounts = formItems.some(i => Number(i.actualAmount) > 0);
-    if (!hasAmounts) {
-      toast.warning('Please enter actual amounts spent for at least one item');
+    // Spending nothing is a legitimate outcome — the float was drawn and handed
+    // back untouched — so a zero total is accepted. Requiring "at least one item
+    // above zero" used to make that reconciliation impossible to file at all.
+    // What still has to be ruled out is a form submitted before the figures were
+    // filled in, so a nil return has to be stated in writing.
+    if (nothingSpent && !formNotes.trim()) {
+      toast.warning('Total spend is $0.00 — use Additional Notes to explain why none of the float was used');
       return;
     }
 
-    // Validate: attachments required (either new uploads or existing ones)
-    if (uploadedFiles.length === 0 && existingAttachments.length === 0) {
+    // Validate: attachments required (either new uploads or existing ones).
+    // A nil return has no receipts to show, so proof is optional there.
+    if (!nothingSpent && uploadedFiles.length === 0 && existingAttachments.length === 0) {
       toast.warning('Please attach at least one receipt or invoice before submitting');
       return;
     }
@@ -1388,7 +1478,16 @@ ${buildDigitalStamp('')}
                 <TableBody>
                   {filteredMyRecons.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((recon) => (
                     <TableRow key={recon.id} hover>
-                      <TableCell><Typography fontWeight={500}>{recon.request_code}</Typography></TableCell>
+                      <TableCell>
+                        <Typography fontWeight={500}>{recon.request_code}</Typography>
+                        {/* A resubmission amends this same record rather than
+                            adding another one, so the attempt is named here. */}
+                        {Number((recon as any).attempt_no) > 1 && (
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            Attempt {(recon as any).attempt_no}
+                          </Typography>
+                        )}
+                      </TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(recon.total_spent || 0).toLocaleString()}</TableCell>
                       <TableCell><ReturnedAmount row={recon} /></TableCell>
                       <TableCell>
@@ -1901,6 +2000,7 @@ ${buildDigitalStamp('')}
                       <MenuItem value="ON_TIME">On Time</MenuItem>
                       <MenuItem value="LATE">Late Submission</MenuItem>
                       <MenuItem value="NOT_SUBMITTED">Not Yet Submitted</MenuItem>
+                      <MenuItem value="OVERDUE">Overdue for Submission</MenuItem>
                     </TextField>
                   </Grid>
                   <Grid item xs={12} sm={6} md={1.5}>
@@ -1946,6 +2046,7 @@ ${buildDigitalStamp('')}
                 if (historyTimeliness === 'ON_TIME' && rec.submission_timeliness !== 'ON_TIME') return false;
                 if (historyTimeliness === 'LATE' && rec.submission_timeliness !== 'LATE') return false;
                 if (historyTimeliness === 'NOT_SUBMITTED' && rec.reconciliation_id) return false;
+                if (historyTimeliness === 'OVERDUE' && !isOverdueRow(rec)) return false;
                 return true;
               });
               const paged = filtered.slice(historyPage * historyRowsPerPage, historyPage * historyRowsPerPage + historyRowsPerPage);
@@ -1961,6 +2062,7 @@ ${buildDigitalStamp('')}
                         <TableCell sx={{ fontWeight: 600 }}>Spent</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>Overall Status</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Submitted / Due</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>Timeliness</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>Reviewed By</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>Reviewed</TableCell>
@@ -1988,9 +2090,25 @@ ${buildDigitalStamp('')}
                             <TableCell>{rec.total_returned != null ? <ReturnedAmount row={rec} /> : <Typography variant="body2" color="text.disabled">—</Typography>}</TableCell>
                             <TableCell>{statusChip}</TableCell>
                             <TableCell>
+                              {rec.reconciliation_id ? (
+                                <Typography variant="body2">
+                                  {rec.reconciliation_submitted_at
+                                    ? format(new Date(rec.reconciliation_submitted_at), 'MMM d, yyyy')
+                                    : '—'}
+                                </Typography>
+                              ) : rec.reconciliation_due_date ? (
+                                <Typography variant="body2" color={isOverdueRow(rec) ? 'error.main' : 'text.secondary'}
+                                  fontWeight={isOverdueRow(rec) ? 600 : 400}>
+                                  Due {format(new Date(`${String(rec.reconciliation_due_date).substring(0, 10)}T00:00:00`), 'MMM d, yyyy')}
+                                </Typography>
+                              ) : (
+                                <Typography variant="body2" color="text.disabled">—</Typography>
+                              )}
+                            </TableCell>
+                            <TableCell>
                               {rec.reconciliation_id
                                 ? <SubmissionTimeliness timeliness={rec.submission_timeliness} days={rec.working_days_taken} />
-                                : <Chip label="Not Submitted" size="small" variant="outlined" color="default" />}
+                                : <OutstandingSubmission dueDate={rec.reconciliation_due_date} />}
                             </TableCell>
                             <TableCell>
                               {rec.reviewer_first_name ? `${rec.reviewer_first_name} ${rec.reviewer_last_name}` : <Typography variant="body2" color="text.disabled">—</Typography>}
@@ -2013,7 +2131,7 @@ ${buildDigitalStamp('')}
                       })}
                       {paged.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={10} align="center" sx={{ py: 4 }}>
+                          <TableCell colSpan={11} align="center" sx={{ py: 4 }}>
                             <Typography color="text.secondary">No records match the selected filters</Typography>
                           </TableCell>
                         </TableRow>
@@ -2301,7 +2419,9 @@ ${buildDigitalStamp('')}
                   <Box display="flex" alignItems="center" gap={1}>
                     <AttachIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2" fontWeight={600}>
-                      Receipts &amp; Invoices <Typography component="span" color="error.main" variant="subtitle2">*</Typography>
+                      Receipts &amp; Invoices{!nothingSpent && (
+                        <Typography component="span" color="error.main" variant="subtitle2"> *</Typography>
+                      )}
                     </Typography>
                   </Box>
                   <Button variant="outlined" size="small" startIcon={<UploadIcon />}
@@ -2379,8 +2499,10 @@ ${buildDigitalStamp('')}
                     ))}
                   </List>
                 ) : existingAttachments.length === 0 ? (
-                  <Alert severity="warning" sx={{ py: 0.5 }}>
-                    No files attached yet — at least one receipt or invoice is required.
+                  <Alert severity={nothingSpent ? 'info' : 'warning'} sx={{ py: 0.5 }}>
+                    {nothingSpent
+                      ? 'No files attached. Nothing was spent, so receipts are not required.'
+                      : 'No files attached yet — at least one receipt or invoice is required.'}
                   </Alert>
                 ) : null}
               </Paper>
@@ -2398,9 +2520,29 @@ ${buildDigitalStamp('')}
                 />
               )}
 
-              <TextField label="Additional Notes" multiline rows={3} fullWidth
+              {/* Nil return — the float came back untouched. */}
+              {nothingSpent && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  <strong>Nil return.</strong> Nothing was spent, so the full float of {money(totalBudgeted)} is
+                  being returned. Say why in the notes below; receipts are not required, though proof of the
+                  return (a deposit slip, for instance) is worth attaching if you have it.
+                </Alert>
+              )}
+
+              <TextField
+                label={nothingSpent
+                  ? <>Additional Notes <Typography component="span" color="error.main" variant="body2">*</Typography></>
+                  : 'Additional Notes'}
+                multiline rows={3} fullWidth
+                required={nothingSpent}
                 value={formNotes} onChange={(e) => setFormNotes(e.target.value)}
-                placeholder="Provide any additional notes about expenditures, receipts attached, etc." />
+                error={nothingSpent && !formNotes.trim()}
+                helperText={nothingSpent && !formNotes.trim()
+                  ? 'Explain why none of the float was used'
+                  : ''}
+                placeholder={nothingSpent
+                  ? 'Explain why none of the float was used and how it was returned...'
+                  : 'Provide any additional notes about expenditures, receipts attached, etc.'} />
             </Box>
           )}
         </DialogContent>
@@ -2408,7 +2550,10 @@ ${buildDigitalStamp('')}
           <Button onClick={() => { setFormOpen(false); resetFormState(); }}>Cancel</Button>
           <Button variant="contained" startIcon={isSubmitting ? <CircularProgress size={18} /> : <SubmitIcon />}
             onClick={handleSubmitReconciliation}
-            disabled={isSubmitting || formItems.length === 0 || (totalVariance < 0 && !overspendNotes.trim()) || (uploadedFiles.length === 0 && existingAttachments.length === 0)}>
+            disabled={isSubmitting || formItems.length === 0
+              || (totalVariance < 0 && !overspendNotes.trim())
+              || (nothingSpent && !formNotes.trim())
+              || (!nothingSpent && uploadedFiles.length === 0 && existingAttachments.length === 0)}>
             {editModeReconId
               ? 'Update Reconciliation'
               : rejectedAttempt ? 'Resubmit Reconciliation' : 'Submit Reconciliation'}

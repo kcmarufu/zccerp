@@ -1018,22 +1018,72 @@ class BudgetController {
       );
 
       // 4. Spending by category
+      //
+      // The category of an expense is the one the requester picks on every
+      // request line (Transport, Per Diem, Training, ...). This report used to
+      // group by budget_lines.category instead, a field almost nobody fills in:
+      // it read "Uncategorized" for the overwhelming majority of the money and,
+      // where it was populated at all, showed accounting codes ("2504", "7000")
+      // and even project codes rather than anything anyone spends money on.
+      //
+      // Amounts follow the request through its life:
+      //   committed — the approved value of the line, from approval onwards
+      //   spent     — the reconciled actual once the float has been acquitted,
+      //               the approved value while it is still out with the holder,
+      //               and nothing at all while the request is merely approved
+      const SPEND_STATUSES = ['DISPATCHED', 'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE', 'RECONCILED'];
+      const COMMITTED_STATUSES = ['APPROVED', ...SPEND_STATUSES];
+      const committedIn = COMMITTED_STATUSES.map(() => '?').join(', ');
+      const spentIn = SPEND_STATUSES.map(() => '?').join(', ');
+
       const categorySummary = await query(
-        `SELECT 
-          COALESCE(bl.category, 'Uncategorized') as category,
-          COUNT(bl.id) as budget_line_count,
-          COALESCE(SUM(bl.allocated_amount), 0) as total_allocated,
-          COALESCE(SUM(bl.spent_amount), 0) as total_spent,
-          COALESCE(SUM(bl.allocated_amount - bl.spent_amount), 0) as total_remaining,
-          -- Utilisation must come from the group totals, not the average of each line's
-          -- percentage: averaging lets one small overspent line read as full utilisation
-          -- while the group still has budget remaining.
-          ROUND(COALESCE(SUM(bl.spent_amount) / NULLIF(SUM(bl.allocated_amount), 0) * 100, 0), 2) as avg_utilization
-        FROM budget_lines bl
-        WHERE bl.is_active = TRUE ${scopedYearFilter}
-        GROUP BY bl.category
-        ORDER BY total_spent DESC`,
-        scopedYearParam
+        `SELECT
+          s.category,
+          COUNT(DISTINCT s.request_id)      as request_count,
+          COUNT(*)                          as item_count,
+          COALESCE(SUM(s.committed), 0)     as total_committed,
+          COALESCE(SUM(s.spent), 0)         as total_spent,
+          COALESCE(SUM(s.committed - s.spent), 0) as total_variance
+        FROM (
+          -- Requested lines
+          SELECT ri.category                    as category,
+                 r.id                           as request_id,
+                 (ri.quantity * ri.unit_price)  as committed,
+                 CASE WHEN r.status IN (${spentIn})
+                      THEN COALESCE(reci.actual_amount, ri.quantity * ri.unit_price)
+                      ELSE 0 END                as spent
+          FROM request_items ri
+          JOIN requests r      ON r.id  = ri.request_id
+          JOIN budget_lines bl ON bl.id = ri.budget_line_id
+          -- Actuals come from the request's live reconciliation only; superseded
+          -- attempts would otherwise be counted alongside the one that stands.
+          LEFT JOIN reconciliation_items reci
+                 ON reci.request_item_id  = ri.id
+                AND reci.reconciliation_id = (
+                      SELECT MAX(rr.id) FROM reconciliations rr WHERE rr.request_id = r.id)
+          WHERE r.status IN (${committedIn}) AND bl.is_active = TRUE ${scopedYearFilter}
+
+          UNION ALL
+
+          -- Costs added during reconciliation, which never had a requested line
+          SELECT 'ADDITIONAL_COSTS' as category,
+                 r.id               as request_id,
+                 0                  as committed,
+                 reci.actual_amount as spent
+          FROM reconciliation_items reci
+          JOIN reconciliations rec ON rec.id = reci.reconciliation_id
+          JOIN requests r          ON r.id   = rec.request_id
+          JOIN budget_lines bl     ON bl.id  = reci.budget_line_id
+          WHERE reci.request_item_id IS NULL
+            AND rec.id = (SELECT MAX(rr.id) FROM reconciliations rr WHERE rr.request_id = r.id)
+            AND r.status IN (${spentIn}) AND bl.is_active = TRUE ${scopedYearFilter}
+        ) s
+        GROUP BY s.category
+        ORDER BY total_spent DESC, total_committed DESC`,
+        [
+          ...SPEND_STATUSES, ...COMMITTED_STATUSES, ...scopedYearParam,
+          ...SPEND_STATUSES, ...scopedYearParam
+        ]
       );
 
       // 5. Request status summary

@@ -751,7 +751,7 @@ class HRService {
     const {
       page = 1, limit = 25,
       employeeId, departmentId, status, year,
-      leaveTypeId, search, startFrom, startTo,
+      leaveTypeId, search, startFrom, startTo, role,
       pendingForApprover,    // { id, role, department_id } — when set, overrides other filters with role-based scope
       pendingScope = 'department', // 'department' | 'all' (HR Office only)
     } = filters;
@@ -761,6 +761,9 @@ class HRService {
 
     if (employeeId)   { where.push('lr.employee_id = ?'); params.push(employeeId); }
     if (departmentId) { where.push('e.department_id = ?'); params.push(departmentId); }
+    // The role the request was raised from — which is also what decides who
+    // approves it, so it is worth being able to read the queue by role.
+    if (role)         { where.push('COALESCE(req_r.role_name, ?) = ?'); params.push('GENERAL_USER', role); }
     if (status)       { where.push('lr.status = ?');       params.push(status); }
     if (year)         { where.push('YEAR(lr.start_date) = ?'); params.push(year); }
     if (leaveTypeId)  { where.push('lr.leave_type_id = ?');   params.push(leaveTypeId); }
@@ -1022,9 +1025,18 @@ class HRService {
         );
       }
 
+      // Only the employee who raised the leave may change it — not an approver,
+      // and not the HR Office. An approver who can rewrite a request before
+      // approving it is approving their own wording rather than the employee's,
+      // and the audit trail then records a decision on something the employee
+      // never submitted. Approvers reject with a reason instead, and the
+      // employee amends and resubmits.
       const isOwner = Number(request.employee_user_id) === Number(actor.id);
-      if (!isOwner && !actor.isHrOffice) {
-        throw new Error('You may only change your own leave request');
+      if (!isOwner) {
+        throw new Error(
+          'Only the employee who raised this leave request can change it. ' +
+          'Reject it with a reason if it needs correcting.'
+        );
       }
 
       const wasRejected = request.status === 'REJECTED';
@@ -1618,7 +1630,7 @@ class HRService {
    * "how many days does everyone have" at a glance. Includes employees who have
    * no balance row yet (shown as zero) so nobody is invisible.
    */
-  async getLeaveRegister({ year, departmentId = null, search = null } = {}) {
+  async getLeaveRegister({ year, departmentId = null, search = null, dateFrom = null, dateTo = null } = {}) {
     const fiscalYear = Number(year) || new Date().getFullYear();
     const where = ["e.employment_status = 'ACTIVE'"];
     const filterParams = [];
@@ -1628,6 +1640,20 @@ class HRService {
       where.push("(CONCAT(e.first_name,' ',e.last_name) LIKE ? OR e.employee_number LIKE ?)");
       filterParams.push(`%${search}%`, `%${search}%`);
     }
+
+    // Optional reporting period. Leave is counted when it OVERLAPS the period,
+    // so a request running across the boundary is not lost from both ends of a
+    // month-by-month read of the register. An open-ended bound is left open.
+    const periodFrom = dateFrom || null;
+    const periodTo   = dateTo   || null;
+    const overlaps = (alias) => [
+      periodTo   ? `${alias}.start_date <= ?` : null,
+      periodFrom ? `${alias}.end_date   >= ?` : null,
+    ].filter(Boolean).join(' AND ') || '1=1';
+    const overlapParams = [
+      ...(periodTo   ? [periodTo]   : []),
+      ...(periodFrom ? [periodFrom] : []),
+    ];
 
     return await query(
       `SELECT e.id AS employee_id, e.employee_number,
@@ -1646,6 +1672,22 @@ class HRService {
                 WHERE lr.employee_id = e.id
                   AND lr.status = 'PENDING'
                   AND YEAR(lr.start_date) = ?) AS pending,
+              -- Days falling inside the chosen reporting period, if one is set.
+              (SELECT COALESCE(SUM(lr.deductible_days), 0)
+                 FROM hr_leave_requests lr
+                WHERE lr.employee_id = e.id
+                  AND lr.status = 'APPROVED'
+                  AND ${overlaps('lr')}) AS taken_in_period,
+              (SELECT COALESCE(SUM(lr.deductible_days), 0)
+                 FROM hr_leave_requests lr
+                WHERE lr.employee_id = e.id
+                  AND lr.status = 'PENDING'
+                  AND ${overlaps('lr')}) AS pending_in_period,
+              (SELECT COUNT(*)
+                 FROM hr_leave_requests lr
+                WHERE lr.employee_id = e.id
+                  AND lr.status IN ('APPROVED', 'PENDING')
+                  AND ${overlaps('lr')}) AS requests_in_period,
               COALESCE(lb.entitlement + lb.carried_forward - lb.taken, 0) AS remaining_days,
               (SELECT COALESCE(SUM(al.days_added), 0)
                  FROM hr_leave_accrual_log al
@@ -1665,11 +1707,12 @@ class HRService {
              AND lb.fiscal_year   = ?
        WHERE ${where.join(' AND ')}
        ORDER BY d.department_name, employee_name`,
-      // Placeholder order: accrued subquery, adjustments subquery, balance
-      // join, then whatever the WHERE clause added.
-      // Placeholder order: pending subquery, accrued subquery, adjustments
-      // subquery, balance join, then whatever the WHERE clause added.
-      [fiscalYear, fiscalYear, fiscalYear, fiscalYear, ...filterParams]
+      // Placeholder order: pending subquery, the three period subqueries,
+      // accrued subquery, adjustments subquery, balance join, then whatever the
+      // WHERE clause added.
+      [fiscalYear,
+       ...overlapParams, ...overlapParams, ...overlapParams,
+       fiscalYear, fiscalYear, fiscalYear, ...filterParams]
     );
   }
 

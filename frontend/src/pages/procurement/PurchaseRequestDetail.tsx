@@ -188,13 +188,13 @@ const PurchaseRequestDetail: React.FC = () => {
   const canResubmitToCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_COMMITTEE';
   const canCommitteeDecide = hasPermission('committee_review') && request?.status === 'PENDING_COMMITTEE';
   const canFinalApprove = hasPermission('proc_finance_approve') && request?.status === 'PENDING_FINAL_FINANCE';
-  // High-value stage: the Super Admin seat (ADMIN) and the department seat
-  // (Lead/HOP of the project's owning department). The server verifies the
-  // department match and records which seat the decision fills.
-  const isOwningDeptApprover = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS') &&
-    Number(user?.department_id) === Number((request as any)?.routing_department_id || request?.department_id);
+  // High-value stage: the Super Admin seat (ADMIN) and the Finance seat (the
+  // Lead / Head of Department of Finance, whichever department raised the
+  // request). The server verifies both and records which seat a decision fills.
+  const isFinanceLead = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS') &&
+    user?.department_code === 'FOS';
   const canHighValueDecide = request?.status === 'PENDING_HIGH_VALUE_APPROVAL' &&
-    (hasRole('ADMIN') || isOwningDeptApprover);
+    (hasRole('ADMIN') || isFinanceLead);
   // Finance can keep attaching payment batches after completion — that is the
   // whole point of supporting more than one POP per request.
   const canManagePOP = (hasPermission('proc_finance_approve') || hasRole('ADMIN')) &&
@@ -882,8 +882,8 @@ ${allCommitteeApproved ? `
                   </Typography>
                 </Box>
                 {/* High-value approval — the committee recommends, then the
-                    Super Admin and the owning department's Lead/HOP must both
-                    approve before the request reaches Finance. */}
+                    Super Admin and Finance's Lead/HOD must both approve before
+                    the request reaches the Finance desk. */}
                 {Number((request as any).is_high_value) === 1 && (
                   <Paper variant="outlined" sx={{ mt: 2, p: 1.5, borderColor: 'secondary.main' }}>
                     <Typography variant="subtitle2" fontWeight={700} gutterBottom>
@@ -894,12 +894,12 @@ ${allCommitteeApproved ? `
                       </Typography>
                     </Typography>
                     <Stack spacing={0.75}>
-                      {(['SUPER_ADMIN', 'DEPARTMENT'] as const).map(seat => {
+                      {(['SUPER_ADMIN', 'FINANCE'] as const).map(seat => {
                         const rec = ((request as any).high_value_approvals || [])
                           .find((a: any) => a.seat === seat);
                         const seatName = seat === 'SUPER_ADMIN'
                           ? 'Super Admin'
-                          : 'Department Lead / Head of Department';
+                          : 'Finance Lead / Head of Department';
                         return (
                           <Box key={seat} display="flex" alignItems="center" gap={1}>
                             <Chip
@@ -1302,8 +1302,8 @@ ${allCommitteeApproved ? `
             <>
               <Alert severity="info" sx={{ mb: 2, mt: 1 }}>
                 The Procurement Committee has <strong>recommended</strong> this request.
-                It proceeds to Finance only once <strong>both</strong> the Super Admin and the
-                Department Lead / Head of Department of the owning department have approved.
+                It proceeds to the Finance desk only once <strong>both</strong> the Super Admin
+                and the Finance Lead / Head of Department have approved.
                 A rejection by either returns it to be amended and resubmitted.
               </Alert>
               <TextField

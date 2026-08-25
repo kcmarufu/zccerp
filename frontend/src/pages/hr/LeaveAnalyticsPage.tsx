@@ -54,6 +54,7 @@ import {
   HRLeaveType,
 } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import api from '../../services/api';
 import { formatDateTime } from '../../utils/datetime';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -110,6 +111,12 @@ const LeaveAnalyticsPage: React.FC = () => {
   const [search, setSearch]           = useState('');
   const [regPage, setRegPage]         = useState(0);
   const [regRows, setRegRows]         = useState(25);
+  /** Register filters: department, and a reporting period to count leave over. */
+  const [regDept, setRegDept]         = useState('');
+  const [regFrom, setRegFrom]         = useState('');
+  const [regTo, setRegTo]             = useState('');
+  const [departments, setDepartments] = useState<{ id: number; department_name: string }[]>([]);
+  const regPeriodActive = Boolean(regFrom || regTo);
 
   const [accrual, setAccrual]         = useState<HRAccrualReport | null>(null);
   const [adjustments, setAdjustments] = useState<HRLeaveAdjustment[]>([]);
@@ -141,10 +148,18 @@ const LeaveAnalyticsPage: React.FC = () => {
 
   const loadRegister = useCallback(async () => {
     setRegLoad(true);
-    try { setRegister(await getLeaveRegister({ year, search: search || undefined })); }
+    try {
+      setRegister(await getLeaveRegister({
+        year,
+        search: search || undefined,
+        departmentId: regDept ? Number(regDept) : undefined,
+        dateFrom: regFrom || undefined,
+        dateTo: regTo || undefined,
+      }));
+    }
     catch (err: any) { toast.error(err.response?.data?.error || 'Failed to load the leave register'); }
     finally { setRegLoad(false); }
-  }, [year, search]);
+  }, [year, search, regDept, regFrom, regTo]);
 
   const loadAccruals = useCallback(async () => {
     try {
@@ -167,7 +182,21 @@ const LeaveAnalyticsPage: React.FC = () => {
 
   useEffect(() => {
     getLeaveTypes().then(setLeaveTypes).catch(() => setLeaveTypes([]));
+    // A Head of Department is scoped to their own department server-side, so an
+    // empty list simply leaves the picker out of their way.
+    api.get('/departments')
+      .then((res) => { if (res.data?.success) setDepartments(res.data.data); })
+      .catch(() => setDepartments([]));
   }, []);
+
+  /**
+   * A reporting period narrows the register to the staff who actually have
+   * leave inside it — otherwise a date filter would change two columns and
+   * leave the same wall of names in place.
+   */
+  const registerRows = regPeriodActive
+    ? register.filter((r) => Number(r.requests_in_period) > 0)
+    : register;
 
   /** The accrued pool — the only balance a manual adjustment can meaningfully move. */
   const accrualType = leaveTypes.find((t) => truthy(t.is_accrual_target));
@@ -242,7 +271,10 @@ const LeaveAnalyticsPage: React.FC = () => {
     setExportAnchor(null);
     try {
       toast.info('Preparing export…');
-      if (kind === 'pdf') await downloadLeaveRegisterPDF({ year });
+      // The printed register follows whatever department the tab is showing.
+      if (kind === 'pdf') await downloadLeaveRegisterPDF({
+        year, departmentId: regDept ? Number(regDept) : undefined,
+      });
       else                await downloadLeaveExcel({ year, threshold });
     } catch (err: any) {
       toast.error(err.message || 'Export failed');
@@ -688,6 +720,7 @@ const LeaveAnalyticsPage: React.FC = () => {
                   ? 'Every active employee across the organisation.'
                   : 'Every active employee in your department.'}
                 {' '}Use Adjust to credit or deduct days by hand.
+                {regPeriodActive && ' Showing only staff with leave in the chosen period; Taken and Pending count that period.'}
               </Typography>
             </Box>
             <Box flex={1} />
@@ -701,8 +734,41 @@ const LeaveAnalyticsPage: React.FC = () => {
                   <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
                 ),
               }}
-              sx={{ minWidth: 260 }}
+              sx={{ minWidth: 240 }}
             />
+            {departments.length > 1 && (
+              <FormControl size="small" sx={{ minWidth: 190 }}>
+                <InputLabel>Department</InputLabel>
+                <Select
+                  value={regDept} label="Department"
+                  onChange={(e) => { setRegDept(String(e.target.value)); setRegPage(0); }}
+                >
+                  <MenuItem value="">All Departments</MenuItem>
+                  {departments.map((d) => (
+                    <MenuItem key={d.id} value={String(d.id)}>{d.department_name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+            <TextField
+              size="small" type="date" label="From" InputLabelProps={{ shrink: true }}
+              value={regFrom}
+              onChange={(e) => { setRegFrom(e.target.value); setRegPage(0); }}
+              sx={{ minWidth: 150 }}
+            />
+            <TextField
+              size="small" type="date" label="To" InputLabelProps={{ shrink: true }}
+              value={regTo}
+              onChange={(e) => { setRegTo(e.target.value); setRegPage(0); }}
+              sx={{ minWidth: 150 }}
+            />
+            {(regDept || regPeriodActive || search) && (
+              <Button size="small" onClick={() => {
+                setRegDept(''); setRegFrom(''); setRegTo(''); setSearch(''); setRegPage(0);
+              }}>
+                Clear
+              </Button>
+            )}
             <Tooltip title="Refresh">
               <span>
                 <IconButton size="small" onClick={loadRegister} disabled={registerLoading}>
@@ -715,7 +781,7 @@ const LeaveAnalyticsPage: React.FC = () => {
 
           {registerLoading ? (
             <Box display="flex" justifyContent="center" p={6}><CircularProgress /></Box>
-          ) : register.length === 0 ? (
+          ) : registerRows.length === 0 ? (
             <Box py={6} textAlign="center">
               <Typography variant="body2" color="text.secondary">No employees found.</Typography>
             </Box>
@@ -731,14 +797,18 @@ const LeaveAnalyticsPage: React.FC = () => {
                       <TableCell sx={{ fontWeight: 700 }} align="right">Accrued</TableCell>
                       <TableCell sx={{ fontWeight: 700 }} align="right">Adjustments</TableCell>
                       <TableCell sx={{ fontWeight: 700 }} align="right">Entitlement</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }} align="right">Taken</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }} align="right">Pending</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }} align="right">
+                        {regPeriodActive ? 'Taken (period)' : 'Taken'}
+                      </TableCell>
+                      <TableCell sx={{ fontWeight: 700 }} align="right">
+                        {regPeriodActive ? 'Pending (period)' : 'Pending'}
+                      </TableCell>
                       <TableCell sx={{ fontWeight: 700 }} align="right">Remaining</TableCell>
                       <TableCell sx={{ fontWeight: 700 }} align="center">Adjust</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {register
+                    {registerRows
                       .slice(regPage * regRows, regPage * regRows + regRows)
                       .map((r) => {
                         const remaining = Number(r.remaining_days);
@@ -783,8 +853,12 @@ const LeaveAnalyticsPage: React.FC = () => {
                               )}
                             </TableCell>
                             <TableCell align="right">{days(r.entitlement)}</TableCell>
-                            <TableCell align="right">{days(r.taken)}</TableCell>
-                            <TableCell align="right">{days(r.pending)}</TableCell>
+                            <TableCell align="right">
+                              {days(regPeriodActive ? r.taken_in_period : r.taken)}
+                            </TableCell>
+                            <TableCell align="right">
+                              {days(regPeriodActive ? r.pending_in_period : r.pending)}
+                            </TableCell>
                             <TableCell align="right">
                               <Typography
                                 variant="body2"
@@ -814,7 +888,7 @@ const LeaveAnalyticsPage: React.FC = () => {
               <TablePagination
                 rowsPerPageOptions={[25, 50, 100]}
                 component="div"
-                count={register.length}
+                count={registerRows.length}
                 rowsPerPage={regRows}
                 page={regPage}
                 onPageChange={(_, pg) => setRegPage(pg)}

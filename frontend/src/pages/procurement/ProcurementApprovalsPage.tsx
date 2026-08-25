@@ -84,7 +84,7 @@ interface ActionState {
 // Only exclude DRAFT from history tabs so completed/forwarded items are ALWAYS visible
 const ACTED_ON_EXCLUDED = ['DRAFT'];
 
-const getRoleTabs = (role: string, isAdminHr: boolean = false) => {
+const getRoleTabs = (role: string, isAdminHr: boolean = false, isFinanceLead: boolean = false) => {
   switch (role) {
     case 'PROGRAM_LEAD':
     case 'HEAD_OF_PROGRAMS':
@@ -99,9 +99,13 @@ const getRoleTabs = (role: string, isAdminHr: boolean = false) => {
           { label: 'All Records',           status: '',                      actedOn: true  }
         ];
       }
+      // Only Finance's Lead / Head of Department holds the second high-value
+      // seat, so only they get the queue for it.
       return [
         { label: 'Awaiting My Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
-        { label: 'High-Value Approval', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false },
+        ...(isFinanceLead
+          ? [{ label: 'High-Value Approval', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false }]
+          : []),
         { label: 'All Records', status: '', actedOn: true }
       ];
     case 'FINANCE_CLERK':
@@ -148,7 +152,10 @@ const ProcurementApprovalsPage: React.FC = () => {
 
   const role = user?.role || '';
   const isAdminHr = isAdminHrManager();
-  const tabs = getRoleTabs(role, isAdminHr);
+  /** Finance's own Lead / Head of Department — one of the two high-value seats. */
+  const isFinanceLead = ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS'].includes(role) &&
+    user?.department_code === 'FOS';
+  const tabs = getRoleTabs(role, isAdminHr, isFinanceLead);
 
   const [tabIdx, setTabIdx] = useState(0);
   const [page, setPage] = useState(0);
@@ -453,9 +460,10 @@ const ProcurementApprovalsPage: React.FC = () => {
       }
     }
 
-    // The Lead/HOP of the department that owns the project fills one of the two
-    // seats on a high-value request. The server verifies the department match.
-    if (['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS'].includes(role) && req.status === 'PENDING_HIGH_VALUE_APPROVAL') {
+    // Finance's Lead/HOD fills the second of the two seats on a high-value
+    // request. The server verifies the department; this only decides what is
+    // offered on screen.
+    if (isFinanceLead && req.status === 'PENDING_HIGH_VALUE_APPROVAL') {
       btns.push(
         <Button key="hv-approve" size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
           onClick={() => { setAction({ type: 'high_value', request: req }); setComments(''); setHighValueDecisionVal('APPROVED'); }}>
@@ -818,7 +826,7 @@ const ProcurementApprovalsPage: React.FC = () => {
                       );
                     })()}
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                      {committeeVotes.filter((v: any) => v.vote === 'APPROVED').length}/3 approved — 3 total approvals needed to advance.{Number((action?.request as any)?.is_high_value) === 1 ? ' This request is high-value: the committee recommends, then the Super Admin and the owning Department Lead / Head of Department must both approve.' : ''}
+                      {committeeVotes.filter((v: any) => v.vote === 'APPROVED').length}/3 approved — 3 total approvals needed to advance.{Number((action?.request as any)?.is_high_value) === 1 ? ' This request is high-value: the committee recommends, then the Super Admin and the Finance Lead / Head of Department must both approve.' : ''}
                     </Typography>
                   </Box>
                 )}
@@ -829,8 +837,8 @@ const ProcurementApprovalsPage: React.FC = () => {
               <>
                 <Alert severity="info" sx={{ mb: 2 }}>
                   The Procurement Committee has <strong>recommended</strong> this request.
-                  It proceeds to Finance only once <strong>both</strong> the Super Admin and the
-                  Department Lead / Head of Department of the owning department have approved.
+                  It proceeds to the Finance desk only once <strong>both</strong> the Super Admin
+                  and the Finance Lead / Head of Department have approved.
                   A rejection by either returns it to be amended and resubmitted.
                 </Alert>
                 <TextField

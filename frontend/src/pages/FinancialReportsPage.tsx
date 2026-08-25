@@ -34,6 +34,7 @@ import {
   Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line,
   AreaChart, Area, ComposedChart
 } from 'recharts';
+import { categoryLabel } from '../utils/requestCategories';
 import { budgetService } from '../services/budgetService';
 import { toast } from 'react-toastify';
 import { useAuthStore } from '../store/authStore';
@@ -177,11 +178,17 @@ const FinancialReportsPage: React.FC = () => {
   const { totals, variance, donorSummary, projectSummary, departmentSummary, categorySummary, requestSummary, spendingWeekly, spendingMonthly, spendingQuarterly, spendingYearly, reconciliationSummary } = data;
 
   // Prepare chart data
+  // Spending by category reads the category the requester chose on each request
+  // line, so the chart answers "what is the money going on" rather than showing
+  // budget-line bookkeeping codes.
   const categoryChartData = categorySummary?.map((c: any) => ({
-    name: c.category,
-    allocated: parseFloat(c.total_allocated) || 0,
+    name: categoryLabel(c.category),
+    committed: parseFloat(c.total_committed) || 0,
     spent: parseFloat(c.total_spent) || 0
   })) || [];
+
+  const categorySpendTotal = (categorySummary || [])
+    .reduce((sum: number, c: any) => sum + (parseFloat(c.total_spent) || 0), 0);
 
   const donorChartData = donorSummary?.map((d: any) => ({
     name: d.donor_code || d.donor_name,
@@ -1131,33 +1138,48 @@ const FinancialReportsPage: React.FC = () => {
                 <Divider sx={{ my: 3 }} />
 
                 {/* Category breakdown */}
-                <Typography variant="subtitle1" fontWeight={700} gutterBottom>Spending by Category</Typography>
+                <Typography variant="subtitle1" fontWeight={700}>Spending by Category</Typography>
+                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                  By the expense category chosen on each request line. "Spent" is the reconciled
+                  actual once a float has been acquitted, and the approved amount while it is still out.
+                </Typography>
                 <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2, overflowX: 'auto' }}>
                   <Table size="small" sx={{ minWidth: 450 }}>
                     <TableHead>
                       <TableRow sx={{ bgcolor: '#f5f5f5' }}>
                         <TableCell sx={{ fontWeight: 700 }}>Category</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 700 }}>Lines</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 700 }}>Allocated</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 700 }}>Requests</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700 }}>Approved</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>Spent</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 700 }}>Utilization</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 700 }}>Share</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {categorySummary?.map((cat: any, i: number) => (
-                        <TableRow key={i} hover>
-                          <TableCell>
-                            <Box display="flex" alignItems="center" gap={1}>
-                              <Box sx={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: COLORS[i % COLORS.length] }} />
-                              {cat.category}
-                            </Box>
+                      {(!categorySummary || categorySummary.length === 0) && (
+                        <TableRow>
+                          <TableCell colSpan={5} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                            No spending recorded for the selected filters
                           </TableCell>
-                          <TableCell align="center">{cat.budget_line_count}</TableCell>
-                          <TableCell align="right">{formatCurrency(cat.total_allocated)}</TableCell>
-                          <TableCell align="right">{formatCurrency(cat.total_spent)}</TableCell>
-                          <TableCell align="center">{Number(cat.avg_utilization || 0).toFixed(0)}%</TableCell>
                         </TableRow>
-                      ))}
+                      )}
+                      {categorySummary?.map((cat: any, i: number) => {
+                        const spent = parseFloat(cat.total_spent) || 0;
+                        const share = categorySpendTotal > 0 ? (spent / categorySpendTotal) * 100 : 0;
+                        return (
+                          <TableRow key={i} hover>
+                            <TableCell>
+                              <Box display="flex" alignItems="center" gap={1}>
+                                <Box sx={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: COLORS[i % COLORS.length] }} />
+                                {categoryLabel(cat.category)}
+                              </Box>
+                            </TableCell>
+                            <TableCell align="center">{cat.request_count}</TableCell>
+                            <TableCell align="right">{formatCurrency(cat.total_committed)}</TableCell>
+                            <TableCell align="right">{formatCurrency(cat.total_spent)}</TableCell>
+                            <TableCell align="center">{share.toFixed(1)}%</TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </TableContainer>
@@ -1166,7 +1188,7 @@ const FinancialReportsPage: React.FC = () => {
               <Grid item xs={12} md={5}>
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mb: 2 }}>
                   <Typography variant="subtitle2" fontWeight={600} align="center" gutterBottom>
-                    Allocated vs Spent by Category
+                    Approved vs Spent by Category
                   </Typography>
                   <ResponsiveContainer width="100%" height={Math.max(260, categoryChartData.length * 48)}>
                     <BarChart data={categoryChartData} layout="vertical" margin={{ left: 8, right: 32, top: 4, bottom: 4 }}>
@@ -1175,7 +1197,7 @@ const FinancialReportsPage: React.FC = () => {
                       <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11 }} />
                       <RechartsTooltip formatter={(value: number) => formatCurrency(value)} />
                       <Legend />
-                      <Bar dataKey="allocated" fill="#1976d2" name="Allocated" radius={[0, 2, 2, 0]} />
+                      <Bar dataKey="committed" fill="#1976d2" name="Approved" radius={[0, 2, 2, 0]} />
                       <Bar dataKey="spent" fill="#d32f2f" name="Spent" radius={[0, 2, 2, 0]} />
                     </BarChart>
                   </ResponsiveContainer>

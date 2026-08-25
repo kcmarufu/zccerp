@@ -4,6 +4,7 @@
  */
 
 const { query, pool } = require('../config/database');
+const { FINANCE_DEPT_CODE } = require('../config/roles');
 
 class NotificationService {
 
@@ -263,26 +264,30 @@ class NotificationService {
 
   /**
    * A high-value procurement request has been recommended by the committee and
-   * now needs the Super Admin and the owning department's Lead/HOP to approve.
-   * Both are notified at once — they approve independently, in either order.
+   * now needs both of its seats to approve: the Super Admin, and Finance's own
+   * Lead / Head of Department. Both are notified at once — they approve
+   * independently, in either order.
+   *
+   * The second seat used to follow the department that owned the project, so
+   * the owning department id is no longer read.
    */
-  async onProcurementHighValuePending(requestId, requestCode, amount, owningDepartmentId) {
+  async onProcurementHighValuePending(requestId, requestCode, amount) {
     const link = `/procurement/requests/${requestId}`;
     const title = `High-Value Approval Needed: ${requestCode}`;
     const message = `The Procurement Committee has recommended this USD ${Number(amount || 0).toFixed(2)} request. ` +
-                    `It needs approval from both the Super Admin and the owning department's Department Lead / Head of Department.`;
+                    `It needs approval from both the Super Admin and the Finance Department Lead / Head of Department.`;
     try {
       await this._notifyByRole(['ADMIN'], title, message, 'approval_pending', 'proc_request', requestId, link);
-      if (owningDepartmentId) {
-        const deptApprovers = await query(
-          `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id
-            WHERE r.role_name IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS')
-              AND u.department_id = ? AND u.is_active = 1`,
-          [owningDepartmentId]
-        );
-        for (const u of deptApprovers) {
-          await this._create(u.id, title, message, 'approval_pending', 'proc_request', requestId, link);
-        }
+      const financeApprovers = await query(
+        `SELECT u.id FROM users u
+           JOIN roles r ON u.role_id = r.id
+           JOIN departments d ON u.department_id = d.id
+          WHERE r.role_name IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS')
+            AND d.department_code = ? AND u.is_active = 1`,
+        [FINANCE_DEPT_CODE]
+      );
+      for (const u of financeApprovers) {
+        await this._create(u.id, title, message, 'approval_pending', 'proc_request', requestId, link);
       }
     } catch (err) {
       console.error('[NotificationService] onProcurementHighValuePending error:', err.message);

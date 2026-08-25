@@ -124,7 +124,7 @@ export const getApprovalTrail = async (id: number | string) => {
 export interface HighValueApproval {
   id: number;
   request_id: number;
-  seat: 'SUPER_ADMIN' | 'DEPARTMENT';
+  seat: 'SUPER_ADMIN' | 'FINANCE';
   approver_id: number;
   approver_role: string;
   decision: 'APPROVED' | 'REJECTED';
@@ -371,7 +371,7 @@ export const PROC_STATUS_LABELS: Record<string, string> = {
   PENDING_FINANCE_APPROVAL: 'Pending Finance Approval',
   PENDING_PROCUREMENT: 'In Procurement',
   PENDING_COMMITTEE: 'Pending Committee',
-  PENDING_HIGH_VALUE_APPROVAL: 'Pending Super Admin & Dept Approval',
+  PENDING_HIGH_VALUE_APPROVAL: 'Pending Super Admin & Finance Lead Approval',
   PENDING_FINAL_FINANCE: 'Pending Final Approval',
   COMPLETED: 'Completed',
   REJECTED: 'Rejected',
@@ -396,7 +396,7 @@ export const PROC_WORKFLOW_STEPS = [
   { label: 'Dept. Approval', status: 'PENDING_DEPT_APPROVAL' },
   { label: 'Procurement', status: 'PENDING_PROCUREMENT' },
   { label: 'Committee', status: 'PENDING_COMMITTEE' },
-  { label: 'Super Admin + Dept', status: 'PENDING_HIGH_VALUE_APPROVAL' },
+  { label: 'Super Admin + Finance Lead', status: 'PENDING_HIGH_VALUE_APPROVAL' },
   { label: 'Final Finance', status: 'PENDING_FINAL_FINANCE' },
   { label: 'Completed', status: 'COMPLETED' }
 ];
