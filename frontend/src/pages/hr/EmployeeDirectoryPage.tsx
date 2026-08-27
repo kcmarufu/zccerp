@@ -569,9 +569,20 @@ const EmployeeDirectoryPage: React.FC = () => {
                         <Avatar sx={{ width: 32, height: 32, fontSize: 14 }}>
                           {emp.first_name[0]}{emp.last_name[0]}
                         </Avatar>
-                        <Typography variant="body2" fontWeight={600}>
-                          {emp.first_name} {emp.last_name}
-                        </Typography>
+                        <Box minWidth={0}>
+                          <Typography variant="body2" fontWeight={600}>
+                            {emp.first_name} {emp.last_name}
+                          </Typography>
+                          {/* The User Admin login address, so it is obvious
+                              which system account this person holds. */}
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: 'block', wordBreak: 'break-all' }}
+                          >
+                            {emp.system_email || 'No system account'}
+                          </Typography>
+                        </Box>
                       </Box>
                     </TableCell>
                     <TableCell><Chip label={emp.employee_number} size="small" variant="outlined" /></TableCell>

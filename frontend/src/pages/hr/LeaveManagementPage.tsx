@@ -48,6 +48,7 @@ import {
   Replay as ResubmitIcon,
   Search as SearchIcon,
   ClearAll as ClearIcon,
+  Tune as AdjustIcon,
 } from '@mui/icons-material';
 import { useForm, Controller } from 'react-hook-form';
 import { toast } from 'react-toastify';
@@ -208,6 +209,15 @@ const BalanceImpact: React.FC<{ request: HRLeaveRequest; dense?: boolean }> = ({
             This takes the employee below zero — allowed, but worth a second look.
           </Typography>
         )}
+        {/* On a request still awaiting a decision these figures are recomputed
+            from the balance as it stands now, not as it stood when the employee
+            applied — accruals and manual adjustments since then are included. */}
+        {request.balance_is_live && (
+          <Typography variant="caption" color="text.secondary" display="block" textAlign="center" mt={0.5}>
+            Balance as it stands right now — includes any accrual or manual
+            adjustment made since this request was raised.
+          </Typography>
+        )}
       </Paper>
     </Box>
   );
@@ -215,14 +225,32 @@ const BalanceImpact: React.FC<{ request: HRLeaveRequest; dense?: boolean }> = ({
 
 // ─── Audit Trail ─────────────────────────────────────────────────────────────
 
-const ACTION_COLOR: Record<string, 'warning' | 'success' | 'error' | 'default'> = {
-  SUBMITTED: 'warning',
-  APPROVED:  'success',
-  REJECTED:  'error',
-  CANCELLED: 'default',
+const ACTION_COLOR: Record<string, 'warning' | 'success' | 'error' | 'default' | 'info'> = {
+  SUBMITTED:        'warning',
+  APPROVED:         'success',
+  REJECTED:         'error',
+  CANCELLED:        'default',
+  MANUAL_TOP_UP:    'info',
+  MANUAL_DEDUCTION: 'warning',
+};
+
+const ACTION_LABEL: Record<string, string> = {
+  MANUAL_TOP_UP:    'MANUAL TOP-UP',
+  MANUAL_DEDUCTION: 'MANUAL DEDUCTION',
+};
+
+/** Signed day movement for a trail row: "+2.5", "− 3", or "—". */
+const trailDays = (e: HRLeaveAuditEntry): string => {
+  if (e.source === 'ADJUSTMENT') {
+    const n = Number(e.adjustment_days ?? 0);
+    return `${n >= 0 ? '+' : '−'} ${days(Math.abs(n))}`;
+  }
+  const charged = Number(e.days_affected ?? 0);
+  return charged > 0 ? `− ${days(charged)}` : '—';
 };
 
 const AuditTrail: React.FC<{ leaveId: number }> = ({ leaveId }) => {
+  const theme = useTheme();
   const [trail, setTrail]     = useState<HRLeaveAuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -243,47 +271,81 @@ const AuditTrail: React.FC<{ leaveId: number }> = ({ leaveId }) => {
     return <Typography variant="body2" color="text.disabled">No trail entries recorded.</Typography>;
   }
 
+  const manualCount = trail.filter((e) => e.source === 'ADJUSTMENT').length;
+
   return (
     <TableContainer>
+      {manualCount > 0 && (
+        <Alert severity="info" sx={{ mb: 1, py: 0.25 }}>
+          This balance was also changed by hand{' '}
+          <strong>{manualCount} time{manualCount === 1 ? '' : 's'}</strong> this year.
+          Those top-ups and deductions are listed below alongside the request itself.
+        </Alert>
+      )}
       <Table size="small">
         <TableHead>
           <TableRow sx={{ bgcolor: 'grey.50' }}>
             <TableCell sx={{ fontWeight: 700 }}>When</TableCell>
             <TableCell sx={{ fontWeight: 700 }}>Action</TableCell>
             <TableCell sx={{ fontWeight: 700 }}>By</TableCell>
+            <TableCell sx={{ fontWeight: 700 }} align="right">Days</TableCell>
             <TableCell sx={{ fontWeight: 700 }} align="right">Before</TableCell>
             <TableCell sx={{ fontWeight: 700 }} align="right">After</TableCell>
-            <TableCell sx={{ fontWeight: 700 }}>Comments</TableCell>
+            <TableCell sx={{ fontWeight: 700 }}>Comments / Reason</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
-          {trail.map((e) => (
-            <TableRow key={e.id}>
-              <TableCell>
-                <Typography variant="caption">{fmtDt(e.created_at)}</Typography>
-              </TableCell>
-              <TableCell>
-                <Chip
-                  label={String(e.action).replace(/_/g, ' ')}
-                  size="small"
-                  color={ACTION_COLOR[e.action] || 'default'}
-                />
-              </TableCell>
-              <TableCell>
-                <Typography variant="body2">{e.actor_name || 'System'}</Typography>
-                {e.actor_role && (
-                  <Typography variant="caption" color="text.secondary">
-                    {e.actor_role.replace(/_/g, ' ')}
+          {trail.map((e) => {
+            const manual = e.source === 'ADJUSTMENT';
+            const credit = manual && Number(e.adjustment_days ?? 0) >= 0;
+            return (
+              <TableRow
+                key={e.id}
+                sx={manual ? { bgcolor: alpha(theme.palette.info.main, 0.06) } : undefined}
+              >
+                <TableCell>
+                  <Typography variant="caption">{fmtDt(e.created_at)}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Chip
+                    label={ACTION_LABEL[e.action] || String(e.action).replace(/_/g, ' ')}
+                    size="small"
+                    color={ACTION_COLOR[e.action] || 'default'}
+                    icon={manual ? <AdjustIcon sx={{ fontSize: 14 }} /> : undefined}
+                  />
+                  {/* An adjustment made after the employee applied is the usual
+                      reason the figures on the request no longer add up. */}
+                  {manual && e.after_request && (
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      after this request was raised
+                    </Typography>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2">{e.actor_name || 'System'}</Typography>
+                  {e.actor_role && (
+                    <Typography variant="caption" color="text.secondary">
+                      {e.actor_role.replace(/_/g, ' ')}
+                    </Typography>
+                  )}
+                </TableCell>
+                <TableCell align="right">
+                  <Typography
+                    variant="body2"
+                    fontWeight={manual ? 700 : 400}
+                    color={manual ? (credit ? 'success.main' : 'error.main') : 'text.primary'}
+                  >
+                    {trailDays(e)}
                   </Typography>
-                )}
-              </TableCell>
-              <TableCell align="right">{days(e.balance_before)}</TableCell>
-              <TableCell align="right">{days(e.balance_after)}</TableCell>
-              <TableCell>
-                <Typography variant="body2" color="text.secondary">{e.comments || '—'}</Typography>
-              </TableCell>
-            </TableRow>
-          ))}
+                </TableCell>
+                <TableCell align="right">{days(e.balance_before)}</TableCell>
+                <TableCell align="right">{days(e.balance_after)}</TableCell>
+                <TableCell>
+                  <Typography variant="body2" color="text.secondary">{e.comments || '—'}</Typography>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </TableContainer>

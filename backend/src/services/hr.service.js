@@ -76,16 +76,19 @@ class HRService {
     let params = [];
 
     if (search) {
-      where.push('(e.first_name LIKE ? OR e.last_name LIKE ? OR e.employee_number LIKE ? OR e.personal_email LIKE ?)');
+      // Includes the User Admin login address, since the directory now shows it.
+      where.push('(e.first_name LIKE ? OR e.last_name LIKE ? OR e.employee_number LIKE ? OR e.personal_email LIKE ? OR u.email LIKE ?)');
       const s = `%${search}%`;
-      params.push(s, s, s, s);
+      params.push(s, s, s, s, s);
     }
     if (departmentId) { where.push('e.department_id = ?'); params.push(departmentId); }
     if (userId) { where.push('e.user_id = ?'); params.push(userId); }
     if (status) { where.push('e.employment_status = ?'); params.push(status); }
     if (employmentType) { where.push('e.employment_type = ?'); params.push(employmentType); }
 
-    const countSql = `SELECT COUNT(*) as total FROM hr_employees e WHERE ${where.join(' AND ')}`;
+    const countSql = `SELECT COUNT(*) as total FROM hr_employees e
+      LEFT JOIN users u ON e.user_id = u.id
+      WHERE ${where.join(' AND ')}`;
     const countResult = await query(countSql, [...params]);
     const total = countResult[0].total;
 
@@ -94,10 +97,14 @@ class HRService {
              e.position_title as job_title,
              e.phone_primary as phone_number,
              d.department_name, 
-             CONCAT(m.first_name, ' ', m.last_name) as supervisor_name
+             CONCAT(m.first_name, ' ', m.last_name) as supervisor_name,
+             -- The login address from User Admin, shown under the name in the
+             -- directory so people can see who an account belongs to.
+             u.email as system_email
       FROM hr_employees e
       LEFT JOIN departments d ON e.department_id = d.id
       LEFT JOIN hr_employees m ON e.supervisor_id = m.id
+      LEFT JOIN users u ON e.user_id = u.id
       WHERE ${where.join(' AND ')}
       ORDER BY e.last_name, e.first_name
       LIMIT ${Number(limit)} OFFSET ${Number(offset)}
@@ -728,10 +735,20 @@ class HRService {
 
   /**
    * Full trail for one leave request, newest last (chronological reading order).
+   *
+   * The trail is not just the request's own lifecycle. A balance also moves by
+   * hand — HR credits days back, or takes days off — and those movements are
+   * exactly what explains a balance the approver did not expect. They live in
+   * hr_leave_adjustments (no leave_request_id to hang them off), so they are
+   * merged in here for the same employee and fiscal year and interleaved by
+   * time, giving one honest account of everything that touched the pool.
+   *
+   * Merged rows carry source: 'ADJUSTMENT' and a negative id so the UI can tell
+   * them apart from the immutable request entries without a second request.
    */
   async getLeaveAuditTrail(leaveRequestId) {
-    return await query(
-      `SELECT a.*,
+    const entries = await query(
+      `SELECT a.*, 'REQUEST' AS source,
               CONCAT(u.first_name, ' ', u.last_name) AS actor_name,
               lt.leave_name AS leave_type_name
        FROM hr_leave_audit a
@@ -741,11 +758,113 @@ class HRService {
        ORDER BY a.created_at ASC, a.id ASC`,
       [leaveRequestId]
     );
+
+    // Which employee / year does this request belong to?
+    const [context] = await query(
+      `SELECT employee_id, YEAR(start_date) AS fiscal_year, created_at
+       FROM hr_leave_requests WHERE id = ?`,
+      [leaveRequestId]
+    );
+    if (!context) return entries;
+
+    const adjustments = await query(
+      `SELECT adj.id, adj.employee_id, adj.leave_type_id, adj.fiscal_year,
+              adj.adjustment_days, adj.reason,
+              adj.balance_before, adj.balance_after,
+              adj.adjusted_by, adj.adjusted_by_role, adj.created_at,
+              lt.leave_name AS leave_type_name,
+              CONCAT(u.first_name, ' ', u.last_name) AS actor_name
+       FROM hr_leave_adjustments adj
+       JOIN hr_leave_types lt  ON adj.leave_type_id = lt.id
+       LEFT JOIN users u       ON adj.adjusted_by   = u.id
+       WHERE adj.employee_id = ? AND adj.fiscal_year = ?
+       ORDER BY adj.created_at ASC`,
+      [context.employee_id, context.fiscal_year]
+    );
+
+    const requestRaisedAt = new Date(context.created_at).getTime();
+
+    const asTrailEntries = adjustments.map((adj) => {
+      const daysMoved = Number(adj.adjustment_days);
+      const isCredit  = daysMoved >= 0;
+      return {
+        // Negative so it can never collide with a real hr_leave_audit id.
+        id:               -adj.id,
+        source:           'ADJUSTMENT',
+        leave_request_id: null,
+        employee_id:      adj.employee_id,
+        leave_type_id:    adj.leave_type_id,
+        leave_type_name:  adj.leave_type_name,
+        action:           isCredit ? 'MANUAL_TOP_UP' : 'MANUAL_DEDUCTION',
+        from_status:      null,
+        to_status:        null,
+        actor_user_id:    adj.adjusted_by,
+        actor_name:       adj.actor_name,
+        actor_role:       adj.adjusted_by_role,
+        comments:         adj.reason,
+        // Signed, so the UI can render "+2.5" / "-2.5" without re-deriving it.
+        adjustment_days:  daysMoved,
+        days_affected:    Math.abs(daysMoved),
+        is_deductible:    1,
+        balance_before:   adj.balance_before,
+        balance_after:    adj.balance_after,
+        entitlement_at:   null,
+        taken_at:         null,
+        pending_at:       null,
+        fiscal_year:      adj.fiscal_year,
+        created_at:       adj.created_at,
+        // The ones that landed after the employee applied are the ones that
+        // make the figures on the request itself look wrong.
+        after_request:    new Date(adj.created_at).getTime() > requestRaisedAt,
+      };
+    });
+
+    return [...entries, ...asTrailEntries].sort((a, b) => {
+      const diff = new Date(a.created_at) - new Date(b.created_at);
+      return diff !== 0 ? diff : a.id - b.id;
+    });
   }
 
   // ------------------------------------------------------------------
   // Leave requests
   // ------------------------------------------------------------------
+
+  /**
+   * Re-project a PENDING request's balance figures onto the balance as it
+   * stands RIGHT NOW.
+   *
+   * balance_before / balance_after are written when the request is raised, so
+   * on a row that has been waiting a while they are a snapshot of a balance
+   * that has since moved — a monthly accrual has landed, HR has topped days up
+   * or taken them off, another request has been approved. The approver would
+   * then be shown "0 → -2.5" for someone who has since accrued 2.5 days.
+   *
+   * The deduction itself was always taken from the live balance at approval
+   * time (see approveLeaveRequest), so this only ever corrected the display —
+   * but the display is what the decision is made on, so it has to be current.
+   *
+   * Decided rows keep their stored figures: those are the historical record of
+   * what actually happened, and must not drift.
+   */
+  withLiveBalance(row) {
+    if (!row) return row;
+
+    const charged = Number(row.deductible_days) || 0;
+    if (row.status !== 'PENDING' || charged <= 0) return row;
+
+    // No balance row yet means the pool is genuinely empty, not unknown.
+    const before = Number(row.current_balance ?? 0);
+    if (!Number.isFinite(before)) return row;
+
+    return {
+      ...row,
+      balance_before: before,
+      balance_after: Math.round((before - charged) * 10) / 10,
+      // Lets the UI say "recomputed just now" rather than implying the figure
+      // was fixed at submission.
+      balance_is_live: true,
+    };
+  }
 
   async getLeaveRequests(filters = {}) {
     const {
@@ -823,7 +942,8 @@ class HRService {
                  JOIN hr_leave_types vt ON lb.leave_type_id = vt.id
                                        AND vt.is_accrual_target = 1
                 WHERE lb.employee_id = lr.employee_id
-                  AND lb.fiscal_year = YEAR(lr.start_date)) AS current_balance
+                  AND lb.fiscal_year = YEAR(lr.start_date)
+                LIMIT 1) AS current_balance
        FROM hr_leave_requests lr
        JOIN hr_employees    e     ON lr.employee_id   = e.id
        JOIN hr_leave_types  lt    ON lr.leave_type_id = lt.id
@@ -838,7 +958,7 @@ class HRService {
     );
 
     return {
-      data,
+      data: data.map((row) => this.withLiveBalance(row)),
       total: countResult[0].total,
       page, limit,
       totalPages: Math.ceil(countResult[0].total / limit),
@@ -1324,11 +1444,15 @@ class HRService {
               e.department_id, d.department_name,
               COALESCE(req_r.role_name, 'GENERAL_USER') AS requester_role,
               CONCAT(au.first_name, ' ', au.last_name) AS approved_by_name,
+              -- Deductions always come off the accrual-target (Vacation) pool,
+              -- whatever type was requested — so that is the pool to read.
               (SELECT lb.entitlement + lb.carried_forward - lb.taken
                  FROM hr_leave_balances lb
-                WHERE lb.employee_id   = lr.employee_id
-                  AND lb.leave_type_id = lr.leave_type_id
-                  AND lb.fiscal_year   = YEAR(lr.start_date)) AS current_balance
+                 JOIN hr_leave_types vt ON lb.leave_type_id = vt.id
+                                       AND vt.is_accrual_target = 1
+                WHERE lb.employee_id = lr.employee_id
+                  AND lb.fiscal_year = YEAR(lr.start_date)
+                LIMIT 1) AS current_balance
        FROM hr_leave_requests lr
        JOIN hr_employees   e      ON lr.employee_id   = e.id
        JOIN hr_leave_types lt     ON lr.leave_type_id = lt.id
@@ -1339,7 +1463,7 @@ class HRService {
        WHERE lr.id = ?`,
       [id]
     );
-    return rows[0] || null;
+    return rows[0] ? this.withLiveBalance(rows[0]) : null;
   }
 
   // ------------------------------------------------------------------

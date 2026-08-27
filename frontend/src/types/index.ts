@@ -520,6 +520,9 @@ export interface HREmployee {
   gender: string | null;
   national_id: string | null;
   personal_email: string | null;
+  /** Login address from User Admin (null when no system account is linked). */
+  system_email?: string | null;
+  system_role?: string | null;
   phone_number: string | null;
   address: string | null;
   department_id: number | null;
@@ -624,6 +627,8 @@ export interface HRLeaveRequest {
   balance_after?: number | null;
   /** Live balance for this employee/leave-type/year, recomputed on read. */
   current_balance?: number | null;
+  /** True when balance_before/after were re-projected onto the live balance. */
+  balance_is_live?: boolean;
   /** Days actually charged to the vacation pool (may be less than requested). */
   deductible_days?: number;
   /** Days covered by the leave type's free allowance. */
@@ -645,12 +650,22 @@ export interface HRLeaveRequest {
  * One immutable entry in a leave request's audit trail.
  */
 export interface HRLeaveAuditEntry {
+  /** Negative for merged-in manual adjustments, which have their own table. */
   id: number;
-  leave_request_id: number;
+  /**
+   * 'REQUEST'    — an entry in this request's own lifecycle.
+   * 'ADJUSTMENT' — a manual top-up or deduction on the same employee's balance,
+   *                merged into the trail so the balance movement is explained.
+   */
+  source?: 'REQUEST' | 'ADJUSTMENT';
+  leave_request_id: number | null;
   employee_id: number;
   leave_type_id: number;
   leave_type_name?: string | null;
-  action: 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'ACCRUAL_ADJUSTMENT' | string;
+  action:
+    | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'ACCRUAL_ADJUSTMENT'
+    | 'MANUAL_TOP_UP' | 'MANUAL_DEDUCTION'
+    | string;
   from_status: string | null;
   to_status: string | null;
   actor_user_id: number | null;
@@ -667,6 +682,10 @@ export interface HRLeaveAuditEntry {
   pending_at: number | null;
   fiscal_year: number | null;
   created_at: string;
+  /** Adjustments only: signed day movement (+ credit, − deduction). */
+  adjustment_days?: number;
+  /** Adjustments only: true when it landed after this request was raised. */
+  after_request?: boolean;
 }
 
 /** A supporting document attached to a leave request. */

@@ -233,7 +233,11 @@ class HRExportController {
           titleise(entry.actor_role) || '—',
           fmtDays(entry.balance_before),
           fmtDays(entry.balance_after),
-          Number(entry.days_affected) ? fmtDays(entry.days_affected) : '—',
+          // Manual adjustments carry a direction; a top-up and a deduction of
+          // the same size must not print identically.
+          entry.source === 'ADJUSTMENT'
+            ? `${Number(entry.adjustment_days) >= 0 ? '+' : '-'}${fmtDays(entry.days_affected)}`
+            : (Number(entry.days_affected) ? fmtDays(entry.days_affected) : '—'),
         ];
 
         doc.fillColor(INK);
