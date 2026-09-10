@@ -6,6 +6,28 @@
 import api from './api';
 import { ApiResponse, Reconciliation, ReconciliationSubmitPayload, Request } from '../types';
 
+/** One reconciliation that has gone stale on a Lead/HOP review desk. */
+export interface StaleLeadReconciliation {
+  request_id: number;
+  request_code: string;
+  total_amount: number | string;
+  department_code: string;
+  requester_name: string;
+  reconciliation_submitted_at: string;
+  working_days_on_desk: number;
+}
+
+/** Shape of GET /reconciliations/lead-desk-backlog. */
+export interface LeadDeskBacklog {
+  items: StaleLeadReconciliation[];
+  staleCount: number;
+  /** How many stale reconciliations trigger the approval block. */
+  limit: number;
+  /** Working days on the desk before a reconciliation counts as stale. */
+  workingDays: number;
+  isBlocked: boolean;
+}
+
 export const reconciliationService = {
   /**
    * Get dispatched requests for current user (to reconcile)
@@ -88,6 +110,27 @@ export const reconciliationService = {
   },
 
   /**
+   * Undo a reconciliation approval made in error. The server works out which
+   * stage is being undone from the request's current status: RECON_PENDING_
+   * FINANCE goes back to the Lead/HOP, RECONCILED goes back to Finance with
+   * its budget effects reversed.
+   */
+  async reverseReconciliation(requestId: number, comments?: string): Promise<ApiResponse<any>> {
+    const response = await api.post(`/reconciliations/${requestId}/reverse`, { comments });
+    return response.data;
+  },
+
+  /**
+   * Whether the signed-in user may undo this reconciliation's approval.
+   */
+  async canReverseReconciliation(requestId: number): Promise<ApiResponse<{
+    canReverse: boolean; stage?: 'LEAD' | 'FINANCE'; revertsTo?: string; reason?: string | null;
+  }>> {
+    const response = await api.get(`/reconciliations/${requestId}/can-reverse`);
+    return response.data;
+  },
+
+  /**
    * Get pending reconciliations for lead/HOP review
    */
   async getPendingLeadReconciliations(): Promise<ApiResponse<any[]>> {
@@ -142,6 +185,19 @@ export const reconciliationService = {
    */
   async getOverdueCheck(): Promise<{ overdueCount: number; isBlocked: boolean }> {
     const response = await api.get('/reconciliations/overdue-check');
+    return response.data.data;
+  },
+
+  /**
+   * The current user's stale lead-review backlog: reconciliations that have been
+   * waiting on their desk for `workingDays` working days or more.
+   *
+   * `isBlocked` is true once `staleCount` reaches `limit`, at which point the
+   * server refuses their float approvals until the backlog is cleared. Users who
+   * hold no lead-review desk — and Super Admin — always come back clear.
+   */
+  async getLeadDeskBacklog(): Promise<LeadDeskBacklog> {
+    const response = await api.get('/reconciliations/lead-desk-backlog');
     return response.data.data;
   },
 

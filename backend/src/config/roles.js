@@ -173,6 +173,30 @@ const REQUEST_STATUS = {
   CANCELLED: 'CANCELLED'
 };
 
+/**
+ * Statuses in which the requester may still amend their own request — the
+ * header, the items, and every attached form (per diem claim, attachments).
+ *
+ * The rule is "not yet approved at the department level": a float sitting on a
+ * Lead/HOP/Admin desk has had no approval decision taken on it, so correcting a
+ * figure or a date before the reviewer opens it costs nothing. Once a
+ * department approver acts the request moves to PENDING_FINANCE_APPROVAL and is
+ * frozen, because from that point somebody has approved a specific set of
+ * numbers.
+ *
+ * This lives here, exported once, because the rule used to be re-typed in each
+ * handler: requests allowed the pending stages while the per diem claim still
+ * only allowed DRAFT/REJECTED, so "Save Changes" on a submitted float failed
+ * with "Claims can only be edited on DRAFT or REJECTED requests".
+ */
+const REQUESTER_EDITABLE_STATUSES = [
+  REQUEST_STATUS.DRAFT,
+  REQUEST_STATUS.REJECTED,
+  REQUEST_STATUS.PENDING_LEAD_APPROVAL,
+  REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+  REQUEST_STATUS.PENDING_HOP_APPROVAL
+];
+
 const STATUS_TRANSITIONS = {
   [REQUEST_STATUS.DRAFT]: [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.CANCELLED],
   [REQUEST_STATUS.PENDING_ADMIN_APPROVAL]: [REQUEST_STATUS.PENDING_FINANCE_APPROVAL, REQUEST_STATUS.REJECTED],
@@ -304,6 +328,7 @@ module.exports = {
   PERMISSIONS,
   ROLE_PERMISSIONS,
   REQUEST_STATUS,
+  REQUESTER_EDITABLE_STATUSES,
   STATUS_TRANSITIONS,
   FINANCE_DEPT_CODE,
   ADMIN_HR_DEPT_CODE,

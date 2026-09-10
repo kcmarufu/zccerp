@@ -81,7 +81,7 @@ import attachmentService from '../services/attachmentService';
 import perDiemService from '../services/perDiemService';
 import { useAuthStore } from '../store/authStore';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
-import { reconciliationService } from '../services/reconciliationService';
+import { reconciliationService, LeadDeskBacklog } from '../services/reconciliationService';
 import { formatRoleLabel } from '../utils/roleUtils';
 
 interface TabPanelProps {
@@ -153,6 +153,12 @@ const ApprovalsPage: React.FC = () => {
   const [projects, setProjects] = useState<{ id: number; project_name: string; project_code: string }[]>([]);
   const [dialogAttachments, setDialogAttachments] = useState<any[]>([]);
 
+  // Stale lead-review backlog. A Lead/HOP who has left reconciliations sitting on
+  // their review desk loses the right to approve floats until they clear them —
+  // the server enforces this, the UI here explains it before they try.
+  const [reconBacklog, setReconBacklog] = useState<LeadDeskBacklog | null>(null);
+  const approvalsBlocked = Boolean(reconBacklog?.isBlocked);
+
   useEffect(() => {
     fetchAllData();
   }, []);
@@ -176,10 +182,21 @@ const ApprovalsPage: React.FC = () => {
         fetchPendingApprovals(),
         fetchApprovedRequests(),
         fetchRejectedRequests(),
-        fetchStats()
+        fetchStats(),
+        fetchReconBacklog()
       ]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const fetchReconBacklog = async () => {
+    try {
+      setReconBacklog(await reconciliationService.getLeadDeskBacklog());
+    } catch (error) {
+      // Never let this fail the page — a missing backlog reads as "not blocked",
+      // and the server refuses the approval anyway if it is wrong.
+      console.error('Failed to load reconciliation backlog:', error);
     }
   };
 
@@ -523,7 +540,7 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
    * those that belong to their own department (FOS). All other pending stages
    * (PENDING_FINANCE_APPROVAL, etc.) are unrestricted for Finance HOP/Lead.
    */
-  const canApproveInList = (request: Request): boolean => {
+  const canActOnRequest = (request: Request): boolean => {
     if (!user) return false;
     const role = user.role;
 
@@ -545,8 +562,19 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
       return true;
     }
 
-    return true; // Finance Clerk, Admin — always show approve button
+    return true; // Finance Clerk, Admin — always allowed
   };
+
+  /**
+   * Approving additionally requires a clear reconciliation review desk: a
+   * Lead/HOP who has left reconciliations waiting loses the right to approve
+   * floats until they clear them. Rejecting deliberately keeps working, so a
+   * blocked reviewer can still turn back a bad request instead of stranding it.
+   */
+  const canApproveInList = (request: Request): boolean =>
+    !approvalsBlocked && canActOnRequest(request);
+
+  const canRejectInList = (request: Request): boolean => canActOnRequest(request);
   // ─────────────────────────────────────────────────────────────────────
   const renderRequestsTable = (requests: Request[], showActions: boolean, type: 'pending' | 'approved' | 'rejected') => {
     const filtered = applyFilters(requests);
@@ -763,7 +791,16 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                             </IconButton>
                           </Tooltip>
                         )}
-                        {!canApproveInList(request) && request.status === 'PENDING_LEAD_APPROVAL' && (
+                        {approvalsBlocked && (
+                          <Tooltip title={`Approvals on hold — ${reconBacklog?.staleCount} reconciliations have been awaiting your review for ${reconBacklog?.workingDays}+ working days. Clear them in the Reconciliation module.`}>
+                            <span>
+                              <IconButton size="small" disabled>
+                                <ApproveIcon />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
+                        {!approvalsBlocked && !canApproveInList(request) && request.status === 'PENDING_LEAD_APPROVAL' && (
                           <Tooltip title="View only — request is pending approval by its Department Lead / Head of Department">
                             <span>
                               <IconButton size="small" disabled>
@@ -772,7 +809,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                             </span>
                           </Tooltip>
                         )}
-                        {canApproveInList(request) && (
+                        {canRejectInList(request) && (
                           <Tooltip title="Reject">
                             <IconButton size="small" color="error" onClick={() => handleOpenDialog(request, 'reject')}>
                               <RejectIcon />
@@ -825,6 +862,58 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
 
   return (
     <Box>
+      {/* Reconciliation backlog block — shown before anything else, because it
+          explains why the approve buttons below are switched off. */}
+      {reconBacklog && reconBacklog.staleCount > 0 && (
+        <Alert
+          severity={reconBacklog.isBlocked ? 'error' : 'warning'}
+          icon={<ScheduleIcon />}
+          sx={{ mb: 3 }}
+          action={
+            <Button
+              size="small"
+              color="inherit"
+              variant="outlined"
+              onClick={() => navigate('/finance/reconciliation')}
+            >
+              Review Now
+            </Button>
+          }
+        >
+          <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+            {reconBacklog.isBlocked
+              ? 'Float approvals are on hold for you'
+              : `${reconBacklog.staleCount} reconciliation${reconBacklog.staleCount === 1 ? ' has' : 's have'} been waiting ${reconBacklog.workingDays}+ working days`}
+          </Typography>
+          <Typography variant="body2">
+            {reconBacklog.isBlocked ? (
+              <>
+                <strong>{reconBacklog.staleCount}</strong> reconciliations have been sitting on your review
+                desk for <strong>{reconBacklog.workingDays} working days or more</strong>. You can still view
+                requests and reject them, but you cannot approve any float request until these are cleared.
+                Approve or reject them in the Reconciliation module and your approval rights return immediately.
+              </>
+            ) : (
+              <>
+                Clear these now: once <strong>{reconBacklog.limit}</strong> reconciliations have been waiting
+                {' '}{reconBacklog.workingDays}+ working days, your float approvals are put on hold automatically.
+              </>
+            )}
+          </Typography>
+          <Box mt={1} display="flex" flexWrap="wrap" gap={0.5}>
+            {reconBacklog.items.map(item => (
+              <Chip
+                key={item.request_id}
+                size="small"
+                color={reconBacklog.isBlocked ? 'error' : 'warning'}
+                variant="outlined"
+                label={`${item.request_code} · ${item.requester_name} · ${item.working_days_on_desk} working days`}
+              />
+            ))}
+          </Box>
+        </Alert>
+      )}
+
       {/* Header with Stats */}
       <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
         <Typography variant="h5" gutterBottom>Approvals Management</Typography>
@@ -1332,6 +1421,13 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 </Card>
               )}
 
+              {dialogAction === 'approve' && approvalsBlocked && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  <strong>Approvals on hold.</strong> {reconBacklog?.staleCount} reconciliations have been
+                  waiting on your review desk for {reconBacklog?.workingDays} working days or more. Approve or
+                  reject them in the Reconciliation module and your approval rights are restored immediately.
+                </Alert>
+              )}
               {dialogAction === 'reverse' && (
                 <Alert severity="warning" sx={{ mb: 2 }}>
                   You are about to reverse your approval. This will move the request back to the previous stage.
@@ -1367,7 +1463,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
               variant="contained"
               color={dialogAction === 'approve' ? 'success' : (dialogAction === 'reject' || dialogAction === 'force-reject') ? 'error' : 'warning'}
               onClick={handleSubmit}
-              disabled={isSubmitting || ((dialogAction === 'reject' || dialogAction === 'force-reject') && !comments) || (dialogAction === 'approve' && budgetImpact.some(bi => bi.hasInsufficientFunds))}
+              disabled={isSubmitting || ((dialogAction === 'reject' || dialogAction === 'force-reject') && !comments) || (dialogAction === 'approve' && budgetImpact.some(bi => bi.hasInsufficientFunds)) || (dialogAction === 'approve' && approvalsBlocked)}
               startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : (dialogAction === 'approve' ? <ApproveIcon /> : (dialogAction === 'reject' || dialogAction === 'force-reject') ? <RejectIcon /> : <ReverseIcon />)}
             >
               {dialogAction === 'approve' ? 'Approve' : dialogAction === 'reject' ? 'Reject' : dialogAction === 'force-reject' ? 'Reject Request' : 'Reverse'}

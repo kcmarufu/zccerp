@@ -280,6 +280,15 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           label: 'Vendor Database',
           icon: <StakeholdersIcon />,
           roles: ['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'] as UserRole[]
+        },
+        {
+          // Same permission gate as the financial reports; the server narrows the
+          // figures to what each role may see, so this is safe to list for everyone
+          // who holds view_reports.
+          path: '/procurement/reports',
+          label: 'Procurement Reports',
+          icon: <AnalyticsIcon />,
+          permission: 'view_reports'
         }
       ]
     },
@@ -371,6 +380,11 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           path: '/reports/budgets',
           label: 'Budget Analysis',
           icon: <BudgetIcon />
+        },
+        {
+          path: '/reports/procurement',
+          label: 'Procurement Reports',
+          icon: <ProcurementIcon />
         }
       ]
     },

@@ -98,7 +98,20 @@ const updateRequestValidator = [
   body('items.*.budgetLineId')
     .optional()
     .isInt({ min: 1 })
-    .withMessage('Valid budget line ID is required')
+    .withMessage('Valid budget line ID is required'),
+
+  // Partner/project can be reassigned while correcting a rejected request.
+  // Existence and the donor-owns-project rule are enforced in the controller,
+  // inside the same transaction that writes them.
+  body('donor_id')
+    .optional({ nullable: true })
+    .isInt({ min: 1 })
+    .withMessage('Valid partner ID is required'),
+
+  body('project_id')
+    .optional({ nullable: true })
+    .isInt({ min: 1 })
+    .withMessage('Valid project ID is required')
 ];
 
 // Validate approval action

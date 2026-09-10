@@ -79,6 +79,35 @@ class NotificationService {
     }
   }
 
+  /**
+   * Requester amended a request that is already awaiting approval — tell the desk
+   * holding it, so nobody approves a version they have not seen. Same routing as
+   * onRequestSubmitted: the project-owning department for cross-department
+   * requests, otherwise the requester's own department.
+   */
+  async onRequestAmended(requestId, requestCode, requesterId, departmentId, routingDepartmentId = null) {
+    const link = `/finance/approvals`;
+    const title = `Request Amended: ${requestCode}`;
+    const message = `The requester has changed this float request while it is awaiting your approval. Please re-check the details before approving.`;
+    const isCrossDept = Boolean(routingDepartmentId && routingDepartmentId !== departmentId);
+    const notifyDeptId = (isCrossDept ? routingDepartmentId : departmentId);
+    try {
+      const leads = await query(
+        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.role_name = 'PROGRAM_LEAD' AND u.department_id = ? AND u.is_active = 1 AND u.id != ?`,
+        [notifyDeptId, requesterId]
+      );
+      for (const u of leads) {
+        await this._create(u.id, title, message, 'approval_pending', 'request', requestId, link);
+      }
+      await this._notifyByRole(
+        ['HEAD_OF_PROGRAMS', 'ADMIN'],
+        title, message, 'approval_pending', 'request', requestId, link, requesterId
+      );
+    } catch (err) {
+      console.error('[NotificationService] onRequestAmended error:', err.message);
+    }
+  }
+
   /** Lead/HOP approved — notify requester + Finance */
   async onRequestLeadApproved(requestId, requestCode, requesterId, approverName) {
     const requesterLink = `/finance/requests`;
@@ -193,6 +222,27 @@ class NotificationService {
       ['FINANCE_CLERK', 'ADMIN'],
       `Reconciliation Ready for Finance: ${requestCode}`,
       `A reconciliation has passed lead review and requires finance approval.`,
+      'reconciliation_pending', 'request', requestId, `/finance/reconciliation`
+    );
+  }
+
+  /**
+   * A reconciliation approval was undone. The requester is told because the
+   * record they thought was settled is live again, and the desk it has landed
+   * back on is told because it now has work it did not have a moment ago.
+   */
+  async onReconciliationReversed(requestId, requestCode, requesterId, approverName, stage) {
+    const backWithFinance = stage === 'FINANCE';
+    await this._create(
+      requesterId,
+      `Reconciliation Approval Undone: ${requestCode}`,
+      `${approverName} undid an approval on your reconciliation. It is back with ${backWithFinance ? 'Finance' : 'your Department Lead'} for review.`,
+      'warning', 'request', requestId, `/finance/reconciliation`
+    );
+    await this._notifyByRole(
+      backWithFinance ? ['FINANCE_CLERK', 'ADMIN'] : ['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN'],
+      `Reconciliation Returned for Review: ${requestCode}`,
+      `An approval was undone by ${approverName}; this reconciliation needs reviewing again.`,
       'reconciliation_pending', 'request', requestId, `/finance/reconciliation`
     );
   }

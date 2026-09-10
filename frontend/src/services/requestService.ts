@@ -40,8 +40,10 @@ export const requestService = {
     return response.data;
   },
 
-  // Update request (draft only)
-  update: async (requestId: number, data: Partial<CreateRequestPayload>): Promise<ApiResponse<void>> => {
+  // Update request (draft only).
+  // Returns `requestCode` when the edit moved the request to a different partner
+  // or project, since the reference number is re-issued from the new pair.
+  update: async (requestId: number, data: Partial<CreateRequestPayload>): Promise<ApiResponse<{ requestCode: string } | undefined>> => {
     const response = await api.put(`/requests/${requestId}`, data);
     return response.data;
   },

@@ -34,6 +34,33 @@ const fmtDays = (n) =>
 
 const titleise = (s) => String(s || '').replace(/_/g, ' ');
 
+/**
+ * Shorten `text` so it fits `maxWidth` at the document's current font, adding
+ * an ellipsis when anything was dropped.
+ *
+ * Done by hand because pdfkit's own `lineBreak: false` and `ellipsis` options
+ * do not apply here: `_text()` routes through the LineWrapper whenever a
+ * `width` is given, and a width is exactly what a table column needs. Long
+ * names therefore wrapped onto a second line that the next row overprinted.
+ */
+const fitText = (doc, text, maxWidth) => {
+  const str = String(text ?? '');
+  if (!str || doc.widthOfString(str) <= maxWidth) return str;
+
+  const ellipsis = '…';
+  const room = maxWidth - doc.widthOfString(ellipsis);
+  if (room <= 0) return ellipsis;
+
+  let lo = 0;
+  let hi = str.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (doc.widthOfString(str.slice(0, mid)) <= room) lo = mid;
+    else hi = mid - 1;
+  }
+  return str.slice(0, lo).trimEnd() + ellipsis;
+};
+
 class HRExportController {
 
   /**
@@ -309,36 +336,62 @@ class HRExportController {
                50, 70);
       doc.fillColor(INK);
 
-      let y = 96;
+      // ── Table geometry ───────────────────────────────────────────────
+      // Rows used to be 15pt tall holding 7pt text drawn with a width but no
+      // height and no lineBreak:false, so PDFKit wrapped any name or department
+      // wider than its column onto a second line — which the next row, drawn at
+      // a fixed y += 15, then printed straight over. That overlap is what made
+      // the register look crushed together. Every cell is now a single line
+      // that truncates with an ellipsis, rows have room to breathe, and a hair
+      // rule under each one gives the eye something to track across the page.
+      const ROW_H = 19;
+      const HEAD_H = 20;
+      const PAD = 4;
+      const BOTTOM_MARGIN = 60;
+
+      let y = 100;
       const cols = [
-        { label: 'EMPLOYEE',   key: 'employee_name',      x: 40,  w: 120 },
-        { label: 'DEPARTMENT', key: 'department_name',    x: 160, w: 95 },
-        { label: 'LEAVE TYPE', key: 'leave_type_name',    x: 255, w: 85 },
-        { label: 'DED.',       key: '_ded',               x: 340, w: 32 },
-        { label: 'FROM',       key: '_from',              x: 372, w: 62 },
-        { label: 'TO',         key: '_to',                x: 434, w: 62 },
-        { label: 'DAYS',       key: '_days',              x: 496, w: 36 },
-        { label: 'BEFORE',     key: '_before',            x: 532, w: 42 },
-        { label: 'AFTER',      key: '_after',             x: 574, w: 42 },
-        { label: 'STATUS',     key: '_status',            x: 616, w: 62 },
+        { label: 'EMPLOYEE',   key: 'employee_name',      x: 40,  w: 122 },
+        { label: 'DEPARTMENT', key: 'department_name',    x: 162, w: 96 },
+        { label: 'LEAVE TYPE', key: 'leave_type_name',    x: 258, w: 86 },
+        { label: 'DED.',       key: '_ded',               x: 344, w: 30, align: 'center' },
+        { label: 'FROM',       key: '_from',              x: 374, w: 62 },
+        { label: 'TO',         key: '_to',                x: 436, w: 62 },
+        { label: 'DAYS',       key: '_days',              x: 498, w: 36, align: 'right' },
+        { label: 'BEFORE',     key: '_before',            x: 534, w: 42, align: 'right' },
+        { label: 'AFTER',      key: '_after',             x: 576, w: 42, align: 'right' },
+        { label: 'STATUS',     key: '_status',            x: 618, w: 60 },
         { label: 'APPROVER',   key: 'approved_by_name',   x: 678, w: 84 },
       ];
 
+      /** One line of text clipped to its column — never wraps, never overflows. */
+      const cell = (text, c, top) => {
+        const w = c.w - PAD * 2;
+        doc.text(fitText(doc, text, w), c.x + PAD, top, {
+          width: w,
+          align: c.align || 'left',
+        });
+      };
+
       const drawHeader = () => {
-        doc.rect(40, y, pageW, 18).fill(BRAND);
+        doc.rect(40, y, pageW, HEAD_H).fill(BRAND);
         doc.fillColor('white').fontSize(7).font('Helvetica-Bold');
-        cols.forEach((c) => doc.text(c.label, c.x + 3, y + 6, { width: c.w - 6 }));
-        y += 18;
-        doc.font('Helvetica').fontSize(7).fillColor(INK);
+        cols.forEach((c) => cell(c.label, c, y + 7));
+        y += HEAD_H;
+        doc.font('Helvetica').fontSize(7.5).fillColor(INK);
       };
 
       drawHeader();
 
       let totalDays = 0;
       rows.forEach((r, i) => {
-        if (y > doc.page.height - 70) { doc.addPage(); y = 40; drawHeader(); }
-        if (i % 2 === 0) doc.rect(40, y, pageW, 15).fill('#f7f9f9');
-        doc.fillColor(INK);
+        if (y + ROW_H > doc.page.height - BOTTOM_MARGIN) {
+          doc.addPage();
+          y = 40;
+          drawHeader();
+        }
+
+        if (i % 2 === 1) doc.rect(40, y, pageW, ROW_H).fill('#f4f7f8');
 
         if (r.status === 'APPROVED') totalDays += Number(r.total_days) || 0;
 
@@ -353,12 +406,28 @@ class HRExportController {
           _status: titleise(r.status),
         };
 
-        cols.forEach((c) =>
-          doc.text(view[c.key] === null || view[c.key] === undefined || view[c.key] === '' ? '—' : String(view[c.key]),
-                   c.x + 3, y + 4, { width: c.w - 6, ellipsis: true })
-        );
-        y += 15;
+        doc.font('Helvetica').fontSize(7.5).fillColor(INK);
+        cols.forEach((c) => {
+          const raw = view[c.key];
+          const text = raw === null || raw === undefined || raw === '' ? '—' : String(raw);
+          cell(text, c, y + 6);
+        });
+
+        // Hair rule between rows, so a long register still reads line by line.
+        doc.save()
+           .lineWidth(0.3).strokeColor('#dfe6e8')
+           .moveTo(40, y + ROW_H).lineTo(40 + pageW, y + ROW_H).stroke()
+           .restore();
+        doc.fillColor(INK);
+
+        y += ROW_H;
       });
+
+      if (rows.length === 0) {
+        doc.font('Helvetica-Oblique').fontSize(9).fillColor(MUTED)
+           .text('No leave records for this period.', 40, y + 8, { width: pageW, align: 'center' });
+        y += 26;
+      }
 
       y += 8;
       if (y > doc.page.height - 60) { doc.addPage(); y = 40; }

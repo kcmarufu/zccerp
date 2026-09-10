@@ -566,6 +566,27 @@ class ProcurementController {
       res.status(500).json({ success: false, error: err.message });
     }
   }
+
+  // ===== REPORTS & ANALYTICS =====
+
+  /**
+   * Procurement reports and analytics.
+   * GET /api/procurement/reports
+   *
+   * The route carries the same VIEW_REPORTS permission as the financial
+   * reports; what each reader is allowed to *see* is decided inside the
+   * service, which scopes the figures to the department (or, for a general
+   * user, to their own requests).
+   */
+  async getProcurementReports(req, res) {
+    try {
+      const data = await procurementService.getProcurementReports(req.user, req.query);
+      res.json({ success: true, data });
+    } catch (err) {
+      console.error('Error fetching procurement reports:', err);
+      res.status(500).json({ success: false, error: 'Failed to fetch procurement reports' });
+    }
+  }
 }
 
 module.exports = new ProcurementController();

@@ -230,7 +230,7 @@ const LoginPage: React.FC = () => {
 
             <Divider sx={{ my: 2.5 }}>
               <Typography variant="caption" color="text.disabled" sx={{ px: 1 }}>
-                Powered by KC Marufu
+                Made with ❤️ by KC Marufu
               </Typography>
             </Divider>
           </Box>

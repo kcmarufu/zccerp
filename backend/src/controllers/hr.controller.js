@@ -501,6 +501,28 @@ class HRController {
     }
   }
 
+  /**
+   * One employee's whole leave year — balances, accruals, adjustments and every
+   * request — behind the register's View action.
+   */
+  async getEmployeeLeaveStatement(req, res) {
+    try {
+      const employee = await hrService.getEmployeeById(req.params.employeeId);
+      if (!employee) return res.status(404).json({ success: false, error: 'Employee not found' });
+      if (!canAccessEmployeeRecord(employee, req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have access to this record' });
+      }
+
+      const data = await hrService.getEmployeeLeaveStatement(req.params.employeeId, {
+        year: req.query.year ? Number(req.query.year) : undefined,
+      });
+      res.json({ success: true, data: { ...data, employee } });
+    } catch (error) {
+      console.error('Error fetching leave statement:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch leave statement' });
+    }
+  }
+
   /** The caller's own accrual history, without needing their employee id. */
   async getMyAccrualHistory(req, res) {
     try {

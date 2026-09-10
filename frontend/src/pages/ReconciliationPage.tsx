@@ -35,15 +35,16 @@ import {
   Schedule as ScheduleIcon,
   Edit as EditIcon,
   OpenInNew as OpenInNewIcon,
-  Download as DownloadIcon
+  Download as DownloadIcon,
+  Undo as UndoIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { format, formatDate } from '../utils/datetime';
-import { stickyActionCell, stickyActionHeadCell } from '../utils/tableStyles';
+import { stickyActionCell, stickyActionHeadCell, fitTable, numericCell } from '../utils/tableStyles';
 import * as XLSX from 'xlsx';
 
 import { useAuthStore } from '../store/authStore';
-import { reconciliationService } from '../services/reconciliationService';
+import { reconciliationService, LeadDeskBacklog } from '../services/reconciliationService';
 import { requestService } from '../services/requestService';
 import attachmentService from '../services/attachmentService';
 import { Request, RequestItem } from '../types';
@@ -235,6 +236,27 @@ const SubmissionTimeliness: React.FC<{ timeliness?: string | null; days?: number
   );
 };
 
+/**
+ * How long a reconciliation has been waiting on the reviewer's desk.
+ *
+ * `working_days_on_desk` is computed server-side from the same rule that gates
+ * approvals, so the number shown here is exactly the number the reviewer is held
+ * to. `staleAfter` is likewise the server's threshold, not a copy of it.
+ */
+const DeskAge: React.FC<{ days?: number | null; staleAfter: number }> = ({ days, staleAfter }) => {
+  if (days == null) return <Typography variant="caption" color="text.secondary">—</Typography>;
+  const isStale = days >= staleAfter;
+  return (
+    <Chip
+      size="small"
+      variant={isStale ? 'filled' : 'outlined'}
+      color={isStale ? 'error' : days >= staleAfter - 1 ? 'warning' : 'default'}
+      icon={isStale ? <WarningIcon /> : undefined}
+      label={`${days} working day${days !== 1 ? 's' : ''}`}
+    />
+  );
+};
+
 /** Count Mon–Fri working days from day after startDate to today (or endDate). */
 function calcWorkingDaysFromNow(startDate: string | Date | null | undefined): number | null {
   if (!startDate) return null;
@@ -408,6 +430,10 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
     if (history.length === 0) { toast.warning('No records to print'); return; }
     const totalSpentAll = history.reduce((s: number, r: any) => s + Number(r.total_spent || 0), 0);
     const totalReturnedAll = history.reduce((s: number, r: any) => s + Number(r.total_returned || 0), 0);
+    // Overspent rows return nothing, so they contribute 0 to totalReturnedAll and
+    // would otherwise vanish from the summary even though the per-row cells flag
+    // them in red. Total the over-expenditure separately.
+    const totalOverspendAll = history.reduce((s: number, r: any) => s + overspendOf(r), 0);
     const tableRows = history.map((rec: any, i: number) => `
       <tr>
         <td>${i + 1}</td>
@@ -436,14 +462,14 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
   .footer-left{font-size:9px;color:#999;}
 </style></head><body>
 <div class="doc-header">
-  <div><div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div><h1>${DOC_TITLE} History Report</h1><p>Records: <strong>${history.length}</strong> &nbsp;|&nbsp; Total Spent: <strong>$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; Total Returned: <strong>$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong></p></div>
+  <div><div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div><h1>${DOC_TITLE} History Report</h1><p>Records: <strong>${history.length}</strong> &nbsp;|&nbsp; Total Spent: <strong>$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong> &nbsp;|&nbsp; Total Returned: <strong>$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}</strong>${totalOverspendAll > 0 ? ` &nbsp;|&nbsp; Total Over-expenditure: <strong style="color:#c62828">${money(totalOverspendAll)}</strong>` : ''}</p></div>
   <div style="font-size:10px;color:#666">Generated: ${format(new Date(), 'dd MMM yyyy HH:mm')}</div>
 </div>
 <h3>Reconciliation History (${history.length} records)</h3>
 <table>
   <thead><tr><th>#</th><th>Reference</th><th>Requester</th><th align="right">Spent ($)</th><th align="right">Returned ($)</th><th>Status</th><th>Submitted / Due</th><th>Reviewed By</th><th>Date</th></tr></thead>
   <tbody>${tableRows}
-  <tr class="total-row"><td colspan="3" align="right">TOTALS:</td><td align="right">$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</td><td align="right">$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}</td><td colspan="4"></td></tr>
+  <tr class="total-row"><td colspan="3" align="right">TOTALS:</td><td align="right">$${totalSpentAll.toLocaleString(undefined,{minimumFractionDigits:2})}</td><td align="right">$${totalReturnedAll.toLocaleString(undefined,{minimumFractionDigits:2})}${totalOverspendAll > 0 ? `<div style="color:#c62828">${money(totalOverspendAll)} over</div>` : ''}</td><td colspan="4"></td></tr>
   </tbody>
 </table>
 ${buildDigitalStamp('')}
@@ -458,18 +484,27 @@ ${buildDigitalStamp('')}
   const handleHistoryBulkExcel = () => {
     if (history.length === 0) { toast.warning('No records to export'); return; }
     const wb = XLSX.utils.book_new();
-    const headers = ['#', 'Request #', 'Requester', 'Spent ($)', 'Returned ($)', 'Status', 'Submitted / Due', 'Reviewed By', 'Reviewed Date'];
-    const rows = history.map((rec: any, i: number) => [
-      i + 1, rec.request_code,
-      `${rec.requester_first_name || ''} ${rec.requester_last_name || ''}`.trim(),
-      Number(rec.total_spent || 0), Number(rec.total_returned || 0),
-      rec.reconciliation_status || '',
-      reconSubmissionLabel(rec),
-      `${rec.reviewer_first_name || ''} ${rec.reviewer_last_name || ''}`.trim(),
-      rec.reviewed_at ? format(new Date(rec.reviewed_at), 'dd MMM yyyy') : ''
-    ]);
+    // An overspent reconciliation returns nothing, so exporting total_returned
+    // alone wrote 0.00 for it — indistinguishable from a trip that simply
+    // returned no change, with the overspend absent from the sheet entirely.
+    // It gets its own numeric column so the figure stays usable in Excel.
+    const headers = ['#', 'Request #', 'Requester', 'Spent ($)', 'Returned ($)', 'Over-expenditure ($)', 'Status', 'Submitted / Due', 'Reviewed By', 'Reviewed Date'];
+    const rows = history.map((rec: any, i: number) => {
+      const over = overspendOf(rec);
+      return [
+        i + 1, rec.request_code,
+        `${rec.requester_first_name || ''} ${rec.requester_last_name || ''}`.trim(),
+        Number(rec.total_spent || 0),
+        over > 0 ? 0 : Number(rec.total_returned || 0),
+        over > 0 ? over : 0,
+        rec.reconciliation_status || '',
+        reconSubmissionLabel(rec),
+        `${rec.reviewer_first_name || ''} ${rec.reviewer_last_name || ''}`.trim(),
+        rec.reviewed_at ? format(new Date(rec.reviewed_at), 'dd MMM yyyy') : ''
+      ];
+    });
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws['!cols'] = [4, 16, 22, 14, 14, 16, 24, 22, 14].map(w => ({ wch: w }));
+    ws['!cols'] = [4, 16, 22, 14, 14, 20, 16, 24, 22, 14].map(w => ({ wch: w }));
     XLSX.utils.book_append_sheet(wb, ws, 'Reconciliation History');
     XLSX.writeFile(wb, `reconciliation-history-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
     toast.success(`Exported ${history.length} records to Excel`);
@@ -488,6 +523,13 @@ ${buildDigitalStamp('')}
   const [myRequests, setMyRequests] = useState<any[]>([]);
   const [myReconciliations, setMyReconciliations] = useState<any[]>([]);
   const [pendingLeadReviews, setPendingLeadReviews] = useState<any[]>([]);
+  // This reviewer's own stale backlog and whether it has cost them their float
+  // approval rights. Fetched rather than derived so the page and the server
+  // agree on both the threshold and who is actually blocked.
+  const [leadBacklog, setLeadBacklog] = useState<LeadDeskBacklog | null>(null);
+  // Fall back to the documented 4 working days only until the backlog call lands,
+  // so the queue never renders an ageing threshold of its own invention.
+  const staleAfter = leadBacklog?.workingDays ?? 4;
   const [leadHistory, setLeadHistory] = useState<any[]>([]);
   const [pendingReviews, setPendingReviews] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
@@ -539,6 +581,16 @@ ${buildDigitalStamp('')}
   const [isReviewing, setIsReviewing] = useState(false);
   const [reviewMode, setReviewMode] = useState<'lead' | 'finance'>('finance');
 
+  // Undo-approval dialog. `reverseInfo` is the server's verdict on the record
+  // currently open (review or view), so the button only appears where the
+  // action would actually succeed — the rules for who may undo which stage live
+  // on the server and are not duplicated here.
+  const [reverseInfo, setReverseInfo] = useState<{ canReverse: boolean; stage?: string; revertsTo?: string } | null>(null);
+  const [reverseOpen, setReverseOpen] = useState(false);
+  const [reverseReason, setReverseReason] = useState('');
+  const [isReversing, setIsReversing] = useState(false);
+  const [reverseTargetId, setReverseTargetId] = useState<number | null>(null);
+
   // View reconciliation detail dialog
   const [viewOpen, setViewOpen] = useState(false);
   const [viewReconciliation, setViewReconciliation] = useState<any>(null);
@@ -577,6 +629,12 @@ ${buildDigitalStamp('')}
           }
         } catch (err) {
           console.error('Error fetching pending lead reconciliations:', err);
+        }
+
+        try {
+          setLeadBacklog(await reconciliationService.getLeadDeskBacklog());
+        } catch (err) {
+          console.error('Error fetching lead review backlog:', err);
         }
 
         // Lead history — reconciliations already approved by this lead
@@ -1042,11 +1100,25 @@ ${buildDigitalStamp('')}
     }
   };
 
+  /** Ask the server whether this record's approval can be undone by this user. */
+  const loadReverseInfo = async (requestId: number) => {
+    setReverseInfo(null);
+    setReverseTargetId(requestId);
+    try {
+      const res = await reconciliationService.canReverseReconciliation(requestId);
+      if (res.success) setReverseInfo(res.data as any);
+    } catch {
+      // Roles without any reversal rights get a 403 here; no button, no noise.
+      setReverseInfo(null);
+    }
+  };
+
   const openReviewDialog = async (request: any, mode: 'lead' | 'finance' = 'finance') => {
     setReviewRequest(request);
     setReviewComments('');
     setReviewMode(mode);
     setReviewAttachments([]);
+    loadReverseInfo(request.id);
     try {
       const reconRes = await reconciliationService.getReconciliation(request.id);
       if (reconRes.success && reconRes.data) {
@@ -1067,6 +1139,7 @@ ${buildDigitalStamp('')}
 
   const openViewDialog = async (recon: any) => {
     setViewAttachments([]);
+    loadReverseInfo(recon.request_id || recon.id);
     try {
       const reqId = recon.request_id || recon.id;
       const reconRes = await reconciliationService.getReconciliation(reqId);
@@ -1163,6 +1236,40 @@ ${buildDigitalStamp('')}
       setIsReviewing(false);
     }
   };
+
+  /**
+   * Undo an approval made in error. Which stage is undone is decided by the
+   * server from the request's current status; the reason is mandatory because
+   * this rewinds a record other people have already acted on — and, at the
+   * Finance stage, moves money back.
+   */
+  const handleReverseReconciliation = async () => {
+    if (!reverseTargetId) return;
+    if (!reverseReason.trim()) {
+      toast.warning('Please say why this approval is being undone');
+      return;
+    }
+    try {
+      setIsReversing(true);
+      const result = await reconciliationService.reverseReconciliation(reverseTargetId, reverseReason);
+      if (result.success) {
+        toast.success(result.message || 'Approval undone');
+        setReverseOpen(false);
+        setReverseReason('');
+        setReviewOpen(false);
+        setViewOpen(false);
+        fetchData();
+      }
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to undo the approval');
+    } finally {
+      setIsReversing(false);
+    }
+  };
+
+  const undoButtonLabel = reverseInfo?.stage === 'FINANCE'
+    ? 'Undo Approval (Reverses Budget)'
+    : 'Undo Lead Approval';
 
   const getStatusColor = (status: string): 'success' | 'warning' | 'error' | 'info' | 'default' => {
     switch (status) {
@@ -1599,6 +1706,26 @@ ${buildDigitalStamp('')}
       {/* Tab 2: Lead/HOP/Admin Pending Reviews */}
       {activeTab === tabIndex('leadReview') && canReviewLead && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
+          {/* Ageing summary — the same figures the approval gate is enforcing, so a
+              reviewer is never blocked by a number they were not shown. */}
+          {leadBacklog && leadBacklog.staleCount > 0 && (
+            <Alert
+              severity={leadBacklog.isBlocked ? 'error' : 'warning'}
+              icon={<WarningIcon />}
+              sx={{ m: 2, mb: 0 }}
+            >
+              <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+                {leadBacklog.staleCount} reconciliation{leadBacklog.staleCount === 1 ? '' : 's'} on your desk
+                for {leadBacklog.workingDays}+ working days
+              </Typography>
+              <Typography variant="body2">
+                {leadBacklog.isBlocked
+                  ? `Your float approvals are on hold until these are cleared. Approve or reject each one below and your approval rights return immediately.`
+                  : `Clear these now: once ${leadBacklog.limit} reconciliations have been waiting ${leadBacklog.workingDays}+ working days, your float approvals are put on hold automatically.`}
+              </Typography>
+            </Alert>
+          )}
+
           {/* Filters */}
           <Box p={2} borderBottom={`1px solid ${theme.palette.divider}`}>
             <Grid container spacing={2} alignItems="center">
@@ -1663,6 +1790,7 @@ ${buildDigitalStamp('')}
                     <TableCell sx={{ fontWeight: 600 }}>Spent</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Submitted</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Waiting On You</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Timeliness</TableCell>
                     <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Actions</TableCell>
                   </TableRow>
@@ -1674,8 +1802,17 @@ ${buildDigitalStamp('')}
                       if (leadProjectFilter && String(r.project_id) !== leadProjectFilter) return false;
                       return true;
                     })
-                    .map((req) => (
-                    <TableRow key={req.id} hover>
+                    .map((req) => {
+                    const isStale = Number(req.working_days_on_desk) >= staleAfter;
+                    return (
+                    <TableRow
+                      key={req.id}
+                      hover
+                      // Stale rows are tinted as well as chipped: a reviewer scanning
+                      // the queue has to see which items are the problem without
+                      // reading every cell.
+                      sx={isStale ? { backgroundColor: alpha(theme.palette.error.main, 0.06) } : undefined}
+                    >
                       <TableCell><Typography fontWeight={500}>{req.request_code}</Typography></TableCell>
                       <TableCell>{req.requester_first_name} {req.requester_last_name}</TableCell>
                       <TableCell><Chip label={req.department_code} size="small" variant="outlined" /></TableCell>
@@ -1683,6 +1820,7 @@ ${buildDigitalStamp('')}
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(req.total_spent || 0).toLocaleString()}</TableCell>
                       <TableCell><ReturnedAmount row={req} /></TableCell>
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
+                      <TableCell><DeskAge days={req.working_days_on_desk} staleAfter={staleAfter} /></TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
                       <TableCell align="center" sx={{ ...stickyActionCell() }}>
                         <Button size="small" variant="outlined" startIcon={<ViewIcon />}
@@ -1694,7 +1832,8 @@ ${buildDigitalStamp('')}
                         </Tooltip>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </TableContainer>
@@ -2562,7 +2701,7 @@ ${buildDigitalStamp('')}
       </Dialog>
 
       {/* ==================== FINANCE REVIEW DIALOG ==================== */}
-      <Dialog open={reviewOpen} onClose={() => setReviewOpen(false)} maxWidth="md" fullWidth fullScreen={isMobile}>
+      <Dialog open={reviewOpen} onClose={() => setReviewOpen(false)} maxWidth="lg" fullWidth fullScreen={isMobile}>
         <DialogTitle>
           <Box display="flex" alignItems="center" gap={1}>
             <ViewIcon color="primary" />
@@ -2617,15 +2756,15 @@ ${buildDigitalStamp('')}
                     )}
                   <Typography variant="subtitle2" fontWeight={600} gutterBottom>Line Items</Typography>
                   <TableContainer>
-                    <Table size="small">
+                    <Table size="small" sx={fitTable}>
                       <TableHead>
                         <TableRow>
-                          <TableCell>Description</TableCell>
-                          <TableCell>Budget Line</TableCell>
-                          <TableCell align="right">Budgeted</TableCell>
-                          <TableCell align="right">Actual</TableCell>
-                          <TableCell align="right">Variance</TableCell>
-                          <TableCell>Notes</TableCell>
+                          <TableCell sx={{ width: '26%' }}>Description</TableCell>
+                          <TableCell sx={{ width: '20%' }}>Budget Line</TableCell>
+                          <TableCell sx={{ ...numericCell, width: '12%' }} align="right">Budgeted</TableCell>
+                          <TableCell sx={{ ...numericCell, width: '12%' }} align="right">Actual</TableCell>
+                          <TableCell sx={{ ...numericCell, width: '12%' }} align="right">Variance</TableCell>
+                          <TableCell sx={{ width: '18%' }}>Notes</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
@@ -2638,13 +2777,21 @@ ${buildDigitalStamp('')}
                               )}
                             </TableCell>
                             <TableCell>
+                              {/* Rendered as stacked text rather than a Chip: a Chip is a single
+                                  unbreakable line, so a long budget-line name alone was enough to
+                                  push the table wider than the dialog. */}
                               {item.budget_code ? (
-                                <Chip label={`${item.budget_code}${item.budget_name ? ` — ${item.budget_name}` : ''}`} size="small" variant="outlined" sx={{ fontSize: '0.7rem' }} />
+                                <>
+                                  <Typography variant="body2" fontWeight={600}>{item.budget_code}</Typography>
+                                  {item.budget_name && (
+                                    <Typography variant="caption" color="text.secondary" display="block">{item.budget_name}</Typography>
+                                  )}
+                                </>
                               ) : '—'}
                             </TableCell>
-                            <TableCell align="right">${Number(item.budgeted_amount || 0).toLocaleString()}</TableCell>
-                            <TableCell align="right">${Number(item.actual_amount || 0).toLocaleString()}</TableCell>
-                            <TableCell align="right" sx={{ color: (Number(item.budgeted_amount) - Number(item.actual_amount)) >= 0 ? 'success.main' : 'error.main' }}>
+                            <TableCell align="right" sx={numericCell}>${Number(item.budgeted_amount || 0).toLocaleString()}</TableCell>
+                            <TableCell align="right" sx={numericCell}>${Number(item.actual_amount || 0).toLocaleString()}</TableCell>
+                            <TableCell align="right" sx={{ ...numericCell, color: (Number(item.budgeted_amount) - Number(item.actual_amount)) >= 0 ? 'success.main' : 'error.main' }}>
                               ${Math.abs(Number(item.budgeted_amount) - Number(item.actual_amount)).toLocaleString()}
                             </TableCell>
                             <TableCell>{item.notes || '-'}</TableCell>
@@ -2712,8 +2859,16 @@ ${buildDigitalStamp('')}
             </Box>
           )}
         </DialogContent>
-        <DialogActions sx={{ p: 2, gap: 1 }}>
+        <DialogActions sx={{ p: 2, gap: 1, flexWrap: 'wrap' }}>
           <Button onClick={() => setReviewOpen(false)}>Cancel</Button>
+          {reverseInfo?.canReverse && (
+            <Tooltip title="Send this back to the stage before it — use when it was approved by mistake">
+              <Button variant="outlined" color="warning" startIcon={<UndoIcon />}
+                onClick={() => { setReverseReason(''); setReverseOpen(true); }}>
+                {undoButtonLabel}
+              </Button>
+            </Tooltip>
+          )}
           <Button variant="outlined" color="error" startIcon={<PdfIcon />}
             onClick={() => reviewRequest && handleDownloadReconPDF(reviewRequest)}>
             Print PDF
@@ -2732,7 +2887,7 @@ ${buildDigitalStamp('')}
       </Dialog>
 
       {/* ==================== VIEW RECONCILIATION DETAIL DIALOG ==================== */}
-      <Dialog open={viewOpen} onClose={() => setViewOpen(false)} maxWidth="md" fullWidth fullScreen={isMobile}>
+      <Dialog open={viewOpen} onClose={() => setViewOpen(false)} maxWidth="lg" fullWidth fullScreen={isMobile}>
         <DialogTitle>
           <Box display="flex" alignItems="center" gap={1}>
             <ViewIcon color="primary" />
@@ -2803,23 +2958,23 @@ ${buildDigitalStamp('')}
                 <Box>
                   <Typography variant="subtitle2" fontWeight={600} gutterBottom>Line Items</Typography>
                   <TableContainer>
-                    <Table size="small">
+                    <Table size="small" sx={fitTable}>
                       <TableHead>
                         <TableRow>
-                          <TableCell>Description</TableCell>
-                          <TableCell align="right">Budgeted</TableCell>
-                          <TableCell align="right">Actual</TableCell>
-                          <TableCell align="right">Variance</TableCell>
-                          <TableCell>Notes</TableCell>
+                          <TableCell sx={{ width: '34%' }}>Description</TableCell>
+                          <TableCell sx={{ ...numericCell, width: '14%' }} align="right">Budgeted</TableCell>
+                          <TableCell sx={{ ...numericCell, width: '14%' }} align="right">Actual</TableCell>
+                          <TableCell sx={{ ...numericCell, width: '14%' }} align="right">Variance</TableCell>
+                          <TableCell sx={{ width: '24%' }}>Notes</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
                         {viewReconciliation.items.map((item: any, i: number) => (
                           <TableRow key={i}>
                             <TableCell>{item.description}</TableCell>
-                            <TableCell align="right">${Number(item.budgeted_amount || 0).toLocaleString()}</TableCell>
-                            <TableCell align="right">${Number(item.actual_amount || 0).toLocaleString()}</TableCell>
-                            <TableCell align="right" sx={{ color: (Number(item.budgeted_amount) - Number(item.actual_amount)) >= 0 ? 'success.main' : 'error.main' }}>
+                            <TableCell align="right" sx={numericCell}>${Number(item.budgeted_amount || 0).toLocaleString()}</TableCell>
+                            <TableCell align="right" sx={numericCell}>${Number(item.actual_amount || 0).toLocaleString()}</TableCell>
+                            <TableCell align="right" sx={{ ...numericCell, color: (Number(item.budgeted_amount) - Number(item.actual_amount)) >= 0 ? 'success.main' : 'error.main' }}>
                               ${Math.abs(Number(item.budgeted_amount) - Number(item.actual_amount)).toLocaleString()}
                             </TableCell>
                             <TableCell>{item.notes || '-'}</TableCell>
@@ -2893,7 +3048,53 @@ ${buildDigitalStamp('')}
             onClick={() => viewReconciliation && handleDownloadReconPDF(viewReconciliation)}>
             Print PDF
           </Button>
+          {reverseInfo?.canReverse && (
+            <Button variant="outlined" color="warning" startIcon={<UndoIcon />}
+              onClick={() => { setReverseReason(''); setReverseOpen(true); }}>
+              {undoButtonLabel}
+            </Button>
+          )}
           <Button onClick={() => setViewOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ==================== UNDO APPROVAL DIALOG ==================== */}
+      <Dialog open={reverseOpen} onClose={() => setReverseOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box display="flex" alignItems="center" gap={1}>
+            <UndoIcon color="warning" />
+            <Typography variant="h6">Undo Reconciliation Approval</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers>
+          {reverseInfo?.stage === 'FINANCE' ? (
+            <Alert severity="warning" icon={<WarningIcon />} sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" fontWeight={700}>This reverses money already posted</Typography>
+              <Typography variant="body2">
+                The reconciliation goes back to <strong>Pending Finance Approval</strong>, and every budget-line
+                adjustment the approval made — over-expenditure deductions and change returned — is written back
+                out. Each reversal is recorded as its own budget transaction, so the ledger stays auditable.
+              </Typography>
+            </Alert>
+          ) : (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <Typography variant="body2">
+                The reconciliation goes back to <strong>Pending Lead Approval</strong> so the Department Lead /
+                Head of Department can review it again. No budget figures change.
+              </Typography>
+            </Alert>
+          )}
+          <TextField label="Reason for undoing this approval" multiline rows={3} fullWidth required
+            value={reverseReason} onChange={(e) => setReverseReason(e.target.value)}
+            placeholder="e.g. approved on the wrong request" />
+        </DialogContent>
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button onClick={() => setReverseOpen(false)}>Cancel</Button>
+          <Button variant="contained" color="warning" disabled={isReversing}
+            startIcon={isReversing ? <CircularProgress size={18} /> : <UndoIcon />}
+            onClick={handleReverseReconciliation}>
+            Undo Approval
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

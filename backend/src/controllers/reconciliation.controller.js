@@ -72,6 +72,51 @@ class ReconciliationController {
   }
 
   /**
+   * Undo a reconciliation approval made in error
+   * POST /api/reconciliations/:requestId/reverse
+   */
+  async reverseReconciliation(req, res) {
+    try {
+      const { requestId } = req.params;
+      const { comments } = req.body;
+
+      const result = await reconciliationService.reverseReconciliationApproval(
+        requestId, req.user.id, req.user.role, comments, req.ip, req.user.department_code
+      );
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error('Reconciliation reverse error:', error);
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Failed to undo reconciliation approval'
+      });
+    }
+  }
+
+  /**
+   * Whether the current user can undo this reconciliation's approval
+   * GET /api/reconciliations/:requestId/can-reverse
+   */
+  async canReverseReconciliation(req, res) {
+    try {
+      const { requestId } = req.params;
+
+      const result = await reconciliationService.canReverseReconciliation(
+        requestId, req.user.id, req.user.role, req.user.department_code
+      );
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Reconciliation can-reverse error:', error);
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Failed to check reconciliation reversal'
+      });
+    }
+  }
+
+  /**
    * Finance rejects a reconciliation
    * POST /api/reconciliations/:requestId/reject
    */
@@ -334,6 +379,27 @@ class ReconciliationController {
       res.status(500).json({
         success: false,
         error: 'Failed to check overdue reconciliations'
+      });
+    }
+  }
+
+  /**
+   * The current user's stale lead-review backlog.
+   * GET /api/reconciliations/lead-desk-backlog
+   *
+   * Returns { staleCount, limit, workingDays, isBlocked, items } — everything the
+   * UI needs to warn the reviewer and to explain why the approve buttons are off.
+   * Users who hold no lead-review desk (and Super Admin) come back clear.
+   */
+  async getLeadDeskBacklog(req, res) {
+    try {
+      const backlog = await reconciliationService.getLeadDeskBacklog(req.user);
+      res.json({ success: true, data: backlog });
+    } catch (error) {
+      console.error('Error checking lead review backlog:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check lead review backlog'
       });
     }
   }

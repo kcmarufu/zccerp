@@ -792,6 +792,51 @@ export interface HRAccrualHistory {
   employee?: HREmployee;
 }
 
+/**
+ * One employee's entire leave year: the accrual statement, plus their balance
+ * per leave type and every request they made — whatever its status. Backs the
+ * View drill-down on the Leave Register.
+ */
+export interface HRLeaveStatement extends HRAccrualHistory {
+  balances: Array<{
+    leave_type_id: number;
+    leave_type_name: string;
+    total_days: number;
+    used_days: number;
+    pending_days: number;
+    remaining_days: number;
+    carried_forward: number;
+    is_deductible: boolean | number;
+    year: number;
+  }>;
+  requests: Array<{
+    id: number;
+    start_date: string;
+    end_date: string;
+    days_requested: number;
+    deductible_days: number;
+    free_days_used: number;
+    status: string;
+    balance_before: number | null;
+    balance_after: number | null;
+    reason: string | null;
+    rejection_reason: string | null;
+    approved_at: string | null;
+    created_at: string;
+    leave_type_name: string;
+    is_deductible: boolean | number;
+    approved_by_name: string | null;
+    covering_employee_name: string | null;
+  }>;
+  request_totals: {
+    approved: number;
+    pending: number;
+    rejected: number;
+    cancelled: number;
+    count: number;
+  };
+}
+
 /** Accrual totals per department and per month. */
 export interface HRAccrualReport {
   fiscal_year: number;

@@ -65,3 +65,38 @@ export const stickyActionHeadCell = (
   backgroundColor: background,
   boxShadow: EDGE_SHADOW
 });
+
+/**
+ * Table that fits the width it is given instead of forcing a sideways scroll.
+ *
+ * WHY: the detail tables inside the review/view dialogs are laid out by the
+ * browser's automatic algorithm, which sizes every column to its widest cell
+ * and never wraps. A single long line-item description or budget-line name
+ * therefore pushed the table past the dialog and reviewers had to scroll
+ * horizontally to read the amounts they were being asked to approve — the one
+ * thing that has to be visible at a glance.
+ *
+ * Fixing the layout makes the declared column widths authoritative, and the
+ * cell rules below let long text wrap down instead of out. Numeric columns are
+ * kept on one line so figures are never split across two rows.
+ *
+ * USAGE
+ *   <Table size="small" sx={fitTable}>
+ *     <TableCell sx={{ width: '30%' }}>Description</TableCell>       // wraps
+ *     <TableCell sx={numericCell} align="right">Actual</TableCell>   // never wraps
+ */
+export const fitTable: SystemStyleObject<Theme> = {
+  tableLayout: 'fixed',
+  width: '100%',
+  '& td, & th': {
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    verticalAlign: 'top'
+  }
+};
+
+/** Column of figures inside a `fitTable`: wrapping a number would misread. */
+export const numericCell: SystemStyleObject<Theme> = {
+  whiteSpace: 'nowrap',
+  overflowWrap: 'normal'
+};

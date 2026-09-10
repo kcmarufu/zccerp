@@ -1745,6 +1745,63 @@ class HRService {
     };
   }
 
+  /**
+   * Everything about one employee's leave year, in one call.
+   *
+   * The register answers "how many days does this person have"; this answers
+   * "why". Reading the accrual log, the adjustments and the requests as three
+   * separate screens made it impossible to reconcile a balance anyone queried —
+   * the numbers had to be added up by hand from pages that filtered differently.
+   *
+   * Note the deliberate difference from getEmployeeAccrualHistory(), which this
+   * builds on: the running statement counts only *approved, deductible* leave,
+   * because that is what moved the balance, while `requests` lists every
+   * request in the year whatever its status, since a rejected or pending one is
+   * usually the very thing being asked about.
+   */
+  async getEmployeeLeaveStatement(employeeId, { year } = {}) {
+    const fiscalYear = Number(year) || new Date().getFullYear();
+
+    const [statement, balances, requests] = await Promise.all([
+      this.getEmployeeAccrualHistory(employeeId, { year: fiscalYear }),
+      this.getLeaveBalances(employeeId, fiscalYear),
+      query(
+        `SELECT lr.id, lr.start_date, lr.end_date, lr.days_requested,
+                lr.deductible_days, lr.free_days_used, lr.status,
+                lr.balance_before, lr.balance_after, lr.reason,
+                lr.rejection_reason, lr.approved_at, lr.created_at,
+                lt.leave_name AS leave_type_name, lt.is_deductible,
+                CONCAT(ap.first_name, ' ', ap.last_name) AS approved_by_name,
+                CONCAT(cov.first_name, ' ', cov.last_name) AS covering_employee_name
+         FROM hr_leave_requests lr
+         JOIN hr_leave_types lt ON lr.leave_type_id = lt.id
+         LEFT JOIN users ap ON lr.approved_by = ap.id
+         LEFT JOIN hr_employees ce ON lr.covering_employee_id = ce.id
+         LEFT JOIN users cov ON ce.user_id = cov.id
+         WHERE lr.employee_id = ? AND YEAR(lr.start_date) = ?
+         ORDER BY lr.start_date DESC, lr.id DESC`,
+        [employeeId, fiscalYear]
+      ),
+    ]);
+
+    const sumBy = (status) => requests
+      .filter((r) => r.status === status)
+      .reduce((n, r) => n + Number(r.deductible_days || 0), 0);
+
+    return {
+      ...statement,
+      balances,
+      requests,
+      request_totals: {
+        approved: Math.round(sumBy('APPROVED') * 10) / 10,
+        pending: Math.round(sumBy('PENDING') * 10) / 10,
+        rejected: Math.round(sumBy('REJECTED') * 10) / 10,
+        cancelled: Math.round(sumBy('CANCELLED') * 10) / 10,
+        count: requests.length,
+      },
+    };
+  }
+
   // ------------------------------------------------------------------
   // Leave register — every employee's standing balance
   // ------------------------------------------------------------------

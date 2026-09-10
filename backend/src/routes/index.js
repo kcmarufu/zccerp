@@ -155,6 +155,7 @@ router.get('/reconciliations/lead-approved', authenticateToken, reconciliationCo
 router.get('/reconciliations/history', authenticateToken, reconciliationController.getReconciliationHistory.bind(reconciliationController));
 router.get('/reconciliations/finance-review-history', authenticateToken, reconciliationController.getFinanceReviewHistory.bind(reconciliationController));
 router.get('/reconciliations/overdue-check', authenticateToken, reconciliationController.getOverdueCheck.bind(reconciliationController));
+router.get('/reconciliations/lead-desk-backlog', authenticateToken, reconciliationController.getLeadDeskBacklog.bind(reconciliationController));
 router.get('/reconciliations/:requestId', authenticateToken, reconciliationController.getReconciliation.bind(reconciliationController));
 router.post('/reconciliations', authenticateToken, reconciliationController.submitReconciliation.bind(reconciliationController));
 router.put('/reconciliations/:requestId', authenticateToken, reconciliationController.updateReconciliation.bind(reconciliationController));
@@ -163,6 +164,11 @@ router.post('/reconciliations/:requestId/approve', authenticateToken, reconcilia
 router.post('/reconciliations/:requestId/reject', authenticateToken, reconciliationController.rejectReconciliation.bind(reconciliationController));
 router.post('/reconciliations/:requestId/lead-approve', authenticateToken, reconciliationController.approveReconciliationAsLead.bind(reconciliationController));
 router.post('/reconciliations/:requestId/lead-reject', authenticateToken, reconciliationController.rejectReconciliationAsLead.bind(reconciliationController));
+// Undo a reconciliation approval made in error. The service decides which stage
+// (Lead/HOP or Finance) is being undone from the request's current status, and
+// gates on the caller's desk; the role list here is only a coarse first filter.
+router.post('/reconciliations/:requestId/reverse', authenticateToken, requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN), reconciliationController.reverseReconciliation.bind(reconciliationController));
+router.get('/reconciliations/:requestId/can-reverse', authenticateToken, requireRole(ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.FINANCE_CLERK, ROLES.ADMIN), reconciliationController.canReverseReconciliation.bind(reconciliationController));
 
 // ============================================================================
 // ATTACHMENT ROUTES
@@ -183,6 +189,10 @@ router.delete('/attachments/:id', authenticateToken, attachmentController.delete
 // ============================================================================
 
 router.get('/procurement/dashboard', authenticateToken, procurementController.getDashboardStats.bind(procurementController));
+// Procurement reports & analytics. Same permission gate as the financial reports
+// (/budgets/reports); the per-role data scoping happens inside the service.
+// Declared before '/procurement/requests/:id' so 'reports' is never taken as an id.
+router.get('/procurement/reports', authenticateToken, requirePermission(PERMISSIONS.VIEW_REPORTS), procurementController.getProcurementReports.bind(procurementController));
 router.get('/procurement/requests', authenticateToken, procurementController.getPurchaseRequests.bind(procurementController));
 router.post('/procurement/requests', authenticateToken, procurementController.createPurchaseRequest.bind(procurementController));
 router.get('/procurement/requests/:id', authenticateToken, procurementController.getPurchaseRequestById.bind(procurementController));
@@ -374,6 +384,8 @@ router.get('/hr/leave-analytics', authenticateToken, hrController.getLeaveAnalyt
 // --- Accrual history (own, or an individual you can already see) -----------
 router.get('/hr/my-accruals', authenticateToken, hrController.getMyAccrualHistory.bind(hrController));
 router.get('/hr/employees/:employeeId/accruals', authenticateToken, hrController.getEmployeeAccrualHistory.bind(hrController));
+// Full leave picture for one employee: balances, accruals, adjustments, requests.
+router.get('/hr/employees/:employeeId/leave-statement', authenticateToken, hrController.getEmployeeLeaveStatement.bind(hrController));
 // Who accrues, and how fast — HR Office / Super Admin only.
 router.put('/hr/employees/:employeeId/accrual-settings', authenticateToken, hrController.updateAccrualSettings.bind(hrController));
 

@@ -37,6 +37,7 @@ import {
   Remove as RemoveIcon,
   Search as SearchIcon,
   ListAlt as RegisterIcon,
+  Visibility as ViewIcon,
 } from '@mui/icons-material';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -47,15 +48,15 @@ import { toast } from 'react-toastify';
 import {
   getLeaveAnalytics, runLeaveAccrual, downloadLeaveRegisterPDF, downloadLeaveExcel,
   getLeaveRegister, getAccrualReport, adjustLeaveBalance, getLeaveAdjustments,
-  getLeaveTypes,
+  getLeaveTypes, getEmployeeLeaveStatement,
 } from '../../services/hrService';
 import {
   HRLeaveAnalytics, HRLeaveRegisterRow, HRAccrualReport, HRLeaveAdjustment,
-  HRLeaveType,
+  HRLeaveType, HRLeaveStatement,
 } from '../../types';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
-import { formatDateTime } from '../../utils/datetime';
+import { formatDate, formatDateTime } from '../../utils/datetime';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -121,6 +122,16 @@ const LeaveAnalyticsPage: React.FC = () => {
   const [accrual, setAccrual]         = useState<HRAccrualReport | null>(null);
   const [adjustments, setAdjustments] = useState<HRLeaveAdjustment[]>([]);
   const [leaveTypes, setLeaveTypes]   = useState<HRLeaveType[]>([]);
+
+  /**
+   * Per-employee drill-down. The register shows the totals; this shows the
+   * events that produced them, so a queried balance can be reconciled on the
+   * spot instead of by cross-reading three other screens.
+   */
+  const [statementFor, setStatementFor] = useState<HRLeaveRegisterRow | null>(null);
+  const [statement, setStatement] = useState<HRLeaveStatement | null>(null);
+  const [statementLoading, setStatementLoading] = useState(false);
+  const [statementTab, setStatementTab] = useState(0);
 
   /** Manual top-up / deduction dialog. */
   const [adjDialog, setAdjDialog] = useState<{
@@ -200,6 +211,20 @@ const LeaveAnalyticsPage: React.FC = () => {
 
   /** The accrued pool — the only balance a manual adjustment can meaningfully move. */
   const accrualType = leaveTypes.find((t) => truthy(t.is_accrual_target));
+
+  const openStatement = async (row: HRLeaveRegisterRow) => {
+    setStatementFor(row);
+    setStatement(null);
+    setStatementTab(0);
+    setStatementLoading(true);
+    try {
+      setStatement(await getEmployeeLeaveStatement(row.employee_id, { year }));
+    } catch {
+      toast.error(`Could not load the leave record for ${row.employee_name}`);
+    } finally {
+      setStatementLoading(false);
+    }
+  };
 
   const openAdjust = (row: HRLeaveRegisterRow) => {
     setAdjMode('ADD');
@@ -804,7 +829,7 @@ const LeaveAnalyticsPage: React.FC = () => {
                         {regPeriodActive ? 'Pending (period)' : 'Pending'}
                       </TableCell>
                       <TableCell sx={{ fontWeight: 700 }} align="right">Remaining</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }} align="center">Adjust</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }} align="center">Actions</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -873,6 +898,11 @@ const LeaveAnalyticsPage: React.FC = () => {
                               </Typography>
                             </TableCell>
                             <TableCell align="center">
+                              <Tooltip title="View full leave record — accruals, requests and adjustments">
+                                <IconButton size="small" color="primary" onClick={() => openStatement(r)}>
+                                  <ViewIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
                               <Tooltip title="Top up or deduct days">
                                 <IconButton size="small" color="primary" onClick={() => openAdjust(r)}>
                                   <AdjustIcon fontSize="small" />
@@ -1150,6 +1180,290 @@ const LeaveAnalyticsPage: React.FC = () => {
           >
             {adjMode === 'ADD' ? 'Credit days' : 'Deduct days'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ═══════════════ Employee leave statement ═══════════════ */}
+      <Dialog
+        open={Boolean(statementFor)}
+        onClose={() => setStatementFor(null)}
+        maxWidth="lg" fullWidth
+      >
+        <DialogTitle sx={{ pb: 1 }}>
+          <Typography variant="h6" fontWeight={700}>
+            {statementFor?.employee_name} — Leave Record {year}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {statementFor?.employee_number || '—'}
+            {statementFor?.position_title ? ` • ${statementFor.position_title}` : ''}
+            {statementFor?.department_name ? ` • ${statementFor.department_name}` : ''}
+          </Typography>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          {statementLoading ? (
+            <Box display="flex" justifyContent="center" p={6}><CircularProgress /></Box>
+          ) : !statement ? (
+            <Box p={4}>
+              <Alert severity="info">No leave record available for this employee.</Alert>
+            </Box>
+          ) : (
+            <>
+              {/* The four figures that make up the balance, in the order they
+                  combine: accrued + adjusted − taken = remaining. */}
+              <Grid container spacing={2} sx={{ p: 2 }}>
+                <Grid item xs={6} md={3}>
+                  <Stat label="ACCRUED" value={days(statement.totals.accrued)}
+                        hint={`${statement.months_covered} month(s) credited`} />
+                </Grid>
+                <Grid item xs={6} md={3}>
+                  <Stat label="ADJUSTMENTS" value={days(statement.totals.adjusted)}
+                        hint="manual credits and deductions"
+                        color={Number(statement.totals.adjusted) < 0 ? theme.palette.error.main : undefined} />
+                </Grid>
+                <Grid item xs={6} md={3}>
+                  <Stat label="TAKEN" value={days(statement.totals.taken)}
+                        hint="approved, deductible days" />
+                </Grid>
+                <Grid item xs={6} md={3}>
+                  <Stat label="NET BALANCE" value={days(statement.totals.net)}
+                        hint="accrued + adjustments − taken"
+                        color={Number(statement.totals.net) < 0
+                          ? theme.palette.error.main
+                          : theme.palette.success.main} />
+                </Grid>
+              </Grid>
+
+              <Divider />
+              <Tabs
+                value={statementTab}
+                onChange={(_, v) => setStatementTab(v)}
+                variant="scrollable" scrollButtons="auto"
+                sx={{ px: 2, borderBottom: '1px solid', borderColor: 'divider' }}
+              >
+                <Tab label={`Statement (${statement.events.length})`} />
+                <Tab label={`Requests (${statement.request_totals.count})`} />
+                <Tab label={`Accruals (${statement.accruals.length})`} />
+                <Tab label={`Adjustments (${statement.adjustments.length})`} />
+                <Tab label={`Balances (${statement.balances.length})`} />
+              </Tabs>
+
+              {/* ── Running statement ── */}
+              {statementTab === 0 && (
+                statement.events.length === 0 ? (
+                  <Box p={4}><Alert severity="info">Nothing has moved this balance yet.</Alert></Box>
+                ) : (
+                  <TableContainer sx={{ maxHeight: 420 }}>
+                    <Table size="small" stickyHeader>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Event</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Detail</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Days</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Balance</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {statement.events.map((e, i) => (
+                          <TableRow key={i} hover>
+                            <TableCell>{formatDateTime(e.date)}</TableCell>
+                            <TableCell>
+                              <Chip
+                                size="small"
+                                label={e.label}
+                                color={e.type === 'LEAVE_TAKEN' ? 'warning'
+                                  : e.type === 'DEDUCTION' ? 'error'
+                                  : e.type === 'TOP_UP' ? 'success' : 'default'}
+                                variant="outlined"
+                                sx={{ height: 22 }}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Typography variant="caption" color="text.secondary">{e.detail}</Typography>
+                            </TableCell>
+                            <TableCell align="right">
+                              <Typography variant="body2" fontWeight={700}
+                                color={e.days < 0 ? 'error.main' : 'success.main'}>
+                                {e.days > 0 ? '+' : ''}{days(e.days)}
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="right">{days(e.balance_after)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )
+              )}
+
+              {/* ── Every request, whatever its status ── */}
+              {statementTab === 1 && (
+                statement.requests.length === 0 ? (
+                  <Box p={4}><Alert severity="info">No leave requested in {year}.</Alert></Box>
+                ) : (
+                  <TableContainer sx={{ maxHeight: 420 }}>
+                    <Table size="small" stickyHeader>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>From</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>To</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Requested</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Deducted</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Approver</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Reason</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {statement.requests.map((r) => (
+                          <TableRow key={r.id} hover>
+                            <TableCell>{r.leave_type_name}</TableCell>
+                            <TableCell>{formatDate(r.start_date)}</TableCell>
+                            <TableCell>{formatDate(r.end_date)}</TableCell>
+                            <TableCell align="right">{days(r.days_requested)}</TableCell>
+                            <TableCell align="right">{days(r.deductible_days)}</TableCell>
+                            <TableCell>
+                              <Chip
+                                size="small" label={r.status}
+                                color={r.status === 'APPROVED' ? 'success'
+                                  : r.status === 'PENDING' ? 'warning'
+                                  : r.status === 'REJECTED' ? 'error' : 'default'}
+                                sx={{ height: 22 }}
+                              />
+                            </TableCell>
+                            <TableCell>{r.approved_by_name || '—'}</TableCell>
+                            <TableCell>
+                              <Typography variant="caption" color="text.secondary">
+                                {r.rejection_reason || r.reason || '—'}
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )
+              )}
+
+              {/* ── Monthly accruals ── */}
+              {statementTab === 2 && (
+                statement.accruals.length === 0 ? (
+                  <Box p={4}><Alert severity="info">No accruals credited in {year}.</Alert></Box>
+                ) : (
+                  <TableContainer sx={{ maxHeight: 420 }}>
+                    <Table size="small" stickyHeader>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 700 }}>Month</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Leave Type</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Days Added</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Credited</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Run By</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {statement.accruals.map((a, i) => (
+                          <TableRow key={i} hover>
+                            <TableCell>{MONTHS[a.accrual_month - 1] || a.accrual_month} {a.fiscal_year}</TableCell>
+                            <TableCell>{a.leave_type_name}</TableCell>
+                            <TableCell align="right">{days(a.days_added)}</TableCell>
+                            <TableCell>{formatDateTime(a.created_at)}</TableCell>
+                            <TableCell>{a.triggered_by_name || 'Automatic'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )
+              )}
+
+              {/* ── Manual adjustments ── */}
+              {statementTab === 3 && (
+                statement.adjustments.length === 0 ? (
+                  <Box p={4}><Alert severity="info">No manual adjustments in {year}.</Alert></Box>
+                ) : (
+                  <TableContainer sx={{ maxHeight: 420 }}>
+                    <Table size="small" stickyHeader>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Leave Type</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Days</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Reason</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>By</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {statement.adjustments.map((a, i) => (
+                          <TableRow key={i} hover>
+                            <TableCell>{formatDateTime(a.created_at)}</TableCell>
+                            <TableCell>{a.leave_type_name}</TableCell>
+                            <TableCell align="right">
+                              <Typography variant="body2" fontWeight={700}
+                                color={Number(a.adjustment_days) < 0 ? 'error.main' : 'success.main'}>
+                                {Number(a.adjustment_days) > 0 ? '+' : ''}{days(a.adjustment_days)}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>{a.reason}</TableCell>
+                            <TableCell>{a.adjusted_by_name || '—'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )
+              )}
+
+              {/* ── Balance per leave type ── */}
+              {statementTab === 4 && (
+                statement.balances.length === 0 ? (
+                  <Box p={4}><Alert severity="info">No balance rows for {year} yet.</Alert></Box>
+                ) : (
+                  <TableContainer sx={{ maxHeight: 420 }}>
+                    <Table size="small" stickyHeader>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 700 }}>Leave Type</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Entitlement</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Brought Forward</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Taken</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Pending</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Remaining</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {statement.balances.map((b) => (
+                          <TableRow key={b.leave_type_id} hover>
+                            <TableCell>{b.leave_type_name}</TableCell>
+                            <TableCell align="right">{days(b.total_days)}</TableCell>
+                            <TableCell align="right">{days(b.carried_forward)}</TableCell>
+                            <TableCell align="right">{days(b.used_days)}</TableCell>
+                            <TableCell align="right">{days(b.pending_days)}</TableCell>
+                            <TableCell align="right">
+                              <Typography variant="body2" fontWeight={700}>{days(b.remaining_days)}</Typography>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )
+              )}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {statementFor && (
+            <Button
+              startIcon={<AdjustIcon />}
+              onClick={() => { const row = statementFor; setStatementFor(null); openAdjust(row); }}
+            >
+              Adjust balance
+            </Button>
+          )}
+          <Box flex={1} />
+          <Button onClick={() => setStatementFor(null)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>

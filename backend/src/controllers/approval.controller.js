@@ -7,6 +7,7 @@ const { validationResult } = require('express-validator');
 const { ROLES, REQUEST_STATUS, isFinanceManager } = require('../config/roles');
 const { query } = require('../config/database');
 const approvalService = require('../services/approval.service');
+const reconciliationService = require('../services/reconciliation.service');
 
 class ApprovalController {
 
@@ -30,6 +31,31 @@ class ApprovalController {
       const approverRole = req.user.role;
       const ipAddress = req.ip;
       const isFinanceManager = req.user.department_code === 'FOS' || req.user.role === ROLES.ADMIN;
+
+      // ── Stale reconciliation gate ────────────────────────────────────────
+      // A Lead/HOP who has left two or more reconciliations sitting on their
+      // review desk for four working days or more may not approve float
+      // requests until they have cleared them. They keep full read access, and
+      // rejecting stays open; only approval is withheld. Super Admin and anyone
+      // without a lead-review desk are never affected — getLeadDeskBacklog()
+      // returns clear for them.
+      //
+      // Enforced here rather than in each approveAs* method because this is the
+      // single door every float approval goes through, whatever the approver's
+      // role or the stage the request sits at.
+      try {
+        await reconciliationService.assertLeadDeskClear(req.user);
+      } catch (backlogError) {
+        if (backlogError.code === 'RECON_BACKLOG_BLOCKED') {
+          return res.status(403).json({
+            success: false,
+            error: backlogError.message,
+            code: backlogError.code,
+            data: backlogError.backlog
+          });
+        }
+        throw backlogError;
+      }
 
       // Peek at the request's current status
       const reqRows = await query('SELECT status FROM requests WHERE id = ?', [requestId]);

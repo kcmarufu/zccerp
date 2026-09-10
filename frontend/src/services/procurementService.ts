@@ -25,6 +25,34 @@ export const getProcurementDashboard = async (): Promise<ProcDashboardStats> => 
 };
 
 // ============================================================================
+// REPORTS & ANALYTICS
+// ============================================================================
+
+export interface ProcReportFilters {
+  dateFrom?: string;
+  dateTo?: string;
+  donorId?: number;
+  projectId?: number;
+  departmentId?: number;
+  status?: string;
+}
+
+/**
+ * `scope` describes what the server decided this reader may see, so the page can
+ * label the figures honestly rather than implying they are organisation-wide.
+ */
+export interface ProcReportScope {
+  orgWide: boolean;
+  ownRequestsOnly: boolean;
+  departmentId: number | null;
+}
+
+export const getProcurementReports = async (filters: ProcReportFilters = {}): Promise<any> => {
+  const res = await api.get<ApiResponse<any>>(`${BASE}/reports`, { params: filters });
+  return res.data.data!;
+};
+
+// ============================================================================
 // PURCHASE REQUESTS
 // ============================================================================
 export const getPurchaseRequests = async (params?: {

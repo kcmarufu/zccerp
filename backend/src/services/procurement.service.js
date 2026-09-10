@@ -1580,6 +1580,355 @@ class ProcurementService {
       recentRequests
     };
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PROCUREMENT REPORTS & ANALYTICS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Who sees the whole organisation's procurement, and who sees only their own
+   * department. Deliberately the same rule the financial reports use
+   * (canViewAllBudgetLines in budget.controller.js): Finance managers, Finance
+   * Clerks, Admin/HR managers and Admin read across every department; everyone
+   * else is scoped to theirs.
+   *
+   * Procurement Officers and Committee members are added to the org-wide side
+   * because the pipeline they already work is org-wide — both roles see every
+   * request from the procurement stage onward in the request list, so scoping
+   * their report to one department would report less than the queue they
+   * action daily.
+   */
+  canViewAllProcurement(user) {
+    if (!user) return false;
+    if (user.role === ROLES.ADMIN) return true;
+    if (user.role === ROLES.FINANCE_CLERK) return true;
+    if (user.role === ROLES.PROCUREMENT_OFFICER) return true;
+    if (user.role === ROLES.PROCUREMENT_COMMITTEE) return true;
+    if (isAdminHrManager(user)) return true;
+    // Finance's own HOP/Lead — the finance-manager seat.
+    return [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role) &&
+      user.department_code === FINANCE_DEPT_CODE;
+  }
+
+  /**
+   * Procurement reports and analytics.
+   *
+   * Scope rules, in one place so every section below agrees with the others:
+   *   - org-wide readers  → no department restriction
+   *   - department readers→ requests raised by, or routed to, their department
+   *   - GENERAL_USER      → only the requests they raised themselves, matching
+   *                         what they can already open in the request list
+   *
+   * A report that showed a general user department-wide figures would leak
+   * spending they cannot see request-by-request, so the narrowest rule wins.
+   */
+  async getProcurementReports(user, filters = {}) {
+    const { dateFrom, dateTo, donorId, projectId, departmentId, status } = filters;
+
+    // ── Scope ────────────────────────────────────────────────────────────────
+    const scopeClauses = [];
+    const scopeParams = [];
+    const orgWide = this.canViewAllProcurement(user);
+
+    if (user.role === ROLES.GENERAL_USER) {
+      scopeClauses.push('pr.requester_id = ?');
+      scopeParams.push(user.id);
+    } else if (!orgWide) {
+      scopeClauses.push('(pr.department_id = ? OR pr.routing_department_id = ?)');
+      scopeParams.push(user.department_id, user.department_id);
+    }
+
+    // An org-wide reader may narrow to one department; a scoped reader cannot
+    // widen past their own, so the filter is only honoured for the former.
+    if (departmentId && orgWide) {
+      scopeClauses.push('(pr.department_id = ? OR pr.routing_department_id = ?)');
+      scopeParams.push(parseInt(departmentId), parseInt(departmentId));
+    }
+    if (dateFrom) { scopeClauses.push('pr.created_at >= ?'); scopeParams.push(`${dateFrom} 00:00:00`); }
+    if (dateTo)   { scopeClauses.push('pr.created_at <= ?'); scopeParams.push(`${dateTo} 23:59:59`); }
+    if (donorId)   { scopeClauses.push('pr.donor_id = ?');   scopeParams.push(parseInt(donorId)); }
+    if (projectId) { scopeClauses.push('pr.project_id = ?'); scopeParams.push(parseInt(projectId)); }
+    if (status)    { scopeClauses.push('pr.status = ?');     scopeParams.push(status); }
+
+    const where = scopeClauses.length ? `WHERE ${scopeClauses.join(' AND ')}` : '';
+    const P = () => [...scopeParams];
+
+    // ── 1. Headline totals ───────────────────────────────────────────────────
+    // `awarded_amount` follows the selected quotation where one exists and the
+    // estimate otherwise: reporting the estimate on a completed purchase would
+    // overstate or understate what was actually committed.
+    const [totals] = await query(
+      `SELECT
+         COUNT(*)                                                   AS total_requests,
+         COALESCE(SUM(pr.total_estimated_amount), 0)                AS total_estimated,
+         COALESCE(SUM(CASE WHEN pr.status = 'COMPLETED'
+                           THEN pr.total_estimated_amount END), 0)  AS completed_value,
+         COALESCE(SUM(CASE WHEN pr.status = 'REJECTED'
+                           THEN pr.total_estimated_amount END), 0)  AS rejected_value,
+         COALESCE(SUM(CASE WHEN pr.status NOT IN ('COMPLETED','REJECTED','CANCELLED','DRAFT')
+                           THEN pr.total_estimated_amount END), 0)  AS in_flight_value,
+         SUM(pr.status = 'COMPLETED')                               AS completed_count,
+         SUM(pr.status = 'REJECTED')                                AS rejected_count,
+         SUM(pr.status = 'DRAFT')                                   AS draft_count,
+         SUM(pr.status NOT IN ('COMPLETED','REJECTED','CANCELLED','DRAFT')) AS in_flight_count,
+         ROUND(AVG(CASE WHEN pr.completed_at IS NOT NULL AND pr.submitted_at IS NOT NULL
+                        THEN TIMESTAMPDIFF(HOUR, pr.submitted_at, pr.completed_at) / 24 END), 1)
+                                                                    AS avg_cycle_days
+       FROM proc_requests pr ${where}`,
+      P()
+    );
+
+    // ── 2. Pipeline by status ────────────────────────────────────────────────
+    const statusSummary = await query(
+      `SELECT pr.status,
+              COUNT(*) AS request_count,
+              COALESCE(SUM(pr.total_estimated_amount), 0) AS total_value,
+              ROUND(AVG(TIMESTAMPDIFF(HOUR, pr.updated_at, NOW()) / 24), 1) AS avg_days_in_status
+         FROM proc_requests pr ${where}
+        GROUP BY pr.status
+        ORDER BY total_value DESC`,
+      P()
+    );
+
+    // ── 3. By department ─────────────────────────────────────────────────────
+    const departmentSummary = await query(
+      `SELECT d.id AS department_id, d.department_code, d.department_name,
+              COUNT(*) AS request_count,
+              COALESCE(SUM(pr.total_estimated_amount), 0) AS total_value,
+              SUM(pr.status = 'COMPLETED')  AS completed_count,
+              SUM(pr.status = 'REJECTED')   AS rejected_count,
+              ROUND(COALESCE(SUM(pr.status = 'REJECTED') / NULLIF(COUNT(*), 0) * 100, 0), 1) AS rejection_rate,
+              ROUND(AVG(CASE WHEN pr.completed_at IS NOT NULL AND pr.submitted_at IS NOT NULL
+                             THEN TIMESTAMPDIFF(HOUR, pr.submitted_at, pr.completed_at) / 24 END), 1) AS avg_cycle_days
+         FROM proc_requests pr
+         JOIN departments d ON d.id = COALESCE(pr.routing_department_id, pr.department_id)
+         ${where}
+        GROUP BY d.id, d.department_code, d.department_name
+        ORDER BY total_value DESC`,
+      P()
+    );
+
+    // ── 4. By partner (donor) ────────────────────────────────────────────────
+    const donorSummary = await query(
+      `SELECT don.id AS donor_id, don.donor_code, don.donor_name, don.currency_code,
+              COUNT(*) AS request_count,
+              COALESCE(SUM(pr.total_estimated_amount), 0) AS total_value,
+              SUM(pr.status = 'COMPLETED') AS completed_count,
+              SUM(pr.status = 'REJECTED')  AS rejected_count
+         FROM proc_requests pr
+         JOIN donors don ON don.id = pr.donor_id
+         ${where}
+        GROUP BY don.id, don.donor_code, don.donor_name, don.currency_code
+        ORDER BY total_value DESC`,
+      P()
+    );
+
+    // ── 5. By project ────────────────────────────────────────────────────────
+    const projectSummary = await query(
+      `SELECT p.id AS project_id, p.project_code, p.project_name,
+              don.donor_code,
+              COUNT(*) AS request_count,
+              COALESCE(SUM(pr.total_estimated_amount), 0) AS total_value,
+              SUM(pr.status = 'COMPLETED') AS completed_count
+         FROM proc_requests pr
+         JOIN projects p ON p.id = pr.project_id
+         LEFT JOIN donors don ON don.id = p.donor_id
+         ${where}
+        GROUP BY p.id, p.project_code, p.project_name, don.donor_code
+        ORDER BY total_value DESC
+        LIMIT 50`,
+      P()
+    );
+
+    // ── 6. What is actually being bought ─────────────────────────────────────
+    // Grouped by the budget line's category, which is the only classification
+    // procurement items carry; items with no budget line fall under
+    // 'Uncategorised' rather than being dropped from the totals.
+    const categorySummary = await query(
+      `SELECT COALESCE(bl.category, 'Uncategorised') AS category,
+              COUNT(DISTINCT pr.id) AS request_count,
+              COUNT(pri.id)         AS item_count,
+              COALESCE(SUM(pri.quantity * pri.estimated_unit_price), 0) AS total_value
+         FROM proc_requests pr
+         JOIN proc_request_items pri ON pri.request_id = pr.id
+         LEFT JOIN budget_lines bl   ON bl.id = pri.budget_line_id
+         ${where}
+        GROUP BY COALESCE(bl.category, 'Uncategorised')
+        ORDER BY total_value DESC`,
+      P()
+    );
+
+    // ── 7. Vendor performance ────────────────────────────────────────────────
+    // Win rate is the point of this table: how often a vendor that is asked for
+    // a quotation actually gets the business, and what that business is worth.
+    const vendorSummary = await query(
+      `SELECT q.vendor_name,
+              v.vendor_code,
+              v.is_prequalified,
+              v.rating,
+              COUNT(*)                                        AS quotations_submitted,
+              SUM(q.is_selected = 1)                          AS quotations_won,
+              ROUND(COALESCE(SUM(q.is_selected = 1) / NULLIF(COUNT(*), 0) * 100, 0), 1) AS win_rate,
+              COALESCE(SUM(CASE WHEN q.is_selected = 1 THEN q.total_amount END), 0) AS awarded_value,
+              ROUND(AVG(q.total_amount), 2)                   AS avg_quotation_value
+         FROM proc_quotations q
+         JOIN proc_requests pr  ON pr.id = q.request_id
+         LEFT JOIN proc_vendors v ON v.id = q.vendor_id
+         ${where}
+        GROUP BY q.vendor_name, v.vendor_code, v.is_prequalified, v.rating
+        ORDER BY awarded_value DESC, quotations_submitted DESC
+        LIMIT 50`,
+      P()
+    );
+
+    // ── 8. Competition check ─────────────────────────────────────────────────
+    // Requests that reached the procurement stage with fewer than three
+    // quotations — the figure an auditor asks for first.
+    const [competition] = await query(
+      `SELECT
+         COUNT(*) AS sourced_requests,
+         SUM(quote_count >= 3) AS with_three_or_more,
+         SUM(quote_count = 0)  AS with_none,
+         ROUND(AVG(quote_count), 2) AS avg_quotations_per_request,
+         COALESCE(SUM(CASE WHEN quote_count > 0 AND quote_count < 3 THEN 1 ELSE 0 END), 0) AS under_three
+       FROM (
+         SELECT pr.id, COUNT(q.id) AS quote_count
+           FROM proc_requests pr
+           LEFT JOIN proc_quotations q ON q.request_id = pr.id
+           ${where}
+           ${where ? 'AND' : 'WHERE'} pr.status IN
+             ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_FINAL_FINANCE','COMPLETED')
+          GROUP BY pr.id
+       ) t`,
+      P()
+    );
+
+    // ── 9. Savings against estimate ──────────────────────────────────────────
+    // Selected quotation vs. the requester's estimate, per request.
+    const savings = await query(
+      `SELECT pr.id, pr.request_code, pr.title,
+              pr.total_estimated_amount AS estimated,
+              q.total_amount            AS awarded,
+              q.vendor_name,
+              (pr.total_estimated_amount - q.total_amount) AS variance
+         FROM proc_requests pr
+         JOIN proc_quotations q ON q.request_id = pr.id AND q.is_selected = 1
+         ${where}
+        ORDER BY ABS(pr.total_estimated_amount - q.total_amount) DESC
+        LIMIT 25`,
+      P()
+    );
+
+    // ── 10. Monthly trend ────────────────────────────────────────────────────
+    const monthlyTrend = await query(
+      `SELECT DATE_FORMAT(pr.created_at, '%Y-%m') AS period,
+              COUNT(*) AS request_count,
+              COALESCE(SUM(pr.total_estimated_amount), 0) AS total_value,
+              SUM(pr.status = 'COMPLETED') AS completed_count
+         FROM proc_requests pr ${where}
+        GROUP BY DATE_FORMAT(pr.created_at, '%Y-%m')
+        ORDER BY period`,
+      P()
+    );
+
+    // ── 11. Stage cycle times ────────────────────────────────────────────────
+    // Where requests actually sit. Each leg is measured only on requests that
+    // have passed it, so an empty pipeline stage reports no time rather than
+    // dragging the average toward zero.
+    const [cycleTimes] = await query(
+      `SELECT
+         ROUND(AVG(CASE WHEN pr.dept_approved_at IS NOT NULL AND pr.submitted_at IS NOT NULL
+                        THEN TIMESTAMPDIFF(HOUR, pr.submitted_at, pr.dept_approved_at) / 24 END), 1) AS submit_to_dept,
+         ROUND(AVG(CASE WHEN pr.finance_approved_at IS NOT NULL AND pr.dept_approved_at IS NOT NULL
+                        THEN TIMESTAMPDIFF(HOUR, pr.dept_approved_at, pr.finance_approved_at) / 24 END), 1) AS dept_to_finance,
+         ROUND(AVG(CASE WHEN pr.committee_reviewed_at IS NOT NULL AND pr.procurement_assigned_at IS NOT NULL
+                        THEN TIMESTAMPDIFF(HOUR, pr.procurement_assigned_at, pr.committee_reviewed_at) / 24 END), 1) AS sourcing_to_committee,
+         ROUND(AVG(CASE WHEN pr.final_finance_approved_at IS NOT NULL AND pr.committee_reviewed_at IS NOT NULL
+                        THEN TIMESTAMPDIFF(HOUR, pr.committee_reviewed_at, pr.final_finance_approved_at) / 24 END), 1) AS committee_to_final,
+         ROUND(AVG(CASE WHEN pr.completed_at IS NOT NULL AND pr.submitted_at IS NOT NULL
+                        THEN TIMESTAMPDIFF(HOUR, pr.submitted_at, pr.completed_at) / 24 END), 1) AS end_to_end
+       FROM proc_requests pr ${where}`,
+      P()
+    );
+
+    // ── 12. Ageing pipeline ──────────────────────────────────────────────────
+    // Open requests ordered by how long they have been untouched — the working
+    // list for whoever is chasing the backlog.
+    const ageingRequests = await query(
+      `SELECT pr.id, pr.request_code, pr.title, pr.status, pr.priority,
+              pr.total_estimated_amount,
+              d.department_code, don.donor_code,
+              CONCAT(u.first_name, ' ', u.last_name) AS requester_name,
+              DATEDIFF(NOW(), pr.updated_at) AS days_in_current_stage,
+              DATEDIFF(NOW(), COALESCE(pr.submitted_at, pr.created_at)) AS days_since_submission
+         FROM proc_requests pr
+         JOIN users u        ON u.id = pr.requester_id
+         JOIN departments d  ON d.id = pr.department_id
+         LEFT JOIN donors don ON don.id = pr.donor_id
+         ${where}
+         ${where ? 'AND' : 'WHERE'} pr.status NOT IN ('COMPLETED','REJECTED','CANCELLED','DRAFT')
+        ORDER BY days_in_current_stage DESC
+        LIMIT 50`,
+      P()
+    );
+
+    // ── 13. Rejections ───────────────────────────────────────────────────────
+    const rejectionSummary = await query(
+      `SELECT pal.actor_role AS rejected_by_role,
+              pal.previous_status AS rejected_at_stage,
+              COUNT(*) AS rejection_count,
+              COALESCE(SUM(pr.total_estimated_amount), 0) AS total_value
+         FROM proc_approval_logs pal
+         JOIN proc_requests pr ON pr.id = pal.request_id
+         ${where}
+         ${where ? 'AND' : 'WHERE'} pal.action = 'REJECTED'
+        GROUP BY pal.actor_role, pal.previous_status
+        ORDER BY rejection_count DESC`,
+      P()
+    );
+
+    // ── 14. High-value requests ──────────────────────────────────────────────
+    // The USD 5,000 threshold that triggers dual Super Admin + department approval.
+    const highValueRequests = await query(
+      `SELECT pr.id, pr.request_code, pr.title, pr.status,
+              pr.total_estimated_amount,
+              q.total_amount AS selected_quotation_amount,
+              q.vendor_name,
+              d.department_code, don.donor_code
+         FROM proc_requests pr
+         LEFT JOIN proc_quotations q ON q.request_id = pr.id AND q.is_selected = 1
+         JOIN departments d ON d.id = pr.department_id
+         LEFT JOIN donors don ON don.id = pr.donor_id
+         ${where}
+         ${where ? 'AND' : 'WHERE'} COALESCE(q.total_amount, pr.total_estimated_amount) >= 5000
+        ORDER BY COALESCE(q.total_amount, pr.total_estimated_amount) DESC
+        LIMIT 50`,
+      P()
+    );
+
+    return {
+      scope: {
+        orgWide,
+        ownRequestsOnly: user.role === ROLES.GENERAL_USER,
+        departmentId: orgWide ? null : user.department_id
+      },
+      totals: totals || {},
+      statusSummary,
+      departmentSummary,
+      donorSummary,
+      projectSummary,
+      categorySummary,
+      vendorSummary,
+      competition: competition || {},
+      savings,
+      monthlyTrend,
+      cycleTimes: cycleTimes || {},
+      ageingRequests,
+      rejectionSummary,
+      highValueRequests
+    };
+  }
+
 }
 
 module.exports = new ProcurementService();

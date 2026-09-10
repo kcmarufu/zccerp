@@ -3,7 +3,7 @@
  * Float Request with currency selection, admin routing, and file uploads
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import {
@@ -153,6 +153,7 @@ const RequestForm: React.FC = () => {
     watch,
     reset,
     setValue,
+    getValues,
     formState: { errors }
   } = useForm<RequestFormData>({
     defaultValues: {
@@ -245,6 +246,7 @@ const RequestForm: React.FC = () => {
 
   // When project changes, fetch its budget lines and check for cross-dept routing
   useEffect(() => {
+    let clearedLines = false;
     setBudgetLines([]);
     setCrossDeptWarning(null);
     if (!selectedProject) return;
@@ -263,7 +265,31 @@ const RequestForm: React.FC = () => {
 
     setLoadingBudgetLines(true);
     projectService.getProjectBudgetLines(selectedProject.id, { is_active: true })
-      .then(setBudgetLines)
+      .then((loaded) => {
+        setBudgetLines(loaded);
+
+        // Drop any budget line that does not belong to the project now selected.
+        //
+        // Clearing `budgetLines` alone only blanked the dropdowns: each row kept
+        // the old project's id in form state, so reassigning a rejected request
+        // to another partner and saving without touching the item rows sent the
+        // previous partner's budget lines back to the server. The request then
+        // named one partner in its header and drew on another partner's budget.
+        // The server refuses that now; clearing it here means the requester is
+        // shown empty "Budget Line" cells to refill rather than a save error.
+        const validIds = new Set(loaded.map(bl => bl.id));
+        const current = getValues('items') || [];
+        current.forEach((item, index) => {
+          const lineId = Number(item?.budgetLineId) || 0;
+          if (lineId && !validIds.has(lineId)) {
+            setValue(`items.${index}.budgetLineId`, '', { shouldValidate: false, shouldDirty: true });
+            clearedLines = true;
+          }
+        });
+        if (clearedLines) {
+          toast.info('Budget lines were cleared because the project changed. Please pick a budget line for each item.');
+        }
+      })
       .catch(() => toast.error('Failed to load budget lines'))
       .finally(() => setLoadingBudgetLines(false));
   }, [selectedProject, user?.department_id]);
@@ -424,12 +450,61 @@ const RequestForm: React.FC = () => {
     return watchedItems.reduce((sum, item) => sum + ((item?.quantity || 1) * (item?.unitPrice || 0)), 0);
   }, [watchedItems]);
 
+  // ── Budget headroom, measured per budget line rather than per item ────────
+  //
+  // Several items routinely share one budget line, so an item-by-item check
+  // answers the wrong question: against a 500 line, a 400 item and a 200 item
+  // each looked fine on its own while the pair overspent it by 100. What the
+  // budget actually constrains is the *total* this request draws on each line,
+  // so the items are grouped by line first and the group total is what gets
+  // compared. The server enforces the same rule — this is the early warning
+  // that keeps a requester from filling in a whole form only to be refused.
+  //
+  // Cents throughout: repeated float addition otherwise reports a request that
+  // exactly fills a line as a fraction of a cent over it.
+  const toCents = (n: number) => Math.round((Number(n) || 0) * 100);
+
+  const budgetUsageByLine = useMemo(() => {
+    const usage = new Map<number, number>();
+    (watchedItems || []).forEach(item => {
+      const lineId = Number(item?.budgetLineId) || 0;
+      if (!lineId) return;
+      usage.set(lineId, (usage.get(lineId) || 0) + toCents((item?.quantity || 1) * (item?.unitPrice || 0)));
+    });
+    return usage;
+  }, [watchedItems]);
+
+  // Every budget line this request overdraws, with the amounts needed to explain it.
+  const overBudgetLines = useMemo(() => {
+    const over: { lineId: number; code: string; name: string; requested: number; balance: number }[] = [];
+    budgetUsageByLine.forEach((requestedCents, lineId) => {
+      const budgetLine = budgetLines.find(bl => bl.id === lineId);
+      if (!budgetLine) return;
+      const balanceCents = toCents(budgetLine.balance);
+      if (requestedCents > balanceCents) {
+        over.push({
+          lineId,
+          code: budgetLine.budget_code,
+          name: budgetLine.budget_name,
+          requested: requestedCents / 100,
+          balance: balanceCents / 100
+        });
+      }
+    });
+    return over;
+  }, [budgetUsageByLine, budgetLines]);
+
+  const overBudgetLineIds = useMemo(
+    () => new Set(overBudgetLines.map(o => o.lineId)),
+    [overBudgetLines]
+  );
+
+  // A row is flagged when the budget line it charges is overdrawn by the request
+  // as a whole — so both halves of a 400 + 200 pair on a 500 line are marked,
+  // not just a single item that happens to be large on its own.
   const exceedsBudget = (item: RequestFormItem) => {
-    if (!item.budgetLineId) return false;
-    const budgetLine = budgetLines.find(bl => bl.id === item.budgetLineId);
-    if (!budgetLine) return false;
-    const itemTotal = (item.quantity || 1) * (item.unitPrice || 0);
-    return itemTotal > budgetLine.balance;
+    if (!item?.budgetLineId) return false;
+    return overBudgetLineIds.has(Number(item.budgetLineId));
   };
 
   const getBudgetBalance = (budgetLineId: number | '') => {
@@ -526,6 +601,32 @@ const RequestForm: React.FC = () => {
     }
   };
 
+  // The server answers a budget refusal with `budgetErrors` — one entry per
+  // overdrawn or mis-assigned budget line. Showing them individually tells the
+  // requester which line to fix; the old generic toast did not.
+  const reportSaveError = (error: any, fallback: string) => {
+    const budgetErrors: string[] | undefined = error?.response?.data?.budgetErrors;
+    if (budgetErrors && budgetErrors.length > 0) {
+      budgetErrors.forEach(message => toast.error(message));
+      return;
+    }
+    toast.error(error?.response?.data?.error || fallback);
+  };
+
+  // Client-side stop so an over-budget request never reaches the server. The
+  // buttons are already disabled while a line is overdrawn; this covers the
+  // form being submitted by keyboard before the recalculation lands.
+  const blockedByBudget = () => {
+    if (overBudgetLines.length === 0) return false;
+    overBudgetLines.forEach(line => {
+      toast.error(
+        `${line.code} has ${getCurrencySymbol()}${line.balance.toFixed(2)} available, ` +
+        `but this request charges ${getCurrencySymbol()}${line.requested.toFixed(2)} to it.`
+      );
+    });
+    return true;
+  };
+
   const buildPayload = (data: RequestFormData) => ({
     justification: data.justification,
     donor_id: Number(selectedDonorId),
@@ -547,6 +648,7 @@ const RequestForm: React.FC = () => {
   const handleSaveDraft = async (data: RequestFormData) => {
     if (!selectedDonorId) { toast.error('Please select a partner'); return; }
     if (!selectedProject) { toast.error('Please select a project'); return; }
+    if (blockedByBudget()) return;
     try {
       setIsSaving(true);
       const payload = buildPayload(data);
@@ -561,7 +663,12 @@ const RequestForm: React.FC = () => {
             } catch { toast.warning('Request updated but some attachments failed to upload'); }
           }
           await savePerDiemIfNeeded(Number(requestId));
-          toast.success('Request saved successfully');
+          // A partner/project change re-issues the reference number; say so
+          // explicitly, or the requester keeps quoting the code they had.
+          const newCode = updateResponse.data?.requestCode;
+          toast.success(newCode
+            ? `Request saved. New reference number: ${newCode}`
+            : 'Request saved successfully');
           navigate(`/finance/requests/${requestId}`);
         }
       } else {
@@ -580,7 +687,7 @@ const RequestForm: React.FC = () => {
         }
       }
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Failed to save request');
+      reportSaveError(error, 'Failed to save request');
     } finally {
       setIsSaving(false);
     }
@@ -589,6 +696,7 @@ const RequestForm: React.FC = () => {
   const handleSaveAndSubmit = async (data: RequestFormData) => {
     if (!selectedDonorId) { toast.error('Please select a partner'); return; }
     if (!selectedProject) { toast.error('Please select a project'); return; }
+    if (blockedByBudget()) return;
     if (data.isActivityRequest) {
       if (!data.activityStartDate) { toast.error('Activity Start Date is required for Activity Requests'); return; }
       if (!data.activityEndDate)   { toast.error('Activity End Date is required for Activity Requests'); return; }
@@ -610,8 +718,10 @@ const RequestForm: React.FC = () => {
             } catch { toast.warning('Request updated but some attachments failed to upload'); }
           }
           await savePerDiemIfNeeded(Number(requestId));
+          const newCode = updateResponse.data?.requestCode;
           const submitResponse = await requestService.submit(Number(requestId));
           if (submitResponse.success) {
+            if (newCode) toast.info(`Partner/project changed — new reference number: ${newCode}`);
             toast.success(existingStatus === 'REJECTED' ? 'Request edited and resubmitted successfully' : 'Request submitted successfully');
             navigate(`/finance/requests/${requestId}`);
           }
@@ -636,7 +746,7 @@ const RequestForm: React.FC = () => {
         }
       }
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Failed to submit request');
+      reportSaveError(error, 'Failed to submit request');
     } finally {
       setIsSubmitting(false);
     }
@@ -1083,8 +1193,19 @@ const RequestForm: React.FC = () => {
                           {getCurrencySymbol()}{itemTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </Typography>
                         {isOverBudget && (
-                          <Typography variant="caption" color="error">
-                            Exceeds budget (Bal: {getCurrencySymbol()}{balance?.toLocaleString()})
+                          <Typography variant="caption" color="error" component="div">
+                            {/* The overdraw belongs to the budget line, not to this
+                                row alone, so the row reports the line's totals —
+                                otherwise a modest item flagged red looks like a
+                                mistake in the item rather than in the line total. */}
+                            Budget line over by {getCurrencySymbol()}
+                            {(((budgetUsageByLine.get(Number(item?.budgetLineId)) || 0) / 100) - (balance || 0))
+                              .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            {' '}(this request charges {getCurrencySymbol()}
+                            {((budgetUsageByLine.get(Number(item?.budgetLineId)) || 0) / 100)
+                              .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            {' '}to it; balance {getCurrencySymbol()}
+                            {(balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
                           </Typography>
                         )}
                       </TableCell>
@@ -1161,9 +1282,28 @@ const RequestForm: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
-          {watchedItems.some(item => exceedsBudget(item)) && (
+          {overBudgetLines.length > 0 && (
             <Alert severity="error" sx={{ mt: 2 }}>
-              <strong>Budget Exceeded:</strong> One or more items exceed the available budget balance.
+              <strong>Budget exceeded — this request cannot be saved or submitted.</strong>
+              <Box component="ul" sx={{ pl: 2.5, mb: 0, mt: 1 }}>
+                {overBudgetLines.map(line => (
+                  <li key={line.lineId}>
+                    <strong>{line.code}</strong> ({line.name}) has{' '}
+                    {getCurrencySymbol()}
+                    {line.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {' '}available, but the items on this request charge{' '}
+                    {getCurrencySymbol()}
+                    {line.requested.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {' '}to it — over by {getCurrencySymbol()}
+                    {(line.requested - line.balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.
+                  </li>
+                ))}
+              </Box>
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                Amounts are totalled per budget line, so several items charged to the same
+                line count together. Reduce the amounts, or move some items to a budget line
+                that still has room.
+              </Typography>
             </Alert>
           )}
         </Paper>
@@ -1308,7 +1448,7 @@ const RequestForm: React.FC = () => {
                 variant="outlined"
                 startIcon={isSaving ? <CircularProgress size={20} /> : <SaveIcon />}
                 onClick={handleSubmit(handleSaveDraft)}
-                disabled={isSaving || isSubmitting}
+                disabled={isSaving || isSubmitting || overBudgetLines.length > 0}
                 sx={{ mr: 2 }}
               >
                 {isEditMode ? 'Save Changes' : 'Save as Draft'}
@@ -1319,7 +1459,7 @@ const RequestForm: React.FC = () => {
                   color="primary"
                   startIcon={isSubmitting ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
                   onClick={handleSubmit(handleSaveAndSubmit)}
-                  disabled={isSaving || isSubmitting || watchedItems.some(item => exceedsBudget(item)) || (overdueBlocked && existingStatus !== 'REJECTED')}
+                  disabled={isSaving || isSubmitting || overBudgetLines.length > 0 || (overdueBlocked && existingStatus !== 'REJECTED')}
                 >
                   {isEditMode ? (existingStatus === 'REJECTED' ? 'Save & Resubmit' : 'Save & Submit') : 'Save & Submit for Approval'}
                 </Button>

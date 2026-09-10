@@ -65,6 +65,118 @@ function canReviewReconAsFinance(role, deptCode) {
 }
 
 /**
+ * Descriptions written by approveReconciliation() when it moves money, and by
+ * this file when it moves it back. Matching on description is what lets an undo
+ * touch *only* the reconciliation's own budget effects and leave the original
+ * dispatch deduction — booked against the same request_id — alone.
+ */
+const RECON_EFFECT_DESC = 'Reconciliation over-expenditure for request #';
+const RECON_RETURN_DESC = 'Reconciliation change returned for request #';
+const RECON_UNDO_DESC = 'Reconciliation undo for request #';
+
+/**
+ * Invert the budget movements a Finance reconciliation approval made.
+ *
+ * approveReconciliation() writes one transaction per affected budget line: a
+ * DEDUCTION when actual spend exceeded budget, or a REVERSAL when change came
+ * back. Undoing means applying each one backwards and recording that as its own
+ * transaction, so the ledger reads forward rather than having rows deleted from
+ * under it.
+ *
+ * Only effects written *since the last undo* are considered. A reconciliation
+ * can be approved, undone, corrected and approved again; without that cutoff
+ * the second undo would replay the first approval's rows a second time and
+ * double-count them.
+ *
+ * @returns {Promise<Array>} one entry per budget line touched, for the response
+ */
+async function undoReconciliationBudgetEffects(connection, requestId, requestCode, approverId) {
+  const [lastUndo] = await connection.execute(
+    `SELECT MAX(id) as id FROM budget_transactions
+     WHERE request_id = ? AND description LIKE ?`,
+    [requestId, `${RECON_UNDO_DESC}%`]
+  );
+  const cutoffId = lastUndo[0]?.id || 0;
+
+  const [effects] = await connection.execute(
+    `SELECT bt.*, bl.donor_id FROM budget_transactions bt
+     JOIN budget_lines bl ON bl.id = bt.budget_line_id
+     WHERE bt.request_id = ? AND bt.id > ?
+       AND (bt.description LIKE ? OR bt.description LIKE ?)
+     ORDER BY bt.id`,
+    [requestId, cutoffId, `${RECON_EFFECT_DESC}%`, `${RECON_RETURN_DESC}%`]
+  );
+
+  const donorDeltas = new Map();
+  const undone = [];
+
+  for (const effect of effects) {
+    const amount = parseFloat(effect.amount);
+    if (!amount) continue;
+
+    // A DEDUCTION added to spent_amount, so undoing it subtracts; a REVERSAL
+    // subtracted, so undoing it adds back.
+    const addsToSpent = effect.transaction_type !== 'DEDUCTION';
+
+    const [rows] = await connection.execute(
+      'SELECT (allocated_amount - spent_amount) as balance FROM budget_lines WHERE id = ? FOR UPDATE',
+      [effect.budget_line_id]
+    );
+    if (rows.length === 0) continue;
+    const balanceBefore = parseFloat(rows[0].balance);
+
+    await connection.execute(
+      `UPDATE budget_lines
+       SET spent_amount = GREATEST(spent_amount ${addsToSpent ? '+' : '-'} ?, 0), updated_at = NOW()
+       WHERE id = ?`,
+      [amount, effect.budget_line_id]
+    );
+
+    if (effect.donor_id) {
+      const signed = addsToSpent ? amount : -amount;
+      donorDeltas.set(effect.donor_id, (donorDeltas.get(effect.donor_id) || 0) + signed);
+    }
+
+    const [after] = await connection.execute(
+      'SELECT (allocated_amount - spent_amount) as balance FROM budget_lines WHERE id = ?',
+      [effect.budget_line_id]
+    );
+    const balanceAfter = parseFloat(after[0].balance);
+
+    await connection.execute(
+      `INSERT INTO budget_transactions
+       (budget_line_id, request_id, transaction_type, amount, balance_before, balance_after, description, performed_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [effect.budget_line_id, requestId,
+       addsToSpent ? 'DEDUCTION' : 'REVERSAL', amount,
+       balanceBefore, balanceAfter,
+       `${RECON_UNDO_DESC}${requestCode} — reversing "${effect.description}"`,
+       approverId]
+    );
+
+    undone.push({
+      budgetLineId: effect.budget_line_id,
+      amount,
+      direction: addsToSpent ? 'RE_DEDUCTED' : 'RETURNED_TO_BUDGET',
+      balanceBefore,
+      balanceAfter
+    });
+  }
+
+  for (const [donorId, delta] of donorDeltas) {
+    if (!delta) continue;
+    await connection.execute(
+      delta > 0
+        ? 'UPDATE donors SET total_spent = total_spent + ?, updated_at = NOW() WHERE id = ?'
+        : 'UPDATE donors SET total_spent = GREATEST(total_spent - ?, 0), updated_at = NOW() WHERE id = ?',
+      [Math.abs(delta), donorId]
+    );
+  }
+
+  return undone;
+}
+
+/**
  * The reconciliation deadline: four working days after the money was used.
  *
  * The clock starts from the day the activity ended (activity requests) or the
@@ -94,6 +206,87 @@ const reconDueDateSql = (base) => {
                INTERVAL (4 + 2 * FLOOR((WEEKDAY(${weekdayBase}) + 4) / 5)) DAY)
     END`;
 };
+
+/**
+ * Working days (Mon-Fri) strictly after `from` and up to and including `to`,
+ * as a SQL expression — the query-side twin of calcWorkingDays() below.
+ *
+ * Both arguments must be DATEs (wrap a DATETIME in DATE()). The identity used:
+ * for any date D, `TO_DAYS(D) - WEEKDAY(D)` is the day-number of that week's
+ * Monday, so the difference between the two Mondays divided by 7 is the number
+ * of whole weeks between them — five working days each — and the two LEAST()
+ * terms add the part-week at either end, clamping Sat/Sun onto Friday.
+ *
+ * Written closed-form rather than as a numbers-table SUM (the shape used by
+ * getOverdueCount) because a reconciliation can sit on a desk for months, and a
+ * fixed numbers table silently stops counting past its last row.
+ */
+const workingDaysBetweenSql = (from, to) => `
+  CAST(5 * ((TO_DAYS(${to}) - WEEKDAY(${to}) - TO_DAYS(${from}) + WEEKDAY(${from})) / 7)
+       + LEAST(WEEKDAY(${to}) + 1, 5) - LEAST(WEEKDAY(${from}) + 1, 5)
+       AS SIGNED)`;
+
+/**
+ * How long a reconciliation may sit on a Lead/HOP desk before it counts as
+ * stale, and how many stale ones bar that approver from approving floats.
+ *
+ * The clock starts at rec.created_at — the moment the reconciliation landed on
+ * the desk. submitReconciliation() resets created_at on every resubmission, so
+ * a returned-and-corrected reconciliation starts its four days afresh and the
+ * reviewer is never charged for the requester's turnaround time.
+ */
+const STALE_LEAD_RECON_WORKING_DAYS = 4;
+const STALE_LEAD_RECON_LIMIT = 2;
+
+/** Only these roles hold a lead-review desk, so only they can build a backlog. */
+const LEAD_DESK_ROLES = [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
+
+/**
+ * The department scoping for a Lead/HOP's reconciliation review desk.
+ *
+ * Extracted so the queue (getPendingLeadReconciliations), the ageing figures it
+ * displays, and the backlog gate that blocks approvals all describe the same
+ * desk. If they drifted, an approver could be blocked over a reconciliation
+ * their own queue never showed them.
+ *
+ * Returns null for roles that hold no lead desk of their own (Finance Clerk,
+ * Super Admin), whose callers apply no filter and see everything.
+ *
+ * `ownedOnly` narrows the Finance (FOS) Lead/HOP from oversight to ownership.
+ * Their queue deliberately spans every department, but the backlog block must
+ * only count what is genuinely theirs to clear — judged on the oversight queue
+ * they would be blocked by any other department's inaction, which would take
+ * the Finance approval stage down with them.
+ */
+function leadDeskScope(approverRole, departmentId, departmentCode, { ownedOnly = false } = {}) {
+  if (!LEAD_DESK_ROLES.includes(approverRole)) return null;
+
+  // FOS (Finance) Lead/HOP oversee reconciliations across every department.
+  if (departmentCode === FINANCE_DEPT_CODE && !ownedOnly) return { filter: '', params: [] };
+
+  // AHR: own-dept requests, requests routed to them, plus every Admin-donor
+  // request wherever it was raised.
+  if (departmentCode === ADMIN_HR_DEPT_CODE) {
+    return {
+      filter: `AND (
+        (r.routing_department_id IS NULL AND r.department_id = ?)
+        OR r.routing_department_id = ?
+        OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')
+      )`,
+      params: [departmentId, departmentId]
+    };
+  }
+
+  // Every other department: own-dept requests with no cross-dept routing, plus
+  // requests explicitly routed to them. Admin-donor requests belong to AHR.
+  return {
+    filter: `AND (
+      (r.routing_department_id IS NULL AND r.department_id = ?)
+      OR r.routing_department_id = ?
+    ) AND NOT EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')`,
+    params: [departmentId, departmentId]
+  };
+}
 
 /**
  * Calculate number of working days (Mon-Fri) between two dates.
@@ -925,38 +1118,11 @@ class ReconciliationService {
    * Get pending reconciliations for lead/HOP review
    */
   async getPendingLeadReconciliations(approverId, approverRole, departmentId, departmentCode) {
-    let departmentFilter = '';
-    let params = [REQUEST_STATUS.RECON_PENDING_LEAD];
-
-    // Routing rules for Admin-donor reconciliations:
-    //   - FOS-dept (Finance Operations Support) Lead/HOP see ALL pending lead reconciliations
-    //   - Only AHR-dept (Admin & HR) Lead/HOP see Admin-donor reconciliations (from any department)
-    //   - Non-AHR/Non-FOS Lead/HOP see their own department's requests PLUS cross-dept requests
-    //     where routing_department_id matches their department
-    if (approverRole === ROLES.PROGRAM_LEAD || approverRole === ROLES.HEAD_OF_PROGRAMS) {
-      if (departmentCode === 'FOS') {
-        // FOS Finance dept Lead/HOP: oversees all reconciliations — no department filter
-        departmentFilter = '';
-      } else if (departmentCode === 'AHR') {
-        // AHR-dept approvers: own-dept requests + ALL Admin-donor requests across departments
-        departmentFilter = `AND (
-          (r.routing_department_id IS NULL AND r.department_id = ?)
-          OR r.routing_department_id = ?
-          OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')
-        )`;
-        params.push(departmentId, departmentId);
-      } else {
-        // Other-dept approvers:
-        //   - Own-dept requests with NO cross-dept routing
-        //   - Cross-dept requests explicitly routed TO their dept
-        //   (exclude admin-donor requests — those go to AHR only)
-        departmentFilter = `AND (
-          (r.routing_department_id IS NULL AND r.department_id = ?)
-          OR r.routing_department_id = ?
-        ) AND NOT EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')`;
-        params.push(departmentId, departmentId);
-      }
-    }
+    // Routing rules live in leadDeskScope() — shared with the backlog gate so the
+    // queue an approver is shown and the queue they are judged on are the same.
+    const scope = leadDeskScope(approverRole, departmentId, departmentCode);
+    const departmentFilter = scope ? scope.filter : '';
+    const params = [REQUEST_STATUS.RECON_PENDING_LEAD, ...(scope ? scope.params : [])];
 
     return await query(
       `SELECT r.*, 
@@ -971,16 +1137,110 @@ class ReconciliationService {
               rec.notes as reconciliation_notes,
               rec.created_at as reconciliation_submitted_at,
               rec.submission_timeliness,
-              rec.working_days_taken
+              rec.working_days_taken,
+              -- How long this has been waiting on the reviewer, in working days.
+              -- Sent down so the queue can flag the stale ones instead of the
+              -- client re-deriving a rule the server enforces.
+              ${workingDaysBetweenSql('DATE(rec.created_at)', 'CURDATE()')} AS working_days_on_desk
        FROM requests r
        JOIN users u ON r.requester_id = u.id
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN departments rd ON r.routing_department_id = rd.id
        JOIN reconciliations rec ON rec.request_id = r.id AND rec.status = 'SUBMITTED'
        WHERE r.status = ? ${departmentFilter}
-       ORDER BY rec.created_at DESC`,
+       ORDER BY rec.created_at ASC`,
       params
     );
+  }
+
+  /**
+   * The reconciliations this approver has left sitting on their lead-review desk
+   * for four working days or more without approving or rejecting them.
+   *
+   * Drives both halves of the rule: the list the reviewer is shown, and the gate
+   * that stops them approving floats once two or more have gone stale. Super
+   * Admin is exempt by design — the account that has to be able to unblock
+   * everybody else can never be blocked itself.
+   *
+   * @param {object} user   the approver (role, department_id, department_code)
+   * @param {object} [connection]  run inside a caller's transaction when given
+   */
+  async getStaleLeadReconciliations(user, connection = null) {
+    if (!user || user.role === ROLES.ADMIN) return [];
+    if (!LEAD_DESK_ROLES.includes(user.role)) return [];
+
+    // ownedOnly: the block counts only the reconciliations this approver owns —
+    // see leadDeskScope() for why Finance's oversight queue is not used here.
+    const scope = leadDeskScope(user.role, user.department_id, user.department_code, { ownedOnly: true });
+    if (!scope) return [];
+
+    const run = connection
+      ? async (sql, params) => (await connection.execute(sql, params))[0]
+      : query;
+
+    const daysOnDesk = workingDaysBetweenSql('DATE(rec.created_at)', 'CURDATE()');
+
+    return await run(
+      `SELECT r.id AS request_id,
+              r.request_code,
+              r.total_amount,
+              d.department_code,
+              CONCAT(u.first_name, ' ', u.last_name) AS requester_name,
+              rec.created_at AS reconciliation_submitted_at,
+              ${daysOnDesk} AS working_days_on_desk
+       FROM requests r
+       JOIN users u ON r.requester_id = u.id
+       JOIN departments d ON r.department_id = d.id
+       JOIN reconciliations rec ON rec.request_id = r.id AND rec.status = 'SUBMITTED'
+       WHERE r.status = ? ${scope.filter}
+         AND ${daysOnDesk} >= ?
+       ORDER BY rec.created_at ASC`,
+      [REQUEST_STATUS.RECON_PENDING_LEAD, ...scope.params, STALE_LEAD_RECON_WORKING_DAYS]
+    );
+  }
+
+  /**
+   * Backlog summary for one approver: what is stale, and whether that is enough
+   * to bar them from approving float requests.
+   */
+  async getLeadDeskBacklog(user, connection = null) {
+    const items = await this.getStaleLeadReconciliations(user, connection);
+    return {
+      items,
+      staleCount: items.length,
+      limit: STALE_LEAD_RECON_LIMIT,
+      workingDays: STALE_LEAD_RECON_WORKING_DAYS,
+      isBlocked: items.length >= STALE_LEAD_RECON_LIMIT
+    };
+  }
+
+  /**
+   * Throws when this approver may not approve a float request because their own
+   * reconciliation review desk has gone stale. Called from the approval
+   * controller before any float approval is attempted.
+   *
+   * Rejecting is deliberately not gated: a blocked reviewer must still be able
+   * to turn back a bad request, or it would sit in the queue with nobody able
+   * to act on it at all.
+   */
+  async assertLeadDeskClear(user, connection = null) {
+    const backlog = await this.getLeadDeskBacklog(user, connection);
+    if (!backlog.isBlocked) return backlog;
+
+    // Name a handful so the reviewer can start immediately, without pasting a
+    // list of twenty request codes into a toast.
+    const shown = backlog.items.slice(0, 3).map(i => i.request_code).join(', ');
+    const rest = backlog.items.length - 3;
+    const err = new Error(
+      `Float approvals are on hold for you: ${backlog.staleCount} reconciliations have been ` +
+      `awaiting your review for ${backlog.workingDays} working days or more ` +
+      `(${shown}${rest > 0 ? ` and ${rest} more` : ''}). ` +
+      `Approve or reject them in the Reconciliation module to restore your approval rights.`
+    );
+    err.status = 403;
+    err.code = 'RECON_BACKLOG_BLOCKED';
+    err.backlog = backlog;
+    throw err;
   }
 
   /**
@@ -1471,6 +1731,200 @@ class ReconciliationService {
       [financeClerkId, financeClerkId]
     );
   }
+
+  /**
+   * Undo a reconciliation approval that was made in error.
+   *
+   * The pre-dispatch flow has had reverseApproval() for a long time; the
+   * reconciliation flow had nothing, so a Lead/HOP who approved the wrong
+   * record could not take it back, and Finance — which by then owned the
+   * record — could only approve it, since rejecting sends it back to the
+   * *requester* rather than to the Lead who mis-approved it.
+   *
+   * Two stages can be undone, and which one applies is read off the request's
+   * current status rather than passed in by the caller:
+   *
+   *   RECON_PENDING_FINANCE -> RECON_PENDING_LEAD
+   *     Undoes the Lead/HOP approval. No money has moved at this stage, so
+   *     this is a pure status change.
+   *
+   *   RECONCILED -> RECON_PENDING_FINANCE
+   *     Undoes the Finance approval, which *did* move money: it wrote
+   *     budget_transactions rows and adjusted budget_lines.spent_amount and
+   *     donors.total_spent. Those effects are inverted here (see
+   *     reconciliationEffectsToUndo) so the budget is left exactly where it
+   *     was before the approval.
+   *
+   * Unlike reverseApproval() there is no time window. The 12-hour limit there
+   * exists because a reversed request re-enters a queue someone else is
+   * actively working; a reconciliation that was approved in error stays wrong
+   * until it is fixed, and the whole point of this action is that the mistake
+   * is usually noticed late.
+   */
+  async reverseReconciliationApproval(requestId, approverId, approverRole, comments, ipAddress, approverDeptCode) {
+    const result = await transaction(async (connection) => {
+      const [requests] = await connection.execute(
+        `SELECT r.*, u.department_id as approver_dept, don.donor_type
+         FROM requests r
+         JOIN users u ON u.id = ?
+         LEFT JOIN donors don ON don.id = r.donor_id
+         WHERE r.id = ? FOR UPDATE`,
+        [approverId, requestId]
+      );
+
+      if (requests.length === 0) {
+        throw new Error('Request not found');
+      }
+
+      const request = requests[0];
+      const isFinanceDesk = canReviewReconAsFinance(approverRole, approverDeptCode);
+
+      if (request.status === REQUEST_STATUS.RECON_PENDING_FINANCE) {
+        // Undoing the Lead/HOP stage. Either the Lead desk that owns this
+        // reconciliation or the Finance desk holding it now may do it — the
+        // person who notices the mistake is as often the latter as the former.
+        if (!isFinanceDesk && leadReconRefusalReason(request, approverRole, approverDeptCode)) {
+          throw new Error(
+            'Only the Lead/Head of Department for this reconciliation, or the Finance desk, can undo the departmental approval'
+          );
+        }
+
+        await connection.execute(
+          `UPDATE requests SET status = ?, updated_at = NOW(), version = version + 1 WHERE id = ?`,
+          [REQUEST_STATUS.RECON_PENDING_LEAD, requestId]
+        );
+
+        await connection.execute(
+          `INSERT INTO approval_logs
+           (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
+           VALUES (?, ?, ?, 'REVERSED', ?, ?, ?, ?)`,
+          [requestId, approverId, approverRole,
+           REQUEST_STATUS.RECON_PENDING_FINANCE, REQUEST_STATUS.RECON_PENDING_LEAD,
+           comments || 'Departmental reconciliation approval undone', ipAddress]
+        );
+
+        return {
+          success: true,
+          message: 'Departmental approval undone — the reconciliation is back with the Lead/HOP for review',
+          newStatus: REQUEST_STATUS.RECON_PENDING_LEAD,
+          stage: 'LEAD',
+          budgetAdjustments: [],
+          _notif: { requestCode: request.request_code, requesterId: request.requester_id, approverId }
+        };
+      }
+
+      if (request.status === REQUEST_STATUS.RECONCILED) {
+        // Undoing the Finance stage. Only the Finance desk may do this: it is
+        // the only stage that touched the budget.
+        if (!isFinanceDesk) {
+          throw new Error('Only the Finance desk, or the Finance Department Lead / Head of Department, can undo a completed reconciliation');
+        }
+
+        const budgetAdjustments = await undoReconciliationBudgetEffects(
+          connection, requestId, request.request_code, approverId
+        );
+
+        const [recons] = await connection.execute(
+          `SELECT * FROM reconciliations WHERE request_id = ? AND status = 'APPROVED'
+           ORDER BY reviewed_at DESC, id DESC LIMIT 1`,
+          [requestId]
+        );
+
+        if (recons.length === 0) {
+          throw new Error('No approved reconciliation found to undo');
+        }
+
+        // Back to SUBMITTED so it re-enters the Finance queue, which joins on
+        // reconciliations.status = 'SUBMITTED'.
+        await connection.execute(
+          `UPDATE reconciliations
+           SET status = 'SUBMITTED', finance_reviewer_id = NULL, finance_comments = NULL,
+               reviewed_at = NULL, updated_at = NOW()
+           WHERE id = ?`,
+          [recons[0].id]
+        );
+
+        await connection.execute(
+          `UPDATE requests SET status = ?, updated_at = NOW(), version = version + 1 WHERE id = ?`,
+          [REQUEST_STATUS.RECON_PENDING_FINANCE, requestId]
+        );
+
+        await connection.execute(
+          `INSERT INTO approval_logs
+           (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
+           VALUES (?, ?, ?, 'REVERSED', ?, ?, ?, ?)`,
+          [requestId, approverId, approverRole,
+           REQUEST_STATUS.RECONCILED, REQUEST_STATUS.RECON_PENDING_FINANCE,
+           comments || 'Finance reconciliation approval undone', ipAddress]
+        );
+
+        return {
+          success: true,
+          message: 'Reconciliation approval undone — budget effects reversed and the record is back in the Finance queue',
+          newStatus: REQUEST_STATUS.RECON_PENDING_FINANCE,
+          stage: 'FINANCE',
+          budgetAdjustments,
+          _notif: { requestCode: request.request_code, requesterId: request.requester_id, approverId }
+        };
+      }
+
+      throw new Error(
+        `Cannot undo a reconciliation approval for a request with status: ${request.status}. ` +
+        `Only reconciliations awaiting Finance review or already reconciled can be undone.`
+      );
+    });
+
+    if (result._notif) {
+      const n = result._notif; delete result._notif;
+      const approver = await query('SELECT first_name, last_name FROM users WHERE id = ?', [n.approverId]).catch(() => [{}]);
+      const approverName = approver[0] ? `${approver[0].first_name} ${approver[0].last_name}` : 'Reviewer';
+      notificationService.onReconciliationReversed?.(
+        requestId, n.requestCode, n.requesterId, approverName, result.stage
+      )?.catch?.(() => {});
+    }
+    return result;
+  }
+
+  /**
+   * What, if anything, the current user may undo on this reconciliation.
+   * Drives the UI so the button only appears where the action would succeed.
+   */
+  async canReverseReconciliation(requestId, approverId, approverRole, approverDeptCode) {
+    const requests = await query(
+      `SELECT r.*, u.department_id as approver_dept, don.donor_type
+       FROM requests r
+       JOIN users u ON u.id = ?
+       LEFT JOIN donors don ON don.id = r.donor_id
+       WHERE r.id = ?`,
+      [approverId, requestId]
+    );
+
+    if (requests.length === 0) return { canReverse: false, reason: 'Request not found' };
+
+    const request = requests[0];
+    const isFinanceDesk = canReviewReconAsFinance(approverRole, approverDeptCode);
+
+    if (request.status === REQUEST_STATUS.RECON_PENDING_FINANCE) {
+      const allowed = isFinanceDesk || !leadReconRefusalReason(request, approverRole, approverDeptCode);
+      return {
+        canReverse: allowed,
+        stage: 'LEAD',
+        revertsTo: REQUEST_STATUS.RECON_PENDING_LEAD,
+        reason: allowed ? null : 'Only this reconciliation\'s Lead/HOP desk or Finance can undo the departmental approval'
+      };
+    }
+
+    if (request.status === REQUEST_STATUS.RECONCILED) {
+      return {
+        canReverse: isFinanceDesk,
+        stage: 'FINANCE',
+        revertsTo: REQUEST_STATUS.RECON_PENDING_FINANCE,
+        reason: isFinanceDesk ? null : 'Only the Finance desk can undo a completed reconciliation'
+      };
+    }
+
+    return { canReverse: false, reason: 'There is no reconciliation approval to undo at this stage' };
+  }
 }
 
 module.exports = new ReconciliationService();
@@ -1480,3 +1934,9 @@ module.exports = new ReconciliationService();
 // (which drives the UI warning) and the server-side submit gate, so the warning
 // the user sees and the rule that is enforced can never drift apart.
 module.exports.OVERDUE_RECON_LIMIT = 2;
+
+// Lead-review desk rule, exported for the controller (which reports it to the UI)
+// and the approval gate (which enforces it), so the figure a reviewer is warned
+// about is by construction the figure they are held to.
+module.exports.STALE_LEAD_RECON_LIMIT = STALE_LEAD_RECON_LIMIT;
+module.exports.STALE_LEAD_RECON_WORKING_DAYS = STALE_LEAD_RECON_WORKING_DAYS;

@@ -17,6 +17,7 @@ import {
   HRLeaveRegisterRow,
   HRAccrualReport,
   HRAccrualHistory,
+  HRLeaveStatement,
   HRTimesheet,
   HRPerformanceReview,
   HRTrainingRecord,
@@ -271,6 +272,18 @@ export const getLeaveRegister = async (params: {
   dateTo?: string;
 } = {}): Promise<HRLeaveRegisterRow[]> => {
   const response = await api.get('/hr/leave-register', { params });
+  return response.data.data;
+};
+
+/**
+ * Everything behind one employee's leave balance for a year: accruals,
+ * adjustments, the running statement, and every request they made.
+ */
+export const getEmployeeLeaveStatement = async (
+  employeeId: number,
+  params: { year?: number } = {}
+): Promise<HRLeaveStatement> => {
+  const response = await api.get(`/hr/employees/${employeeId}/leave-statement`, { params });
   return response.data.data;
 };
 

@@ -41,6 +41,7 @@ import PurchaseRequestForm from './pages/procurement/PurchaseRequestForm';
 import PurchaseRequestDetail from './pages/procurement/PurchaseRequestDetail';
 import VendorDatabase from './pages/procurement/VendorDatabase';
 import ProcurementApprovalsPage from './pages/procurement/ProcurementApprovalsPage';
+import ProcurementReportsPage from './pages/procurement/ProcurementReportsPage';
 
 // Admin Pages (lazy load)
 const UserManagementPage = React.lazy(() => import('./pages/admin/UserManagementPage'));
@@ -212,6 +213,10 @@ const App: React.FC = () => {
                       <Route path="/procurement/requests/:id" element={<PurchaseRequestDetail />} />
                       <Route path="/procurement/requests/:id/edit" element={<PurchaseRequestForm />} />
                       <Route path="/procurement/approvals" element={<ProcurementApprovalsPage />} />
+                      {/* Procurement reports carry the same permission as the financial
+                          reports; the server narrows the figures per role. */}
+                      <Route path="/procurement/reports" element={<ProcurementReportsPage />} />
+                      <Route path="/reports/procurement" element={<ProcurementReportsPage />} />
                       <Route path="/procurement/vendors" element={<ProtectedRoute allowedRoles={['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'] as UserRole[]}><VendorDatabase /></ProtectedRoute>} />
 
                       <Route path="/grants" element={<ComingSoonPage module="Grants & Partners" />} />

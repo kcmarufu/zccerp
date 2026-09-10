@@ -25,7 +25,7 @@ class ApprovalService {
    * Submit request for approval (User submits draft)
    */
   async submitRequest(requestId, userId, ipAddress) {
-    return await transaction(async (connection) => {
+    const result = await transaction(async (connection) => {
       // Lock the request row
       const [requests] = await connection.execute(
         `SELECT r.*, u.department_id as requester_dept
@@ -239,7 +239,7 @@ class ApprovalService {
    */
   async approveAsLead(requestId, approverId, comments, expectedVersion, ipAddress) {
     comments = comments || null;
-    return await transaction(async (connection) => {
+    const result = await transaction(async (connection) => {
       // Lock and fetch request with approver's department + donor type
       const [requests] = await connection.execute(
         `SELECT r.*, u.department_id as approver_dept,
@@ -322,7 +322,7 @@ class ApprovalService {
    */
   async approveAsHOP(requestId, approverId, comments, expectedVersion, ipAddress) {
     comments = comments || null;
-    return await transaction(async (connection) => {
+    const result = await transaction(async (connection) => {
       // Lock and fetch request
       const [requests] = await connection.execute(
         `SELECT r.*, u.department_id as approver_dept,
@@ -408,7 +408,7 @@ class ApprovalService {
   async approveAsAdmin(requestId, approverId, comments, expectedVersion, ipAddress) {
     comments = comments || null;
 
-    return await transaction(async (connection) => {
+    const result = await transaction(async (connection) => {
       const [requests] = await connection.execute(
         'SELECT * FROM requests WHERE id = ? FOR UPDATE',
         [requestId]
@@ -500,7 +500,7 @@ class ApprovalService {
    */
   async approveAsFinance(requestId, approverId, comments, expectedVersion, ipAddress, approverRole) {
     comments = comments || null;
-    return await transaction(async (connection) => {
+    const result = await transaction(async (connection) => {
       const [requests] = await connection.execute(
         'SELECT * FROM requests WHERE id = ? FOR UPDATE',
         [requestId]
@@ -560,7 +560,7 @@ class ApprovalService {
    */
   async rejectRequest(requestId, approverId, approverRole, comments, expectedVersion, ipAddress) {
     comments = comments || null;
-    return await transaction(async (connection) => {
+    const result = await transaction(async (connection) => {
       // Lock and fetch request
       const [requests] = await connection.execute(
         'SELECT * FROM requests WHERE id = ? FOR UPDATE',

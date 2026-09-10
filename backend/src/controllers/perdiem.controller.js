@@ -3,12 +3,14 @@
  * Handles create, read, update operations for claim data linked to a request.
  *
  * Visibility rules (mirrored from request access):
- *   - Owner (requester) : can create / update while request is DRAFT or REJECTED
+ *   - Owner (requester) : can create / update for as long as the request itself is
+ *                         editable (REQUESTER_EDITABLE_STATUSES) — i.e. until a
+ *                         department approver has acted on it
  *   - Approvers (PROGRAM_LEAD, HEAD_OF_PROGRAMS, ADMIN, FINANCE_CLERK) : read-only
  */
 
 const { query, transaction } = require('../config/database');
-const { ROLES } = require('../config/roles');
+const { ROLES, REQUESTER_EDITABLE_STATUSES } = require('../config/roles');
 
 // Strips the time portion from an ISO date string (e.g. '2026-07-17T00:00:00.000Z' → '2026-07-17').
 // MySQL DATE columns reject ISO timestamps, so we normalise here.
@@ -106,7 +108,10 @@ class PerDiemController {
   /**
    * POST /api/requests/:requestId/per-diem
    * Creates (or fully replaces) the claim for a request.
-   * Only the owner can do this, and only while the request is DRAFT or REJECTED.
+   * Only the owner can do this, and only while the request itself is still
+   * editable — DRAFT/REJECTED, or awaiting its first (department-level)
+   * approval. The claim used to be locked to DRAFT/REJECTED alone, so amending
+   * a submitted float failed on the claim after the request had already saved.
    */
   async upsertClaim(req, res) {
     try {
@@ -122,8 +127,11 @@ class PerDiemController {
         if (!requests.length) throw Object.assign(new Error('Request not found'), { status: 404 });
         const request = requests[0];
         if (request.requester_id !== userId) throw Object.assign(new Error('You can only edit your own claims'), { status: 403 });
-        if (!['DRAFT', 'REJECTED'].includes(request.status)) {
-          throw Object.assign(new Error('Claims can only be edited on DRAFT or REJECTED requests'), { status: 400 });
+        if (!REQUESTER_EDITABLE_STATUSES.includes(request.status)) {
+          throw Object.assign(
+            new Error('This claim can no longer be edited — the request has already been approved at the department level'),
+            { status: 400 }
+          );
         }
 
         const {
@@ -273,7 +281,7 @@ class PerDiemController {
 
   /**
    * DELETE /api/requests/:requestId/per-diem
-   * Removes the claim (owner only, DRAFT/REJECTED).
+   * Removes the claim (owner only, while the request is still editable).
    */
   async deleteClaim(req, res) {
     try {
@@ -287,7 +295,7 @@ class PerDiemController {
         );
         if (!requests.length) throw Object.assign(new Error('Request not found'), { status: 404 });
         if (requests[0].requester_id !== userId) throw Object.assign(new Error('Access denied'), { status: 403 });
-        if (!['DRAFT', 'REJECTED'].includes(requests[0].status)) {
+        if (!REQUESTER_EDITABLE_STATUSES.includes(requests[0].status)) {
           throw Object.assign(new Error('Cannot delete claim at this stage'), { status: 400 });
         }
         await conn.execute('DELETE FROM per_diem_claims WHERE request_id = ?', [requestId]);
