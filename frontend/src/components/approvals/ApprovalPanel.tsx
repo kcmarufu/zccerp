@@ -184,6 +184,7 @@ const ApprovalPanel: React.FC = () => {
   const getStatusColor = (status: string): 'warning' | 'info' | 'success' | 'error' | 'default' => {
     switch (status) {
       case 'PENDING_ADMIN_APPROVAL': return 'info';
+      case 'PENDING_GS_APPROVAL': return 'warning';
       case 'PENDING_LEAD_APPROVAL': return 'warning';
       case 'PENDING_HOP_APPROVAL': return 'info';
       case 'PENDING_FINANCE_APPROVAL': return 'success';

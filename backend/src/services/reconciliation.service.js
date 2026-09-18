@@ -7,7 +7,8 @@
 
 const { query, transaction, pool } = require('../config/database');
 const {
-  REQUEST_STATUS, ROLES, FINANCE_DEPT_CODE, ADMIN_HR_DEPT_CODE
+  REQUEST_STATUS, ROLES, FINANCE_DEPT_CODE, ADMIN_HR_DEPT_CODE,
+  isGsTrackRole, gsTrackRequesterSql
 } = require('../config/roles');
 const notificationService = require('./notification.service');
 
@@ -26,6 +27,14 @@ const notificationService = require('./notification.service');
  * @returns {string|null}   null when allowed, otherwise the reason to refuse
  */
 function leadReconRefusalReason(request, role, deptCode) {
+  // A Head of Department's own reconciliation is reviewed by the General
+  // Secretary (a Super Admin account), never by a departmental desk.
+  if (isGsTrackRole(request.requester_role)) {
+    return role === ROLES.ADMIN
+      ? null
+      : "A Head of Department's reconciliation is reviewed by the General Secretary";
+  }
+
   // Super Admin and Head of Department carry cross-department authority.
   if (role === ROLES.ADMIN || role === ROLES.HEAD_OF_PROGRAMS) return null;
 
@@ -52,6 +61,26 @@ function leadReconRefusalReason(request, role, deptCode) {
   }
 
   return null;
+}
+
+/**
+ * Nobody reviews their own reconciliation. The Finance Head of Department
+ * raises floats of their own and also sits on the Finance review desk, so
+ * without this they could approve their own spending.
+ */
+function assertNotOwnReconciliation(request, approverId) {
+  if (Number(request.requester_id) === Number(approverId)) {
+    throw new Error('You cannot review your own reconciliation — another approver must handle it.');
+  }
+}
+
+/** Was this request raised by someone on the General Secretary track? */
+async function isGsTrackRequester(connection, requesterId) {
+  const [rows] = await connection.execute(
+    'SELECT rr.role_name AS role FROM users u JOIN roles rr ON rr.id = u.role_id WHERE u.id = ?',
+    [requesterId]
+  );
+  return isGsTrackRole(rows[0]?.role);
 }
 
 /**
@@ -261,8 +290,12 @@ const LEAD_DESK_ROLES = [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
 function leadDeskScope(approverRole, departmentId, departmentCode, { ownedOnly = false } = {}) {
   if (!LEAD_DESK_ROLES.includes(approverRole)) return null;
 
+  // Heads of Department's reconciliations go to the General Secretary, so they
+  // never sit on — or count against — a departmental desk.
+  const notGsTrack = `AND NOT ${gsTrackRequesterSql('r')}`;
+
   // FOS (Finance) Lead/HOP oversee reconciliations across every department.
-  if (departmentCode === FINANCE_DEPT_CODE && !ownedOnly) return { filter: '', params: [] };
+  if (departmentCode === FINANCE_DEPT_CODE && !ownedOnly) return { filter: notGsTrack, params: [] };
 
   // AHR: own-dept requests, requests routed to them, plus every Admin-donor
   // request wherever it was raised.
@@ -272,7 +305,7 @@ function leadDeskScope(approverRole, departmentId, departmentCode, { ownedOnly =
         (r.routing_department_id IS NULL AND r.department_id = ?)
         OR r.routing_department_id = ?
         OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')
-      )`,
+      ) ${notGsTrack}`,
       params: [departmentId, departmentId]
     };
   }
@@ -283,7 +316,8 @@ function leadDeskScope(approverRole, departmentId, departmentCode, { ownedOnly =
     filter: `AND (
       (r.routing_department_id IS NULL AND r.department_id = ?)
       OR r.routing_department_id = ?
-    ) AND NOT EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')`,
+    ) AND NOT EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN')
+    ${notGsTrack}`,
     params: [departmentId, departmentId]
   };
 }
@@ -500,12 +534,20 @@ class ReconciliationService {
         reconciliationId,
         attemptNo,
         newStatus: nextStatus,
-        _notif: { requestCode: request.request_code, requesterId: userId, deptId: request.department_id, timeliness: submissionTimeliness, routingDeptId: request.routing_department_id || null }
+        _notif: { requestCode: request.request_code, requesterId: userId, deptId: request.department_id, timeliness: submissionTimeliness, routingDeptId: request.routing_department_id || null, nextStatus }
       };
     });
     if (result._notif) {
       const n = result._notif; delete result._notif;
-      notificationService.onReconciliationSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.timeliness, n.routingDeptId).catch(() => {});
+      const [requester] = await query(
+        'SELECT rr.role_name AS role FROM users u JOIN roles rr ON rr.id = u.role_id WHERE u.id = ?',
+        [n.requesterId]
+      ).catch(() => []);
+      if (n.nextStatus === REQUEST_STATUS.RECON_PENDING_LEAD && isGsTrackRole(requester?.role)) {
+        notificationService.onRequestAwaitingGs(requestId, n.requestCode, n.requesterId, 'reconciliation').catch(() => {});
+      } else {
+        notificationService.onReconciliationSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.timeliness, n.routingDeptId).catch(() => {});
+      }
     }
     return result;
   }
@@ -623,6 +665,18 @@ class ReconciliationService {
       const validStatuses = [REQUEST_STATUS.RECON_PENDING_LEAD, REQUEST_STATUS.RECON_PENDING_FINANCE];
       if (!validStatuses.includes(request.status)) {
         throw new Error(`Cannot approve reconciliation for request with status: ${request.status}. Must be pending lead or finance review.`);
+      }
+
+      assertNotOwnReconciliation(request, approverId);
+
+      // The Finance desk may normally settle a reconciliation straight from the
+      // departmental stage. A Head of Department's is the exception: the General
+      // Secretary reviews it first, then Finance — neither skips the other.
+      if (request.status === REQUEST_STATUS.RECON_PENDING_LEAD &&
+          await isGsTrackRequester(connection, request.requester_id)) {
+        throw new Error(
+          "A Head of Department's reconciliation is reviewed by the General Secretary first, then by Finance."
+        );
       }
 
       // Get the reconciliation
@@ -925,6 +979,17 @@ class ReconciliationService {
         throw new Error(`Cannot reject reconciliation for request with status: ${request.status}`);
       }
 
+      assertNotOwnReconciliation(request, approverId);
+
+      // Until the General Secretary has reviewed a Head of Department's
+      // reconciliation, only a Super Admin may send it back.
+      if (request.status === REQUEST_STATUS.RECON_PENDING_LEAD && approverRole !== ROLES.ADMIN &&
+          await isGsTrackRequester(connection, request.requester_id)) {
+        throw new Error(
+          "A Head of Department's reconciliation is reviewed by the General Secretary first, then by Finance."
+        );
+      }
+
       // Get the reconciliation
       const [recons] = await connection.execute(
         'SELECT * FROM reconciliations WHERE request_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
@@ -983,7 +1048,8 @@ class ReconciliationService {
   async approveReconciliationAsLead(requestId, approverId, approverRole, comments, ipAddress, approverDeptCode) {
     const result = await transaction(async (connection) => {
       const [requests] = await connection.execute(
-        `SELECT r.*, u.department_id as approver_dept, don.donor_type
+        `SELECT r.*, u.department_id as approver_dept, don.donor_type,
+                (SELECT rr.role_name FROM users ru JOIN roles rr ON rr.id = ru.role_id WHERE ru.id = r.requester_id) AS requester_role
          FROM requests r
          JOIN users u ON u.id = ?
          LEFT JOIN donors don ON don.id = r.donor_id
@@ -1000,6 +1066,8 @@ class ReconciliationService {
       if (request.status !== REQUEST_STATUS.RECON_PENDING_LEAD) {
         throw new Error(`Cannot approve reconciliation with status: ${request.status}. Must be pending lead review.`);
       }
+
+      assertNotOwnReconciliation(request, approverId);
 
       const refusal = leadReconRefusalReason(request, approverRole, approverDeptCode);
       if (refusal) throw new Error(refusal);
@@ -1044,7 +1112,8 @@ class ReconciliationService {
   async rejectReconciliationAsLead(requestId, approverId, approverRole, comments, ipAddress, approverDeptCode) {
     const result = await transaction(async (connection) => {
       const [requests] = await connection.execute(
-        `SELECT r.*, u.department_id as approver_dept, don.donor_type
+        `SELECT r.*, u.department_id as approver_dept, don.donor_type,
+                (SELECT rr.role_name FROM users ru JOIN roles rr ON rr.id = ru.role_id WHERE ru.id = r.requester_id) AS requester_role
          FROM requests r
          JOIN users u ON u.id = ?
          LEFT JOIN donors don ON don.id = r.donor_id
@@ -1061,6 +1130,8 @@ class ReconciliationService {
       if (request.status !== REQUEST_STATUS.RECON_PENDING_LEAD) {
         throw new Error(`Cannot reject reconciliation with status: ${request.status}`);
       }
+
+      assertNotOwnReconciliation(request, approverId);
 
       const refusal = leadReconRefusalReason(request, approverRole, approverDeptCode);
       if (refusal) throw new Error(refusal);
@@ -1141,7 +1212,9 @@ class ReconciliationService {
               -- How long this has been waiting on the reviewer, in working days.
               -- Sent down so the queue can flag the stale ones instead of the
               -- client re-deriving a rule the server enforces.
-              ${workingDaysBetweenSql('DATE(rec.created_at)', 'CURDATE()')} AS working_days_on_desk
+              ${workingDaysBetweenSql('DATE(rec.created_at)', 'CURDATE()')} AS working_days_on_desk,
+              -- A Head of Department's reconciliation, reviewed by the General Secretary.
+              (${gsTrackRequesterSql('r')}) AS is_gs_track
        FROM requests r
        JOIN users u ON r.requester_id = u.id
        JOIN departments d ON r.department_id = d.id
@@ -1401,6 +1474,7 @@ class ReconciliationService {
     return await query(
       `SELECT r.*,
               d.department_name, d.department_code,
+              (${gsTrackRequesterSql('r')}) AS is_gs_track,
               (SELECT COUNT(*) FROM reconciliations rec WHERE rec.request_id = r.id) as reconciliation_count,
               latest_rec.submission_timeliness,
               latest_rec.working_days_taken,
@@ -1624,7 +1698,9 @@ class ReconciliationService {
               fr.last_name as reviewer_last_name,
               -- The day the reconciliation is/was due: 4 working days after the
               -- activity ended (activity requests) or after dispatch (all others).
-              ${reconDueDateSql(RECON_DUE_BASE_SQL)} AS reconciliation_due_date
+              ${reconDueDateSql(RECON_DUE_BASE_SQL)} AS reconciliation_due_date,
+              -- A Head of Department's: its departmental stage is the General Secretary.
+              (${gsTrackRequesterSql('r')}) AS is_gs_track
        FROM requests r
        JOIN users u ON r.requester_id = u.id
        JOIN departments d ON r.department_id = d.id
@@ -1764,7 +1840,8 @@ class ReconciliationService {
   async reverseReconciliationApproval(requestId, approverId, approverRole, comments, ipAddress, approverDeptCode) {
     const result = await transaction(async (connection) => {
       const [requests] = await connection.execute(
-        `SELECT r.*, u.department_id as approver_dept, don.donor_type
+        `SELECT r.*, u.department_id as approver_dept, don.donor_type,
+                (SELECT rr.role_name FROM users ru JOIN roles rr ON rr.id = ru.role_id WHERE ru.id = r.requester_id) AS requester_role
          FROM requests r
          JOIN users u ON u.id = ?
          LEFT JOIN donors don ON don.id = r.donor_id
@@ -1891,7 +1968,8 @@ class ReconciliationService {
    */
   async canReverseReconciliation(requestId, approverId, approverRole, approverDeptCode) {
     const requests = await query(
-      `SELECT r.*, u.department_id as approver_dept, don.donor_type
+      `SELECT r.*, u.department_id as approver_dept, don.donor_type,
+                (SELECT rr.role_name FROM users ru JOIN roles rr ON rr.id = ru.role_id WHERE ru.id = r.requester_id) AS requester_role
        FROM requests r
        JOIN users u ON u.id = ?
        LEFT JOIN donors don ON don.id = r.donor_id

@@ -15,6 +15,8 @@ import 'react-toastify/dist/ReactToastify.css';
 import Navigation from './components/layout/Navigation';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import { HrOfficeRoute, HrOversightRoute } from './components/common/HrRoutes';
+import { TimesheetOfficeRoute, TimesheetOversightRoute } from './components/common/TimesheetRoutes';
+import { TIMESHEETS_ENABLED } from './utils/timesheetAccess';
 import InactivityTimer from './components/common/InactivityTimer';
 
 // Pages
@@ -55,12 +57,20 @@ const HRDashboardPage = React.lazy(() => import('./pages/hr/HRDashboardPage'));
 const EmployeeDirectoryPage = React.lazy(() => import('./pages/hr/EmployeeDirectoryPage'));
 const LeaveManagementPage = React.lazy(() => import('./pages/hr/LeaveManagementPage'));
 const LeaveAnalyticsPage = React.lazy(() => import('./pages/hr/LeaveAnalyticsPage'));
-const TimesheetManagementPage = React.lazy(() => import('./pages/hr/TimesheetManagementPage'));
 const PerformanceReviewPage = React.lazy(() => import('./pages/hr/PerformanceReviewPage'));
 const TrainingRecordsPage = React.lazy(() => import('./pages/hr/TrainingRecordsPage'));
 const PayrollPage = React.lazy(() => import('./pages/hr/PayrollPage'));
 const DisciplinaryRecordsPage = React.lazy(() => import('./pages/hr/DisciplinaryRecordsPage'));
 const ExitClearancePage = React.lazy(() => import('./pages/hr/ExitClearancePage'));
+
+// Timesheet Module Pages (lazy load)
+const MyTimesheetsPage = React.lazy(() => import('./pages/timesheets/MyTimesheetsPage'));
+const TimesheetGridPage = React.lazy(() => import('./pages/timesheets/TimesheetGridPage'));
+const TimesheetTrackerPage = React.lazy(() => import('./pages/timesheets/TimesheetTrackerPage'));
+const TimesheetApprovalsPage = React.lazy(() => import('./pages/timesheets/TimesheetApprovalsPage'));
+const LoeManagementPage = React.lazy(() => import('./pages/timesheets/LoeManagementPage'));
+const TimesheetReportsPage = React.lazy(() => import('./pages/timesheets/TimesheetReportsPage'));
+const TimesheetSettingsPage = React.lazy(() => import('./pages/timesheets/TimesheetSettingsPage'));
 
 // Types
 import { UserRole } from './types';
@@ -194,12 +204,39 @@ const App: React.FC = () => {
                       <Route path="/hr/exit-clearance" element={<HrOfficeRoute><Suspense fallback={<div>Loading...</div>}><ExitClearancePage /></Suspense></HrOfficeRoute>} />
                       <Route path="/hr/payroll" element={<ComingSoonPage module="Payroll" />} />
 
+                      {/* The Timesheet module has its own section; keep the old HR
+                          link working rather than leaving a dead path behind. */}
+                      <Route path="/hr/timesheets" element={<Navigate to="/timesheets" replace />} />
+
                       {/* Not built out yet — shown as Coming Soon rather than half-working. */}
-                      <Route path="/hr/timesheets" element={<ComingSoonPage module="Timesheet Management" />} />
                       <Route path="/hr/performance" element={<ComingSoonPage module="Performance Reviews" />} />
                       <Route path="/hr/training" element={<ComingSoonPage module="Training & Development" />} />
                       <Route path="/hr/disciplinary" element={<ComingSoonPage module="Disciplinary Records" />} />
                       <Route path="/hr/*" element={<Navigate to="/hr/dashboard" replace />} />
+
+                      {/* TIMESHEET MODULE
+                          Everyone reaches My Timesheets and their own grid; the API
+                          decides whose sheet they may open. Team, Organisation, LOE,
+                          Reports and Settings are gated on the access level, not the
+                          role, because a HOP of Admin & HR is the HR Office while a
+                          HOP of another department is not. */}
+                      {TIMESHEETS_ENABLED ? (
+                        <>
+                        <Route path="/timesheets" element={<Suspense fallback={<div>Loading...</div>}><MyTimesheetsPage /></Suspense>} />
+                        <Route path="/timesheets/my" element={<Navigate to="/timesheets" replace />} />
+                        <Route path="/timesheets/period/:year/:month" element={<Suspense fallback={<div>Loading...</div>}><TimesheetGridPage /></Suspense>} />
+                        <Route path="/timesheets/approvals" element={<TimesheetOversightRoute><Suspense fallback={<div>Loading...</div>}><TimesheetApprovalsPage /></Suspense></TimesheetOversightRoute>} />
+                        <Route path="/timesheets/team" element={<TimesheetOversightRoute><Suspense fallback={<div>Loading...</div>}><TimesheetTrackerPage scope="team" /></Suspense></TimesheetOversightRoute>} />
+                        <Route path="/timesheets/organisation" element={<TimesheetOfficeRoute><Suspense fallback={<div>Loading...</div>}><TimesheetTrackerPage scope="organisation" /></Suspense></TimesheetOfficeRoute>} />
+                        <Route path="/timesheets/loe" element={<TimesheetOversightRoute><Suspense fallback={<div>Loading...</div>}><LoeManagementPage /></Suspense></TimesheetOversightRoute>} />
+                        <Route path="/timesheets/reports" element={<TimesheetOversightRoute><Suspense fallback={<div>Loading...</div>}><TimesheetReportsPage /></Suspense></TimesheetOversightRoute>} />
+                        <Route path="/timesheets/settings" element={<TimesheetOfficeRoute><Suspense fallback={<div>Loading...</div>}><TimesheetSettingsPage /></Suspense></TimesheetOfficeRoute>} />
+                        {/* Declared last so the literal segments above win the match. */}
+                        <Route path="/timesheets/:id" element={<Suspense fallback={<div>Loading...</div>}><TimesheetGridPage /></Suspense>} />
+                        </>
+                      ) : (
+                        <Route path="/timesheets/*" element={<ComingSoonPage module="Timesheets" />} />
+                      )}
 
                       <Route path="/reports/finance" element={<FinancialReportsPage />} />
                       <Route path="/reports/budgets" element={<FinancialReportsPage />} />
@@ -209,7 +246,7 @@ const App: React.FC = () => {
 
                       <Route path="/procurement" element={<ProcurementDashboard />} />
                       <Route path="/procurement/requests" element={<PurchaseRequestList />} />
-                      <Route path="/procurement/requests/create" element={<PurchaseRequestForm />} />
+                      <Route path="/procurement/requests/create" element={<ProtectedRoute requiredPermission="create_purchase_request"><PurchaseRequestForm /></ProtectedRoute>} />
                       <Route path="/procurement/requests/:id" element={<PurchaseRequestDetail />} />
                       <Route path="/procurement/requests/:id/edit" element={<PurchaseRequestForm />} />
                       <Route path="/procurement/approvals" element={<ProcurementApprovalsPage />} />

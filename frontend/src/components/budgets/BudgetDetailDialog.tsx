@@ -161,6 +161,7 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
       case 'REJECTED': return 'error';
       case 'DRAFT': return 'default';
       case 'PENDING_ADMIN_APPROVAL': return 'info';
+      case 'PENDING_GS_APPROVAL':
       case 'PENDING_LEAD_APPROVAL':
       case 'PENDING_HOP_APPROVAL':
       case 'PENDING_FINANCE_APPROVAL':

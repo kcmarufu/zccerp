@@ -12,7 +12,8 @@ import {
   TableContainer, TableHead, TableRow, TablePagination, Button, Chip, CircularProgress,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, Grid,
   IconButton, Tooltip, Alert, Divider, Card, CardContent, InputAdornment,
-  useTheme, useMediaQuery, alpha, List, ListItem, ListItemIcon, ListItemText, MenuItem
+  useTheme, useMediaQuery, alpha, List, ListItem, ListItemIcon, ListItemText, MenuItem,
+  ToggleButton, ToggleButtonGroup
 } from '@mui/material';
 import {
   Receipt as ReconcileIcon,
@@ -51,6 +52,7 @@ import { Request, RequestItem } from '../types';
 import { downloadHTMLAsPDF, buildTravelClaimPageHTML, buildDigitalStamp } from '../utils/pdfUtils';
 import perDiemService from '../services/perDiemService';
 import { formatRoleLabel } from '../utils/roleUtils';
+import { usePersistentState } from '../utils/navigationState';
 
 interface ReconciliationFormItem {
   requestItemId?: number;
@@ -330,6 +332,12 @@ const ReconciliationPage: React.FC = () => {
       const totalBudgeted = reconItems.reduce((s: number, i: any) => s + Number(i.budgeted_amount || 0), 0);
       const totalActual = reconItems.reduce((s: number, i: any) => s + Number(i.actual_amount || 0), 0);
 
+      // Finance posts actuals against budget codes, so every line names its
+      // budget line and the document closes with a per-budget-line summary.
+      const budgetLineLabel = (it: any) => it.budget_code
+        ? `<strong>${it.budget_code}</strong>${it.budget_name ? `<div class="bl-name">${it.budget_name}</div>` : ''}`
+        : '<span style="color:#999">Not assigned</span>';
+
       const reconItemRows = reconItems.map((it: any, i: number) => {
         const budgeted = Number(it.budgeted_amount || 0);
         const actual = Number(it.actual_amount || 0);
@@ -337,11 +345,33 @@ const ReconciliationPage: React.FC = () => {
         const vColor = variance >= 0 ? '#2e7d32' : '#c62828';
         return `<tr>
           <td>${i + 1}</td>
+          <td>${budgetLineLabel(it)}</td>
           <td>${it.description || '—'}</td>
           <td align="right">$${budgeted.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
           <td align="right">$${actual.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
           <td align="right" style="color:${vColor};font-weight:bold">$${Math.abs(variance).toLocaleString(undefined,{minimumFractionDigits:2})} ${variance >= 0 ? '↓' : '↑'}</td>
           <td>${it.notes || '—'}</td>
+        </tr>`;
+      }).join('');
+
+      const byBudgetLine = new Map<string, { code: string; name: string; budgeted: number; actual: number; lines: number }>();
+      reconItems.forEach((it: any) => {
+        const key = it.budget_code || '—';
+        const row = byBudgetLine.get(key) || { code: it.budget_code || 'Not assigned', name: it.budget_name || '', budgeted: 0, actual: 0, lines: 0 };
+        row.budgeted += Number(it.budgeted_amount || 0);
+        row.actual += Number(it.actual_amount || 0);
+        row.lines += 1;
+        byBudgetLine.set(key, row);
+      });
+      const budgetSummaryRows = Array.from(byBudgetLine.values()).map(b => {
+        const variance = b.budgeted - b.actual;
+        return `<tr>
+          <td><strong>${b.code}</strong></td>
+          <td>${b.name || '—'}</td>
+          <td align="center">${b.lines}</td>
+          <td align="right">$${b.budgeted.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+          <td align="right">$${b.actual.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+          <td align="right" style="color:${variance >= 0 ? '#2e7d32' : '#c62828'};font-weight:bold">$${Math.abs(variance).toLocaleString(undefined,{minimumFractionDigits:2})} ${variance >= 0 ? 'under' : 'over'}</td>
         </tr>`;
       }).join('');
 
@@ -375,6 +405,7 @@ const ReconciliationPage: React.FC = () => {
   .act-APPROVED {color:#2e7d32;font-weight:bold;} .act-REJECTED {color:#c62828;font-weight:bold;} .act-SUBMITTED {color:#1565c0;font-weight:bold;}
   .page-footer {margin-top:24px;padding-top:8px;border-top:2px solid #e0e0e0;}
   .footer-left {font-size:10px;color:#999;}
+  .bl-name {font-size:10px;color:#666;font-weight:normal;}
 </style></head><body>
 <div class="doc-header">
   <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
@@ -404,14 +435,23 @@ const ReconciliationPage: React.FC = () => {
 </div>
 ${reconItems.length > 0 ? `
 <h3>Reconciliation Items</h3>
-<table><thead><tr><th>#</th><th>Description</th><th align="right">Budgeted ($)</th><th align="right">Actual Spent ($)</th><th align="right">Variance</th><th>Notes</th></tr></thead>
+<table><thead><tr><th>#</th><th>Budget Line</th><th>Description</th><th align="right">Budgeted ($)</th><th align="right">Actual Spent ($)</th><th align="right">Variance</th><th>Notes</th></tr></thead>
 <tbody>${reconItemRows}
 <tr class="total-row">
-  <td colspan="2" align="right">TOTALS:</td>
+  <td colspan="3" align="right">TOTALS:</td>
   <td align="right">$${totalBudgeted.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
   <td align="right">$${totalActual.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
   <td align="right" style="color:${totalBudgeted - totalActual >= 0 ? '#2e7d32' : '#c62828'}">$${Math.abs(totalBudgeted - totalActual).toLocaleString(undefined,{minimumFractionDigits:2})} ${totalBudgeted - totalActual >= 0 ? 'returned' : 'overspent'}</td>
   <td></td>
+</tr></tbody></table>
+<h3>Budget Line Summary</h3>
+<table><thead><tr><th>Budget Code</th><th>Budget Line</th><th align="center">Items</th><th align="right">Budgeted ($)</th><th align="right">Actual Spent ($)</th><th align="right">Variance</th></tr></thead>
+<tbody>${budgetSummaryRows}
+<tr class="total-row">
+  <td colspan="3" align="right">TOTALS:</td>
+  <td align="right">$${totalBudgeted.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+  <td align="right">$${totalActual.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+  <td align="right" style="color:${totalBudgeted - totalActual >= 0 ? '#2e7d32' : '#c62828'}">$${Math.abs(totalBudgeted - totalActual).toLocaleString(undefined,{minimumFractionDigits:2})} ${totalBudgeted - totalActual >= 0 ? 'under' : 'over'}</td>
 </tr></tbody></table>` : ''}
 ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By</th><th>Role</th><th>Comments</th><th>Date</th></tr></thead><tbody>${trailRows}</tbody></table>`:''}
 <div class="page-footer">
@@ -510,7 +550,14 @@ ${buildDigitalStamp('')}
     toast.success(`Exported ${history.length} records to Excel`);
   };
 
-  const [activeTab, setActiveTab] = useState(0);
+  const [activeTab, setActiveTab] = usePersistentState('recon.tab', 0);
+  // Super Admin: Heads of Department's reconciliations (the General Secretary's
+  // own desk) are shown apart from the departmental ones they only oversee.
+  const [leadDesk, setLeadDesk] = usePersistentState<'gs' | 'department' | 'all'>('recon.leadDesk', 'gs');
+  // Finance Review tab: its own queue, or — view only — Heads of Department's
+  // reconciliations still with the General Secretary, so Finance can see what
+  // is coming.
+  const [financeDesk, setFinanceDesk] = usePersistentState<'finance' | 'gs'>('recon.financeDesk', 'finance');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(15);
   // Tab 0 — My Requests pagination + filter
@@ -539,16 +586,16 @@ ${buildDigitalStamp('')}
   // Department & project filter state (shared across tabs)
   const [departments, setDepartments] = useState<{ id: number; department_name: string }[]>([]);
   const [projects, setProjects] = useState<{ id: number; project_name: string; project_code: string }[]>([]);
-  const [reconDeptFilter, setReconDeptFilter] = useState<string>('');
-  const [reconProjectFilter, setReconProjectFilter] = useState<string>('');
-  const [reconSearchFilter, setReconSearchFilter] = useState<string>('');
-  const [leadDeptFilter, setLeadDeptFilter] = useState<string>('');
-  const [leadProjectFilter, setLeadProjectFilter] = useState<string>('');
-  const [historyDeptFilter, setHistoryDeptFilter] = useState<string>('');
-  const [historyProjectFilter, setHistoryProjectFilter] = useState<string>('');
-  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('');
-  const [historySearchFilter, setHistorySearchFilter] = useState<string>('');
-  const [historyTimeliness, setHistoryTimeliness] = useState<string>('');
+  const [reconDeptFilter, setReconDeptFilter] = usePersistentState<string>('recon.financeDept', '');
+  const [reconProjectFilter, setReconProjectFilter] = usePersistentState<string>('recon.financeProject', '');
+  const [reconSearchFilter, setReconSearchFilter] = usePersistentState<string>('recon.financeSearch', '');
+  const [leadDeptFilter, setLeadDeptFilter] = usePersistentState<string>('recon.leadDept', '');
+  const [leadProjectFilter, setLeadProjectFilter] = usePersistentState<string>('recon.leadProject', '');
+  const [historyDeptFilter, setHistoryDeptFilter] = usePersistentState<string>('recon.historyDept', '');
+  const [historyProjectFilter, setHistoryProjectFilter] = usePersistentState<string>('recon.historyProject', '');
+  const [historyStatusFilter, setHistoryStatusFilter] = usePersistentState<string>('recon.historyStatus', '');
+  const [historySearchFilter, setHistorySearchFilter] = usePersistentState<string>('recon.historySearch', '');
+  const [historyTimeliness, setHistoryTimeliness] = usePersistentState<string>('recon.historyTimeliness', '');
   const [historyPage, setHistoryPage] = useState(0);
   const [historyRowsPerPage, setHistoryRowsPerPage] = useState(15);
 
@@ -1284,7 +1331,7 @@ ${buildDigitalStamp('')}
   const getStatusLabel = (status: string): string => {
     switch (status) {
       case 'DISPATCHED': return 'Awaiting Reconciliation';
-      case 'RECON_PENDING_LEAD': return 'Pending Lead Approval';
+      case 'RECON_PENDING_LEAD': return isHOP ? 'Pending General Secretary Review' : 'Pending Lead Approval';
       case 'RECON_PENDING_FINANCE': return 'Pending Finance Approval';
       case 'PENDING_RECONCILIATION': return 'Pending Review';
       case 'RECONCILED': return 'Reconciled';
@@ -1317,6 +1364,9 @@ ${buildDigitalStamp('')}
     { key: 'allHistory',     show: canSeeAllHistory,  icon: <HistoryIcon />,   label: 'All History' },
   ].filter(t => t.show);
   const tabIndex = (key: string) => visibleTabs.findIndex(t => t.key === key);
+  const gsAwaitingRecons = history.filter(r => r.status === 'RECON_PENDING_LEAD' && Number(r.is_gs_track) === 1);
+  const inLeadDesk = (r: any) => !isAdmin || leadDesk === 'all' ||
+    (leadDesk === 'gs' ? Number(r.is_gs_track) === 1 : Number(r.is_gs_track) !== 1);
 
   return (
     <Box>
@@ -1403,7 +1453,7 @@ ${buildDigitalStamp('')}
               <MenuItem value="">All Statuses</MenuItem>
               <MenuItem value="DISPATCHED">Awaiting Reconciliation</MenuItem>
               <MenuItem value="RECON_REJECTED">Rejected — Needs Amending</MenuItem>
-              <MenuItem value="RECON_PENDING_LEAD">Pending Lead Approval</MenuItem>
+              <MenuItem value="RECON_PENDING_LEAD">{isHOP ? 'Pending General Secretary Review' : 'Pending Lead Approval'}</MenuItem>
               <MenuItem value="RECON_PENDING_FINANCE">Pending Finance Approval</MenuItem>
               <MenuItem value="RECONCILED">Reconciled</MenuItem>
             </TextField>
@@ -1726,6 +1776,27 @@ ${buildDigitalStamp('')}
             </Alert>
           )}
 
+          {isAdmin && (
+            <Box px={2} pt={2}>
+              <ToggleButtonGroup
+                exclusive size="small" value={leadDesk}
+                onChange={(_, v) => { if (v) setLeadDesk(v); }}
+                sx={{ flexWrap: 'wrap' }}
+              >
+                {([
+                  { key: 'gs', label: 'Awaiting GS Review', count: pendingLeadReviews.filter(r => Number(r.is_gs_track) === 1).length },
+                  { key: 'department', label: 'Departmental Reviews', count: pendingLeadReviews.filter(r => Number(r.is_gs_track) !== 1).length },
+                  { key: 'all', label: 'All', count: pendingLeadReviews.length },
+                ] as const).map(d => (
+                  <ToggleButton key={d.key} value={d.key} sx={{ textTransform: 'none', px: 2 }}>
+                    {d.label}
+                    <Chip label={d.count} size="small" color={d.key === 'gs' && d.count > 0 ? 'warning' : 'default'} sx={{ ml: 1, height: 20 }} />
+                  </ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            </Box>
+          )}
+
           {/* Filters */}
           <Box p={2} borderBottom={`1px solid ${theme.palette.divider}`}>
             <Grid container spacing={2} alignItems="center">
@@ -1762,6 +1833,7 @@ ${buildDigitalStamp('')}
                 <Typography variant="body2" color="text.secondary">
                   {(() => {
                     const f = pendingLeadReviews.filter(r => {
+                      if (!inLeadDesk(r)) return false;
                       if (leadDeptFilter && String(r.department_id) !== leadDeptFilter && String(r.routing_department_id) !== leadDeptFilter) return false;
                       if (leadProjectFilter && String(r.project_id) !== leadProjectFilter) return false;
                       return true;
@@ -1798,6 +1870,7 @@ ${buildDigitalStamp('')}
                 <TableBody>
                   {pendingLeadReviews
                     .filter(r => {
+                      if (!inLeadDesk(r)) return false;
                       if (leadDeptFilter && String(r.department_id) !== leadDeptFilter && String(r.routing_department_id) !== leadDeptFilter) return false;
                       if (leadProjectFilter && String(r.project_id) !== leadProjectFilter) return false;
                       return true;
@@ -1814,7 +1887,12 @@ ${buildDigitalStamp('')}
                       sx={isStale ? { backgroundColor: alpha(theme.palette.error.main, 0.06) } : undefined}
                     >
                       <TableCell><Typography fontWeight={500}>{req.request_code}</Typography></TableCell>
-                      <TableCell>{req.requester_first_name} {req.requester_last_name}</TableCell>
+                      <TableCell>
+                        {req.requester_first_name} {req.requester_last_name}
+                        {Number(req.is_gs_track) === 1 && (
+                          <Chip label="Head of Department" size="small" color="secondary" variant="outlined" sx={{ ml: 0.5, height: 20 }} />
+                        )}
+                      </TableCell>
                       <TableCell><Chip label={req.department_code} size="small" variant="outlined" /></TableCell>
                       <TableCell>${Number(req.total_amount || 0).toLocaleString()}</TableCell>
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(req.total_spent || 0).toLocaleString()}</TableCell>
@@ -1824,7 +1902,7 @@ ${buildDigitalStamp('')}
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
                       <TableCell align="center" sx={{ ...stickyActionCell() }}>
                         <Button size="small" variant="outlined" startIcon={<ViewIcon />}
-                          onClick={() => openReviewDialog(req, canDirectApprove ? 'finance' : 'lead')}>
+                          onClick={() => openReviewDialog(req, Number(req.is_gs_track) === 1 || !canDirectApprove ? 'lead' : 'finance')}>
                           Review
                         </Button>
                         <Tooltip title="Download PDF">
@@ -1905,6 +1983,73 @@ ${buildDigitalStamp('')}
       {/* Tab: Finance Pending Reviews (index depends on whether lead tab exists) */}
       {activeTab === tabIndex('financeReview') && canReviewFinance && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
+          <Box px={2} pt={2}>
+            <ToggleButtonGroup
+              exclusive size="small" value={financeDesk}
+              onChange={(_, v) => { if (v) setFinanceDesk(v); }}
+              sx={{ flexWrap: 'wrap' }}
+            >
+              <ToggleButton value="finance" sx={{ textTransform: 'none', px: 2 }}>
+                Finance Review
+                <Chip label={pendingReviews.length} size="small" sx={{ ml: 1, height: 20 }} />
+              </ToggleButton>
+              <ToggleButton value="gs" sx={{ textTransform: 'none', px: 2 }}>
+                Awaiting GS Review (view only)
+                <Chip label={gsAwaitingRecons.length} size="small" color={gsAwaitingRecons.length > 0 ? 'secondary' : 'default'} sx={{ ml: 1, height: 20 }} />
+              </ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+          {financeDesk === 'gs' ? (
+            gsAwaitingRecons.length === 0 ? (
+              <Box py={6} textAlign="center">
+                <ReconcileIcon sx={{ fontSize: 64, color: 'text.disabled', mb: 2 }} />
+                <Typography color="text.secondary">No Head of Department reconciliations are waiting on the General Secretary</Typography>
+              </Box>
+            ) : (
+              <>
+                <Alert severity="info" sx={{ m: 2 }}>
+                  These are Heads of Department's reconciliations still with the General Secretary. They come to the
+                  Finance Review list for approval once the General Secretary approves them.
+                </Alert>
+                <TableContainer>
+                  <Table>
+                    <TableHead>
+                      <TableRow sx={{ backgroundColor: 'grey.50' }}>
+                        <TableCell sx={{ fontWeight: 600 }}>Request #</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Head of Department</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Dept</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Float Amount</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Spent</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Submitted</TableCell>
+                        <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">View</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {gsAwaitingRecons.map(rec => (
+                        <TableRow key={rec.id} hover>
+                          <TableCell><Typography fontWeight={500}>{rec.request_code}</Typography></TableCell>
+                          <TableCell>{rec.requester_first_name} {rec.requester_last_name}</TableCell>
+                          <TableCell><Chip label={rec.department_code} size="small" variant="outlined" /></TableCell>
+                          <TableCell>${Number(rec.total_amount || 0).toLocaleString()}</TableCell>
+                          <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(rec.total_spent || 0).toLocaleString()}</TableCell>
+                          <TableCell>{rec.reconciliation_submitted_at ? format(new Date(rec.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
+                          <TableCell align="center" sx={{ ...stickyActionCell() }}>
+                            <Tooltip title="View (read only)">
+                              <IconButton size="small" color="primary" onClick={() => openViewDialog(rec)}><ViewIcon /></IconButton>
+                            </Tooltip>
+                            <Tooltip title="Download PDF">
+                              <IconButton size="small" color="error" onClick={() => handleDownloadReconPDF(rec)}><PdfIcon /></IconButton>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </>
+            )
+          ) : (
+          <>
           {/* Filters */}
           <Box p={2} borderBottom={`1px solid ${theme.palette.divider}`}>
             <Grid container spacing={2} alignItems="center">
@@ -2027,6 +2172,8 @@ ${buildDigitalStamp('')}
               </Table>
             </TableContainer>
           )}
+          </>
+          )}
         </Paper>
       )}
 
@@ -2125,6 +2272,7 @@ ${buildDigitalStamp('')}
                       <MenuItem value="">All Statuses</MenuItem>
                       <MenuItem value="DISPATCHED">Awaiting Reconciliation</MenuItem>
                       <MenuItem value="RECON_PENDING_LEAD">Pending Departmental Review</MenuItem>
+                      <MenuItem value="GS_REVIEW">Awaiting GS Review</MenuItem>
                       <MenuItem value="RECON_PENDING_FINANCE">Pending Finance Review</MenuItem>
                       <MenuItem value="RECONCILED">Reconciled</MenuItem>
                       <MenuItem value="REJECTED">Rejected (Resubmit)</MenuItem>
@@ -2176,7 +2324,14 @@ ${buildDigitalStamp('')}
                 if (historyDeptFilter && String(rec.department_id) !== historyDeptFilter && String(rec.routing_department_id) !== historyDeptFilter) return false;
                 if (historyProjectFilter && String(rec.project_id) !== historyProjectFilter) return false;
                 if (historyStatusFilter) {
-                  if (REQ_STATUSES.includes(historyStatusFilter)) {
+                  // A Head of Department's reconciliation at the departmental
+                  // stage is with the General Secretary, not a department.
+                  const withGs = rec.status === 'RECON_PENDING_LEAD' && Number(rec.is_gs_track) === 1;
+                  if (historyStatusFilter === 'GS_REVIEW') {
+                    if (!withGs) return false;
+                  } else if (historyStatusFilter === 'RECON_PENDING_LEAD') {
+                    if (rec.status !== 'RECON_PENDING_LEAD' || withGs) return false;
+                  } else if (REQ_STATUSES.includes(historyStatusFilter)) {
                     if (rec.status !== historyStatusFilter) return false;
                   } else {
                     if (rec.reconciliation_status !== historyStatusFilter) return false;
@@ -2214,6 +2369,7 @@ ${buildDigitalStamp('')}
                         const reconStatus: string = rec.reconciliation_status || '';
                         const statusChip = (() => {
                           if (reqStatus === 'DISPATCHED') return <Chip label="Awaiting Reconciliation" color="warning" size="small" />;
+                          if (reqStatus === 'RECON_PENDING_LEAD' && Number(rec.is_gs_track) === 1) return <Chip label="Awaiting GS Review" color="secondary" size="small" />;
                           if (reqStatus === 'RECON_PENDING_LEAD') return <Chip label="Pending Departmental Review" color="warning" size="small" />;
                           if (reqStatus === 'RECON_PENDING_FINANCE') return <Chip label="Pending Finance" color="info" size="small" />;
                           if (reconStatus === 'APPROVED' || reqStatus === 'RECONCILED') return <Chip label="Reconciled / Approved" color="success" size="small" />;
@@ -2853,7 +3009,9 @@ ${buildDigitalStamp('')}
                 )}
               </Box>
 
-              <TextField label={reviewMode === 'lead' ? 'Department Lead / Head of Department Comments' : 'Finance Comments'} multiline rows={3} fullWidth
+              <TextField label={reviewMode === 'lead'
+                  ? (Number(reviewRequest?.is_gs_track) === 1 ? 'General Secretary Comments' : 'Department Lead / Head of Department Comments')
+                  : 'Finance Comments'} multiline rows={3} fullWidth
                 value={reviewComments} onChange={(e) => setReviewComments(e.target.value)}
                 placeholder="Add comments (required for rejection)" sx={{ mt: 1 }} />
             </Box>

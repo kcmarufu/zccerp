@@ -35,6 +35,7 @@ export interface AuthState {
 export type RequestStatus = 
   | 'DRAFT'
   | 'PENDING_ADMIN_APPROVAL'
+  | 'PENDING_GS_APPROVAL'
   | 'PENDING_LEAD_APPROVAL'
   | 'PENDING_HOP_APPROVAL'
   | 'PENDING_FINANCE_APPROVAL'
@@ -492,7 +493,13 @@ export interface ReconciliationSubmitPayload {
 export type EmploymentStatus = 'ACTIVE' | 'ON_LEAVE' | 'SUSPENDED' | 'NOTICE_PERIOD' | 'TERMINATED' | 'RETIRED';
 export type ContractType = 'PERMANENT' | 'FIXED_TERM' | 'CASUAL' | 'INTERN' | 'CONSULTANT';
 export type LeaveStatus = 'PENDING' | 'DEPT_APPROVED' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'ESCALATED';
-export type TimesheetStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+/**
+ * NOT_STARTED is virtual — no timesheet row exists for that month yet.
+ * LOCKED is how an APPROVED timesheet reports once it has been sealed.
+ */
+export type TimesheetStatus =
+  | 'NOT_STARTED' | 'DRAFT' | 'SUBMITTED' | 'UNDER_REVIEW'
+  | 'APPROVED' | 'REJECTED' | 'RETURNED' | 'LOCKED';
 
 export interface HREmployee {
   // --- Accrual settings -----------------------------------------------------
@@ -1133,6 +1140,8 @@ export interface HRDashboardStats {
 export type ProcurementStatus =
   | 'DRAFT'
   | 'PENDING_DEPT_APPROVAL'
+  // A Head of Department's request, approved by the General Secretary.
+  | 'PENDING_GS_APPROVAL'
   | 'PENDING_FINANCE_APPROVAL'
   | 'PENDING_PROCUREMENT'
   | 'PENDING_COMMITTEE'
@@ -1168,6 +1177,9 @@ export interface ProcRequest {
   first_name: string;
   last_name: string;
   requester_email?: string;
+  requester_role?: string;
+  /** 1 when raised by a Head of Department — the General Secretary approves it. */
+  is_gs_track?: number;
   department_id: number;
   department_name: string;
   department_code: string;
@@ -1299,4 +1311,359 @@ export interface CreateProcRequestPayload {
     budget_line_id?: number | null;
     notes?: string;
   }>;
+}
+
+// ============================================================================
+// TIMESHEET MODULE
+// ============================================================================
+// Projects and partners are read from the Float Requisition registers, so the
+// shapes below carry them rather than defining a second source of truth.
+
+export type TimesheetAccessLevel = 'ORGANISATION' | 'DEPARTMENT' | 'SELF';
+
+export interface TimesheetSettings {
+  standard_daily_hours: number;
+  /** ISO weekday numbers, 1 = Monday .. 7 = Sunday. */
+  work_days: number[];
+  /** Day of the following month by which a timesheet is due. */
+  submission_due_day: number;
+  updated_at?: string | null;
+}
+
+export interface TimesheetContext {
+  employee_id: number | null;
+  requires_timesheet: boolean;
+  access_level: TimesheetAccessLevel;
+  can_manage_loe: boolean;
+  can_manage_holidays: boolean;
+  department_id: number | null;
+  department_name?: string | null;
+  role: UserRole;
+  settings: TimesheetSettings;
+}
+
+export interface PublicHoliday {
+  id: number;
+  holiday_date: string;
+  holiday_name: string;
+  is_recurring: boolean | number;
+  notes?: string | null;
+  is_active?: boolean | number;
+  created_by_name?: string | null;
+}
+
+export interface TimesheetProject {
+  id: number;
+  project_code: string;
+  project_name: string;
+  department_id: number | null;
+  department_name?: string | null;
+  partner_id: number | null;
+  partner_name: string | null;
+  partner_code: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export interface TimesheetPartner {
+  id: number;
+  partner_code: string;
+  partner_name: string;
+  project_count: number;
+}
+
+export interface TimesheetEmployee {
+  employee_id: number;
+  employee_name: string;
+  employee_number: string | null;
+  department_id: number | null;
+  department_name: string | null;
+  position_title: string | null;
+  user_id: number | null;
+  role: UserRole;
+}
+
+export interface LoeAllocation {
+  id?: number;
+  employee_id?: number;
+  project_id: number;
+  project_code?: string;
+  project_name?: string;
+  partner_name?: string | null;
+  partner_code?: string | null;
+  loe_year?: number;
+  effective_from_month: number;
+  effective_to_month: number;
+  loe_percent: number;
+  notes?: string | null;
+  updated_by_name?: string | null;
+}
+
+export interface LoeRegisterEntry extends TimesheetEmployee {
+  year: number;
+  allocations: LoeAllocation[];
+  total_percent: number;
+  /** True when the allocations for the period total exactly 100%. */
+  is_complete: boolean;
+  project_count: number;
+}
+
+/** One day of the month, classified for the expected-hours calculation. */
+export interface TimesheetDay {
+  day: number;
+  date: string;
+  /** ISO weekday, 1 = Monday. */
+  weekday: number;
+  is_work_day: boolean;
+  is_weekend: boolean;
+  holiday_name: string | null;
+  leave_type: string | null;
+  /** False on weekends, public holidays and approved leave. */
+  is_expected: boolean;
+}
+
+export interface TimesheetMetrics {
+  year: number;
+  month: number;
+  month_name: string;
+  days_in_month: number;
+  working_days: number;
+  holiday_days: number;
+  leave_days: number;
+  available_days: number;
+  daily_hours: number;
+  expected_hours: number;
+  days: TimesheetDay[];
+}
+
+export interface TimesheetLine {
+  id: number;
+  project_id: number | null;
+  project_code?: string | null;
+  project_name?: string | null;
+  partner_name?: string | null;
+  partner_code?: string | null;
+  activity_description: string | null;
+  loe_percent: number;
+  /** Hours keyed by ISO date. */
+  hours_by_date: Record<string, number>;
+  total_hours: number;
+  expected_hours: number;
+  actual_percent: number;
+  variance_percent: number;
+  variance_hours: number;
+  sort_order?: number;
+}
+
+export interface TimesheetAuditEntry {
+  id: number;
+  action: string;
+  from_status: string | null;
+  to_status: string | null;
+  actor_id: number | null;
+  actor_name: string | null;
+  actor_role: string | null;
+  job_title?: string | null;
+  comments: string | null;
+  created_at: string;
+}
+
+export interface TimesheetGrid {
+  id: number;
+  employee_id: number;
+  employee_name: string;
+  employee_number: string | null;
+  employee_email?: string | null;
+  employee_role?: UserRole;
+  department_id: number | null;
+  department_name: string | null;
+  position_title: string | null;
+  job_title?: string | null;
+  period_month: number;
+  period_year: number;
+  month: number;
+  year: number;
+  status: TimesheetStatus;
+  /** The raw column value; `status` reports LOCKED once sealed. */
+  stored_status: TimesheetStatus;
+  is_locked: boolean;
+  total_hours: number;
+  expected_hours: number;
+  completion_percent: number;
+  notes: string | null;
+  rejection_reason: string | null;
+  returned_reason: string | null;
+  submitted_at: string | null;
+  supervisor_approved_at: string | null;
+  locked_at: string | null;
+  reviewed_by_name?: string | null;
+  locked_by_name?: string | null;
+  metrics: TimesheetMetrics;
+  lines: TimesheetLine[];
+  /** Column totals, keyed by ISO date. */
+  daily_totals: Record<string, number>;
+  allocations?: LoeAllocation[];
+  audit_trail?: TimesheetAuditEntry[];
+  is_owner?: boolean;
+  can_edit?: boolean;
+  can_approve?: boolean;
+  can_reopen?: boolean;
+}
+
+export interface TimesheetGridSavePayload {
+  lines: Array<{
+    project_id: number;
+    activity_description?: string | null;
+    hours_by_date: Record<string, number>;
+  }>;
+  notes?: string | null;
+}
+
+export interface TimesheetMonthSummary {
+  month: number;
+  month_name: string;
+  timesheet_id: number | null;
+  status: TimesheetStatus;
+  expected_hours: number;
+  actual_hours: number;
+  completion_percent: number;
+  working_days: number;
+  holiday_days: number;
+  leave_days: number;
+  available_days: number;
+  submitted_at: string | null;
+  approved_at: string | null;
+  approved_by_name: string | null;
+  rejection_reason: string | null;
+  returned_reason: string | null;
+  is_locked: boolean;
+}
+
+export interface TimesheetYearTracker {
+  employee: {
+    employee_id: number;
+    employee_name: string;
+    employee_number: string | null;
+    department_id: number | null;
+    department_name: string | null;
+    position_title: string | null;
+    role: UserRole;
+  } | null;
+  year: number;
+  months: TimesheetMonthSummary[];
+  summary: {
+    expected_hours: number;
+    actual_hours: number;
+    completion_percent: number;
+    approved_months: number;
+    submitted_months: number;
+    outstanding_months: number;
+  };
+}
+
+export interface TimesheetTrackerProject {
+  project_id: number | null;
+  project_code: string | null;
+  project_name: string | null;
+  partner_name: string | null;
+  loe_percent: number;
+  expected_hours: number;
+  actual_hours: number;
+  actual_percent: number;
+}
+
+export interface TimesheetTrackerRow {
+  employee_id: number;
+  employee_name: string;
+  employee_number: string | null;
+  department_id: number | null;
+  department_name: string | null;
+  position_title: string | null;
+  role: UserRole;
+  year: number;
+  month: number;
+  month_name: string;
+  timesheet_id: number | null;
+  status: TimesheetStatus;
+  expected_hours: number;
+  actual_hours: number;
+  completion_percent: number;
+  working_days: number;
+  holiday_days: number;
+  leave_days: number;
+  available_days: number;
+  submitted_at: string | null;
+  approved_at: string | null;
+  approved_by_name: string | null;
+  is_locked: boolean;
+  projects: TimesheetTrackerProject[];
+}
+
+export interface TimesheetPeriodStats {
+  year: number;
+  month: number;
+  month_name: string;
+  headcount: number;
+  status_counts: Record<string, number>;
+  expected_hours: number;
+  actual_hours: number;
+  completion_percent: number;
+}
+
+export interface TimesheetApprovalQueueRow {
+  id: number;
+  employee_id: number;
+  employee_name: string;
+  employee_number: string | null;
+  position_title: string | null;
+  department_id: number | null;
+  department_name: string | null;
+  employee_role: UserRole;
+  month: number;
+  year: number;
+  status: TimesheetStatus;
+  total_hours: number;
+  expected_hours: number;
+  submitted_at: string | null;
+  notes: string | null;
+}
+
+export interface TimesheetListRow {
+  id: number;
+  employee_id: number;
+  employee_name: string;
+  employee_number: string | null;
+  department_id: number | null;
+  department_name: string | null;
+  position_title: string | null;
+  month: number;
+  month_name: string;
+  year: number;
+  status: TimesheetStatus;
+  total_hours: number;
+  expected_hours: number;
+  completion_percent: number;
+  working_days: number;
+  holiday_days: number;
+  leave_days: number;
+  submitted_at: string | null;
+  approved_at: string | null;
+  approved_by_name: string | null;
+  rejection_reason: string | null;
+  returned_reason: string | null;
+  is_locked: boolean;
+}
+
+export interface TimesheetProjectSummaryRow {
+  project_id: number | null;
+  project_code: string | null;
+  project_name: string | null;
+  partner_id: number | null;
+  partner_name: string | null;
+  partner_code: string | null;
+  staff_count: number;
+  timesheet_count: number;
+  actual_hours: number;
+  average_loe_percent: number;
+  actual_percent: number;
 }

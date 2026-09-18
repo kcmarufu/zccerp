@@ -354,6 +354,64 @@ export const downloadRequestAttachment = async (attachmentId: number, fileName?:
   }
 };
 
+// ============================================================================
+// VIEW IN BROWSER
+// ============================================================================
+
+/** File types a browser tab renders itself; anything else is downloaded. */
+export const isViewableInBrowser = (typeOrName?: string | null): boolean => {
+  const t = (typeOrName || '').toLowerCase();
+  return t.includes('pdf') || t.startsWith('text/plain') ||
+    (t.startsWith('image/') && !t.includes('svg')) ||
+    /\.(pdf|png|jpe?g|gif|webp|bmp|txt)$/.test(t);
+};
+
+/**
+ * Open a procurement document in a new tab so a reviewer can read it without
+ * saving it. The procurement file endpoints need the user's token, so the file
+ * is fetched here and handed to the tab as a blob. The tab is opened before the
+ * request so the browser treats it as part of the click and does not block it.
+ */
+const viewInNewTab = async (path: string, fileName?: string): Promise<void> => {
+  const tab = window.open('', '_blank');
+  try {
+    const res = await api.get(path, { responseType: 'blob' });
+    const contentType = (res.headers['content-type'] as string | undefined) || 'application/octet-stream';
+    if (contentType.includes('application/json')) {
+      const text = await (res.data as Blob).text();
+      let msg = 'Failed to open document';
+      try { msg = JSON.parse(text)?.error || msg; } catch { /* not JSON */ }
+      throw new Error(msg);
+    }
+    const url = window.URL.createObjectURL(new Blob([res.data], { type: contentType }));
+    if (tab) {
+      tab.location.href = url;
+    } else {
+      // Popup blocked — download instead so the click still does something.
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', fileName || 'document');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+    // Long enough for the tab to load it; then free the memory.
+    setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+  } catch (err) {
+    tab?.close();
+    throw err;
+  }
+};
+
+export const viewRequestAttachment = (attachmentId: number, fileName?: string) =>
+  viewInNewTab(`${BASE}/attachments/${attachmentId}/download`, fileName);
+
+export const viewQuotationFile = (requestId: number | string, quotationId: number, fileName?: string) =>
+  viewInNewTab(`${BASE}/requests/${requestId}/quotations/${quotationId}/download`, fileName);
+
+export const viewProofOfPayment = (requestId: number | string, popId: number | string, fileName?: string) =>
+  viewInNewTab(`${BASE}/requests/${requestId}/pops/${popId}/download`, fileName);
+
 export const reverseFinalApproval = async (id: number | string, reason?: string): Promise<void> => {
   await api.post(`${BASE}/requests/${id}/reverse-final-approval`, { reason: reason || '' });
 };
@@ -396,6 +454,7 @@ export const downloadPOP = async (requestId: number | string, fileName?: string)
 export const PROC_STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Draft',
   PENDING_DEPT_APPROVAL: 'Pending Dept. Approval',
+  PENDING_GS_APPROVAL: 'Pending General Secretary Approval',
   PENDING_FINANCE_APPROVAL: 'Pending Finance Approval',
   PENDING_PROCUREMENT: 'In Procurement',
   PENDING_COMMITTEE: 'Pending Committee',
@@ -409,6 +468,7 @@ export const PROC_STATUS_LABELS: Record<string, string> = {
 export const PROC_STATUS_COLORS: Record<string, string> = {
   DRAFT: 'default',
   PENDING_DEPT_APPROVAL: 'warning',
+  PENDING_GS_APPROVAL: 'warning',
   PENDING_FINANCE_APPROVAL: 'warning',
   PENDING_PROCUREMENT: 'info',
   PENDING_COMMITTEE: 'secondary',

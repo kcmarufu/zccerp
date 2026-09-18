@@ -58,6 +58,7 @@ import {
   PerDiemClaimFormData, PerDiemRates
 } from '../../types';
 import { CATEGORY_OPTIONS } from '../../utils/requestCategories';
+import { isRequesterEditable } from '../../utils/requestStatus';
 import { requestService } from '../../services/requestService';
 import { budgetService } from '../../services/budgetService';
 import donorService, { Donor } from '../../services/donorService';
@@ -338,7 +339,7 @@ const RequestForm: React.FC = () => {
           notes: item.notes || ''
         }));
 
-        if (!['DRAFT', 'REJECTED', 'PENDING_LEAD_APPROVAL', 'PENDING_ADMIN_APPROVAL', 'PENDING_HOP_APPROVAL'].includes(request.status)) {
+        if (!isRequesterEditable(request.status)) {
           toast.error('This request can no longer be edited — it has already been approved at the department level');
           navigate(`/finance/requests/${requestId}`);
           return;

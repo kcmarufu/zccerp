@@ -36,6 +36,7 @@ import { ProcurementStatus } from '../../types';
 // Workflow pipeline step definitions
 const PIPELINE_STEPS = [
   { key: 'PENDING_DEPT_APPROVAL', label: 'Dept\nApproval', icon: <ReviewIcon sx={{ fontSize: 18 }} />, color: '#ed6c02' },
+  { key: 'PENDING_GS_APPROVAL',   label: 'GS\nApproval', icon: <ReviewIcon sx={{ fontSize: 18 }} />, color: '#6a1b9a' },
   { key: 'PENDING_PROCUREMENT',   label: 'Procurement', icon: <QuotIcon sx={{ fontSize: 18 }} />,   color: '#7b1fa2' },
   { key: 'PENDING_COMMITTEE',     label: 'Committee',  icon: <CommitteeIcon sx={{ fontSize: 18 }} />, color: '#0288d1' },
   { key: 'PENDING_FINAL_FINANCE', label: 'Finance\nApproval', icon: <FinanceIcon sx={{ fontSize: 18 }} />, color: '#00695c' },

@@ -5,6 +5,7 @@
 
 const { validationResult } = require('express-validator');
 const procurementService = require('../services/procurement.service');
+const { ROLES } = require('../config/roles');
 const { query } = require('../config/database');
 const path = require('path');
 const fs = require('fs');
@@ -27,6 +28,11 @@ class ProcurementController {
 
   async createPurchaseRequest(req, res) {
     try {
+      // The Super Admin approves purchase requests; raising them is for staff
+      // and Heads of Department.
+      if (req.user.role === ROLES.ADMIN) {
+        return res.status(403).json({ success: false, error: 'The System Admin cannot raise purchase requests.' });
+      }
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ success: false, errors: errors.array() });

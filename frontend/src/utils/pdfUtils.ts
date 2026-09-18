@@ -216,19 +216,26 @@ export const buildPurchaseOrderHTML = (request: any): string => {
     ? Number(selectedQuot.total_amount || 0)
     : items.reduce((s: number, it: any) => s + Number(it.quantity || 1) * Number(it.estimated_unit_price || 0), 0);
 
-  const itemRows = items.map((item: any, i: number) => {
-    const unitPrice = Number(item.estimated_unit_price || 0);
-    const lineTotal = Number(item.quantity || 1) * unitPrice;
-    return `<tr>
+  // The order is placed at the selected supplier's quoted price. Line prices on
+  // the request are only the requester's estimates, so they are not printed —
+  // the one binding figure is the grand total from the selected quotation.
+  const currency = selectedQuot?.currency || 'USD';
+  const money = (n: number) => `${currency === 'USD' ? '$' : `${currency} `}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const itemRows = items.map((item: any, i: number) => `<tr>
       <td>${i + 1}</td>
       <td>${item.item_description || item.description || '—'}</td>
       <td>${item.specifications || '—'}</td>
       <td align="right">${Number(item.quantity || 1)}</td>
       <td>${item.unit || item.unit_of_measure || 'pcs'}</td>
-      <td align="right">$${unitPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-      <td align="right">$${lineTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-    </tr>`;
-  }).join('');
+      <td align="center">—</td>
+      <td align="center">—</td>
+    </tr>`).join('');
+
+  const supplierName = selectedQuot ? (selectedQuot.vendor_name || selectedQuot.vendor_company || 'selected supplier') : '';
+  const grandTotalLabel = selectedQuot
+    ? `GRAND TOTAL <span style="font-weight:normal">(as quoted by ${supplierName}${selectedQuot.quotation_number ? `, Ref ${selectedQuot.quotation_number}` : ''})</span>:`
+    : 'ESTIMATED GRAND TOTAL <span style="font-weight:normal">(no supplier selected)</span>:';
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <title>Purchase Order — ${reqCode}</title>
@@ -262,7 +269,7 @@ export const buildPurchaseOrderHTML = (request: any): string => {
 </div>
 <table><thead><tr><th>#</th><th>Description</th><th>Specifications</th><th align="right">Qty</th><th>Unit</th><th align="right">Unit Price</th><th align="right">Total</th></tr></thead>
 <tbody>${itemRows}
-<tr class="total-row"><td colspan="6" align="right">GRAND TOTAL:</td><td align="right">$${totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td></tr>
+<tr class="total-row"><td colspan="6" align="right">${grandTotalLabel}</td><td align="right" style="white-space:nowrap">${money(totalAmount)}</td></tr>
 </tbody></table>
 <div class="page-footer">
   <div>Generated: ${formatDateTime(new Date())} &nbsp;|&nbsp; ERP Connect — Zimbabwe Council of Churches &nbsp;|&nbsp; OFFICIAL DOCUMENT</div>

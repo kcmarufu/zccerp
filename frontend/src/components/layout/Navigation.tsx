@@ -72,10 +72,17 @@ import {
   TrackChanges as IndicatorsIcon,
   Groups as StakeholdersIcon,
   AdminPanelSettings as AdminIcon,
-  ManageAccounts as UserMgmtIcon
+  ManageAccounts as UserMgmtIcon,
+  AccessTime as TimesheetIcon,
+  EventAvailable as HolidayIcon,
+  PieChart as LoeIcon,
+  Groups2 as TeamIcon
 } from '@mui/icons-material';
 import { useAuthStore } from '../../store/authStore';
 import { hasFullHrAccess, hasHrOversight } from '../../utils/hrAccess';
+import {
+  hasOrgTimesheetAccess, hasTeamTimesheetAccess, requiresTimesheet, TIMESHEETS_ENABLED,
+} from '../../utils/timesheetAccess';
 import { UserRole } from '../../types';
 import api from '../../services/api';
 import { formatDateTime } from '../../utils/datetime';
@@ -197,13 +204,13 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           path: '/finance/requests',
           label: 'My Requests',
           icon: <RequestIcon />,
-          roles: ['GENERAL_USER']
+          roles: ['GENERAL_USER', 'HEAD_OF_PROGRAMS'] as UserRole[]
         },
         {
           path: '/finance/requests/create',
           label: 'New Float Request',
           icon: <CreateIcon />,
-          roles: ['GENERAL_USER']
+          roles: ['GENERAL_USER', 'HEAD_OF_PROGRAMS'] as UserRole[]
         },
         {
           path: '/finance/approvals',
@@ -260,11 +267,11 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           icon: <RequestIcon />
         },
         {
-          // Only GENERAL_USER creates purchase requests (raises a PR)
+          // Staff and Heads of Department raise PRs (a HOD's goes to the General Secretary)
           path: '/procurement/requests/create',
           label: 'New Purchase Request',
           icon: <CreateIcon />,
-          roles: ['GENERAL_USER', 'ADMIN'] as UserRole[]
+          roles: ['GENERAL_USER', 'HEAD_OF_PROGRAMS'] as UserRole[]
         },
         {
           // Approvers: dept approvers, finance, procurement officer, committee
@@ -338,13 +345,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           condition: () => hasFullHrAccess(user)
         },
         // Not built out yet — hidden from everyone but the HR Office, where they
-        // resolve to a Coming Soon page.
-        {
-          path: '/hr/timesheets',
-          label: 'Timesheets',
-          icon: <FolderIcon />,
-          condition: () => hasFullHrAccess(user)
-        },
+        // resolve to a Coming Soon page. Timesheets now has its own section.
         {
           path: '/hr/performance',
           label: 'Performance Reviews',
@@ -362,6 +363,60 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           label: 'Disciplinary Records',
           icon: <FolderIcon />,
           condition: () => hasFullHrAccess(user)
+        }
+      ]
+    },
+    {
+      // Timesheets. Everyone except the Super Admin files one, so My Timesheets
+      // is shown to all staff; the rest follows the timesheet access ladder,
+      // which mirrors HR — the HOP/Lead of Admin & HR is the HR Office and sees
+      // the organisation, while a HOP/Lead elsewhere sees their department.
+      id: 'timesheets',
+      label: 'Timesheets',
+      icon: <TimesheetIcon />,
+      items: [
+        {
+          path: '/timesheets',
+          label: 'My Timesheets',
+          icon: <TimesheetIcon />,
+          condition: () => requiresTimesheet(user)
+        },
+        {
+          path: '/timesheets/approvals',
+          label: 'Timesheet Approvals',
+          icon: <ApprovalsIcon />,
+          condition: () => hasTeamTimesheetAccess(user)
+        },
+        {
+          path: '/timesheets/team',
+          label: 'Team Timesheets',
+          icon: <TeamIcon />,
+          condition: () => hasTeamTimesheetAccess(user)
+        },
+        {
+          path: '/timesheets/organisation',
+          label: 'Organisation Timesheets',
+          icon: <OrgIcon />,
+          condition: () => hasOrgTimesheetAccess(user)
+        },
+        {
+          // Read-only for a department head; the HR Office edits it.
+          path: '/timesheets/loe',
+          label: 'Level of Effort',
+          icon: <LoeIcon />,
+          condition: () => hasTeamTimesheetAccess(user)
+        },
+        {
+          path: '/timesheets/reports',
+          label: 'Timesheet Reports',
+          icon: <ReportsIcon />,
+          condition: () => hasTeamTimesheetAccess(user)
+        },
+        {
+          path: '/timesheets/settings',
+          label: 'Settings & Holidays',
+          icon: <HolidayIcon />,
+          condition: () => hasOrgTimesheetAccess(user)
         }
       ]
     },
@@ -531,6 +586,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Filter sections and items based on role/permissions
   const filteredSections = navSections
     .filter(section => {
+      if (section.id === 'timesheets' && !TIMESHEETS_ENABLED) return false;
       // Procurement Committee members only have access to the Procurement module
       if (hasRole('PROCUREMENT_COMMITTEE') && section.id !== 'procurement') return false;
       // Procurement Officers only have access to the Procurement module
@@ -616,6 +672,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       'reconciliation': 'Reconciliation',
       'assets': 'Asset Management',
       'hr': 'Human Resources',
+      'timesheets': 'Timesheets',
       'reports': 'Reports',
       'dashboard': 'Dashboard',
       'projects': 'Projects & Programs',

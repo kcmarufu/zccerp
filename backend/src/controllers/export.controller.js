@@ -259,8 +259,19 @@ class ExportController {
       const reconciliation = recons[0] || null;
 
       // Fetch reconciliation items
+      // Each line carries its budget line, so Finance can post the actuals
+      // against the right code. Same resolution as the reconciliation screen:
+      // the originating request item's line, else the line set on the item.
       const reconItems = reconciliation ? await query(
-        `SELECT * FROM reconciliation_items WHERE reconciliation_id = ?`,
+        `SELECT ri.*,
+                COALESCE(bl1.budget_code, bl2.budget_code) AS budget_code,
+                COALESCE(bl1.budget_name, bl2.budget_name) AS budget_name
+         FROM reconciliation_items ri
+         LEFT JOIN request_items rqi ON ri.request_item_id = rqi.id
+         LEFT JOIN budget_lines bl1 ON rqi.budget_line_id = bl1.id
+         LEFT JOIN budget_lines bl2 ON ri.budget_line_id = bl2.id
+         WHERE ri.reconciliation_id = ?
+         ORDER BY ri.id`,
         [reconciliation.id]
       ) : [];
 
@@ -338,7 +349,8 @@ class ExportController {
         doc.rect(50, y, pageW, 18).fill('#006064');
         doc.fontSize(8).font('Helvetica-Bold').fillColor('white');
         doc.text('#', 55, y + 5);
-        doc.text('Description', 75, y + 5);
+        doc.text('Budget Line', 75, y + 5, { width: 90 });
+        doc.text('Description', 170, y + 5);
         doc.text('Budgeted', 295, y + 5, { width: 80, align: 'right' });
         doc.text('Actual Spent', 380, y + 5, { width: 80, align: 'right' });
         doc.text('Variance', 465, y + 5, { width: 80, align: 'right' });
@@ -348,11 +360,20 @@ class ExportController {
         reconItems.forEach((item, idx) => {
           if (y > 680) { doc.addPage(); y = 50; }
           const bg = idx % 2 === 0 ? '#f7f7f7' : 'white';
-          const rowH = Math.max(18, doc.heightOfString(item.description || '', { width: 215 }) + 8);
+          const budgetLine = item.budget_code
+            ? `${item.budget_code}${item.budget_name ? ` — ${item.budget_name}` : ''}`
+            : '—';
+          doc.fontSize(9).font('Helvetica');
+          const rowH = Math.max(
+            18,
+            doc.heightOfString(item.description || '', { width: 120 }) + 8,
+            doc.heightOfString(budgetLine, { width: 90 }) + 8
+          );
           doc.rect(50, y, pageW, rowH).fill(bg);
           doc.fontSize(9).font('Helvetica').fillColor('#1a1a1a');
           doc.text(String(idx + 1), 55, y + 4);
-          doc.text(item.description || '—', 75, y + 4, { width: 215 });
+          doc.text(budgetLine, 75, y + 4, { width: 90 });
+          doc.text(item.description || '—', 170, y + 4, { width: 120 });
           const budgeted = parseFloat(item.budgeted_amount || 0);
           const actual = parseFloat(item.actual_amount || 0);
           const variance = budgeted - actual;

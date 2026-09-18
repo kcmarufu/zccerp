@@ -107,6 +107,12 @@ const ROLE_PERMISSIONS = {
   ],
   
   [ROLES.HEAD_OF_PROGRAMS]: [
+    // A Head of Department raises their own floats like any member of staff;
+    // those requests are approved by the General Secretary (see isGsTrackRole).
+    PERMISSIONS.CREATE_REQUEST,
+    PERMISSIONS.EDIT_REQUEST,
+    PERMISSIONS.DELETE_REQUEST,
+    PERMISSIONS.SUBMIT_REQUEST,
     PERMISSIONS.VIEW_OWN_REQUESTS,
     PERMISSIONS.VIEW_DEPARTMENT_REQUESTS,
     PERMISSIONS.APPROVE_AS_HOP,
@@ -160,6 +166,7 @@ const ROLE_PERMISSIONS = {
 const REQUEST_STATUS = {
   DRAFT: 'DRAFT',
   PENDING_ADMIN_APPROVAL: 'PENDING_ADMIN_APPROVAL',
+  PENDING_GS_APPROVAL: 'PENDING_GS_APPROVAL',
   PENDING_LEAD_APPROVAL: 'PENDING_LEAD_APPROVAL',
   PENDING_HOP_APPROVAL: 'PENDING_HOP_APPROVAL',
   PENDING_FINANCE_APPROVAL: 'PENDING_FINANCE_APPROVAL',
@@ -194,12 +201,14 @@ const REQUESTER_EDITABLE_STATUSES = [
   REQUEST_STATUS.REJECTED,
   REQUEST_STATUS.PENDING_LEAD_APPROVAL,
   REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+  REQUEST_STATUS.PENDING_GS_APPROVAL,
   REQUEST_STATUS.PENDING_HOP_APPROVAL
 ];
 
 const STATUS_TRANSITIONS = {
-  [REQUEST_STATUS.DRAFT]: [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.CANCELLED],
+  [REQUEST_STATUS.DRAFT]: [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_GS_APPROVAL, REQUEST_STATUS.CANCELLED],
   [REQUEST_STATUS.PENDING_ADMIN_APPROVAL]: [REQUEST_STATUS.PENDING_FINANCE_APPROVAL, REQUEST_STATUS.REJECTED],
+  [REQUEST_STATUS.PENDING_GS_APPROVAL]: [REQUEST_STATUS.PENDING_FINANCE_APPROVAL, REQUEST_STATUS.REJECTED],
   [REQUEST_STATUS.PENDING_LEAD_APPROVAL]: [REQUEST_STATUS.PENDING_FINANCE_APPROVAL, REQUEST_STATUS.REJECTED],
   [REQUEST_STATUS.PENDING_HOP_APPROVAL]: [REQUEST_STATUS.PENDING_FINANCE_APPROVAL, REQUEST_STATUS.REJECTED],
   [REQUEST_STATUS.PENDING_FINANCE_APPROVAL]: [REQUEST_STATUS.APPROVED, REQUEST_STATUS.REJECTED],
@@ -222,6 +231,25 @@ const isFinanceManager = (user) => {
   return [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role) &&
     user.department_code === FINANCE_DEPT_CODE;
 };
+
+/**
+ * Heads of Department (CPJS, AHR, HSD, FOS) sit above their own department's
+ * approval desk, so the requests they raise — floats, purchase requests and the
+ * reconciliations that follow — are approved by the General Secretary (a Super
+ * Admin account) instead of a departmental Lead/HOD. Finance, dispatch and
+ * everything after run exactly as they do for any other requester.
+ */
+const isGsTrackRole = (role) => role === ROLES.HEAD_OF_PROGRAMS;
+
+/**
+ * SQL condition, true when the request aliased `alias` was raised by someone on
+ * the General Secretary track. Used to keep those requests off departmental
+ * desks and on the Super Admin's.
+ */
+const gsTrackRequesterSql = (alias = 'r') => `EXISTS (
+  SELECT 1 FROM users gs_u JOIN roles gs_r ON gs_r.id = gs_u.role_id
+  WHERE gs_u.id = ${alias}.requester_id AND gs_r.role_name = '${ROLES.HEAD_OF_PROGRAMS}'
+)`;
 
 const isAdminHrManager = (user) => {
   if (!user) return false;
@@ -281,6 +309,84 @@ const hrDepartmentScope = (user, requested = null) => {
   return user && user.department_id ? Number(user.department_id) : -1;
 };
 
+/**
+ * Timesheet module access levels.
+ *
+ *   ORGANISATION — Super Admin, and the HOP/Lead of Admin & HR (the HR Office).
+ *                  Sees every department's timesheets, owns the LOE register
+ *                  organisation-wide, and manages public holidays.
+ *   DEPARTMENT   — HOP/Lead of any other department. Sees and approves their
+ *                  own department's timesheets and may READ its allocations,
+ *                  but may not change an HR-controlled LOE.
+ *   SELF         — everyone else. Their own timesheets only.
+ *
+ * These mirror the HR ladder deliberately, so a person's standing is the same
+ * in both modules and there is one rule to reason about.
+ */
+const TIMESHEET_ACCESS = {
+  ORGANISATION: 'ORGANISATION',
+  DEPARTMENT: 'DEPARTMENT',
+  SELF: 'SELF',
+};
+
+const timesheetAccessLevel = (user) => {
+  const level = hrAccessLevel(user);
+  if (level === HR_ACCESS.FULL) return TIMESHEET_ACCESS.ORGANISATION;
+  if (level === HR_ACCESS.DEPARTMENT) return TIMESHEET_ACCESS.DEPARTMENT;
+  return TIMESHEET_ACCESS.SELF;
+};
+
+/** Sees every department's timesheets and allocations. */
+const hasOrgTimesheetAccess = (user) =>
+  timesheetAccessLevel(user) === TIMESHEET_ACCESS.ORGANISATION;
+
+/** Sees timesheets beyond their own — a department head, or the HR Office. */
+const hasTeamTimesheetAccess = (user) =>
+  timesheetAccessLevel(user) !== TIMESHEET_ACCESS.SELF;
+
+/**
+ * May set an employee's LOE allocation.
+ *
+ * Only the HR Office and the Super Admin. A department HOP/Lead reads their
+ * department's allocations but does not change them — the brief is explicit
+ * that LOE is HR-controlled.
+ */
+const canManageLoe = (user) => hasOrgTimesheetAccess(user);
+
+/** May add, edit or remove public holidays. */
+const canManageHolidays = (user) => hasOrgTimesheetAccess(user);
+
+/**
+ * Must this person complete a monthly timesheet?
+ * Everyone except the Super Admin, who approves but never submits.
+ */
+const requiresTimesheet = (user) => Boolean(user) && user.role !== ROLES.ADMIN;
+
+/** Timesheet statuses. NOT_STARTED is virtual — no row exists yet. */
+const TIMESHEET_STATUS = {
+  NOT_STARTED: 'NOT_STARTED',
+  DRAFT: 'DRAFT',
+  SUBMITTED: 'SUBMITTED',
+  UNDER_REVIEW: 'UNDER_REVIEW',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED',
+  RETURNED: 'RETURNED',
+  LOCKED: 'LOCKED',
+};
+
+/** Statuses the owner may still edit and (re)submit from. */
+const TIMESHEET_EDITABLE_STATUSES = [
+  TIMESHEET_STATUS.DRAFT,
+  TIMESHEET_STATUS.REJECTED,
+  TIMESHEET_STATUS.RETURNED,
+];
+
+/** Statuses that are waiting on an approver. */
+const TIMESHEET_PENDING_STATUSES = [
+  TIMESHEET_STATUS.SUBMITTED,
+  TIMESHEET_STATUS.UNDER_REVIEW,
+];
+
 const hasPermission = (role, permission) => {
   const permissions = ROLE_PERMISSIONS[role];
   return permissions && permissions.includes(permission);
@@ -295,6 +401,8 @@ const getRequiredApprovalRole = (currentStatus) => {
   switch (currentStatus) {
     case REQUEST_STATUS.PENDING_ADMIN_APPROVAL:
       return [ROLES.ADMIN, ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
+    case REQUEST_STATUS.PENDING_GS_APPROVAL:
+      return [ROLES.ADMIN];
     case REQUEST_STATUS.PENDING_LEAD_APPROVAL:
       return [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
     case REQUEST_STATUS.PENDING_HOP_APPROVAL:
@@ -311,6 +419,7 @@ const getNextApprovalStatus = (currentStatus) => {
     case REQUEST_STATUS.DRAFT:
       return REQUEST_STATUS.PENDING_LEAD_APPROVAL;
     case REQUEST_STATUS.PENDING_ADMIN_APPROVAL:
+    case REQUEST_STATUS.PENDING_GS_APPROVAL:
       return REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
     case REQUEST_STATUS.PENDING_LEAD_APPROVAL:
       return REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
@@ -335,12 +444,24 @@ module.exports = {
   hasPermission,
   isFinanceManager,
   isAdminHrManager,
+  isGsTrackRole,
+  gsTrackRequesterSql,
   HR_ACCESS,
   hrAccessLevel,
   hasFullHrAccess,
   hasDepartmentHrAccess,
   hasHrOversight,
   hrDepartmentScope,
+  TIMESHEET_ACCESS,
+  TIMESHEET_STATUS,
+  TIMESHEET_EDITABLE_STATUSES,
+  TIMESHEET_PENDING_STATUSES,
+  timesheetAccessLevel,
+  hasOrgTimesheetAccess,
+  hasTeamTimesheetAccess,
+  canManageLoe,
+  canManageHolidays,
+  requiresTimesheet,
   isValidTransition,
   getRequiredApprovalRole,
   getNextApprovalStatus

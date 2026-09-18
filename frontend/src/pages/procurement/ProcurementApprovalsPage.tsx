@@ -64,6 +64,7 @@ import api from '../../services/api';
 import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
 import { formatRoleLabel } from '../../utils/roleUtils';
+import { usePersistentState } from '../../utils/navigationState';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type ActionType =
@@ -104,7 +105,11 @@ const getRoleTabs = (role: string, isAdminHr: boolean = false, isFinanceLead: bo
       return [
         { label: 'Awaiting My Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
         ...(isFinanceLead
-          ? [{ label: 'High-Value Approval', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false }]
+          ? [
+              { label: 'High-Value Approval', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false },
+              // Heads of Department's requests with the General Secretary — view only.
+              { label: 'Awaiting GS (view only)', status: 'PENDING_GS_APPROVAL', actedOn: false }
+            ]
           : []),
         { label: 'All Records', status: '', actedOn: true }
       ];
@@ -126,6 +131,8 @@ const getRoleTabs = (role: string, isAdminHr: boolean = false, isFinanceLead: bo
       ];
     case 'ADMIN':
       return [
+        // Heads of Department's own requests — decided by the General Secretary.
+        { label: 'Awaiting GS Approval', status: 'PENDING_GS_APPROVAL', actedOn: false },
         { label: 'Dept Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
         { label: 'High-Value Approval', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false },
         { label: 'Procurement', status: 'PENDING_PROCUREMENT', actedOn: false },
@@ -157,12 +164,15 @@ const ProcurementApprovalsPage: React.FC = () => {
     user?.department_code === 'FOS';
   const tabs = getRoleTabs(role, isAdminHr, isFinanceLead);
 
-  const [tabIdx, setTabIdx] = useState(0);
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(15);
-  const [approvalSearch, setApprovalSearch] = useState('');
-  const [approvalDeptFilter, setApprovalDeptFilter] = useState('');
-  const [approvalPriorityFilter, setApprovalPriorityFilter] = useState('');
+  // Tab, page and filters are remembered so that viewing a request and coming
+  // back returns to the same place in the queue.
+  const [storedTabIdx, setTabIdx] = usePersistentState('procApprovals.tab', 0);
+  const tabIdx = Math.min(storedTabIdx, Math.max(tabs.length - 1, 0));
+  const [page, setPage] = usePersistentState('procApprovals.page', 0);
+  const [rowsPerPage, setRowsPerPage] = usePersistentState('procApprovals.rowsPerPage', 15);
+  const [approvalSearch, setApprovalSearch] = usePersistentState('procApprovals.search', '');
+  const [approvalDeptFilter, setApprovalDeptFilter] = usePersistentState('procApprovals.dept', '');
+  const [approvalPriorityFilter, setApprovalPriorityFilter] = usePersistentState('procApprovals.priority', '');
   const [departments, setDepartments] = useState<{id: number; department_name: string}[]>([]);
 
   useEffect(() => {
@@ -488,8 +498,10 @@ const ProcurementApprovalsPage: React.FC = () => {
     }
 
     if (role === 'ADMIN') {
-      // Admin gets contextual buttons based on current tab's status
-      if (req.status === 'PENDING_DEPT_APPROVAL') {
+      // Admin gets contextual buttons based on current tab's status. The
+      // General Secretary stage uses the same approve action as the
+      // departmental one; the server tells them apart.
+      if (req.status === 'PENDING_DEPT_APPROVAL' || req.status === 'PENDING_GS_APPROVAL') {
         btns.push(
           <Button key="approve" size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
             onClick={() => { setAction({ type: 'approve_dept', request: req }); setComments(''); }}>Approve</Button>,

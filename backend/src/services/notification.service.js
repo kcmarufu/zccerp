@@ -80,17 +80,54 @@ class NotificationService {
   }
 
   /**
+   * A Head of Department's float, purchase request or reconciliation is waiting
+   * on the General Secretary. Only Super Admin accounts are told — no
+   * departmental desk is involved at this stage.
+   *
+   * @param {'request'|'proc_request'|'reconciliation'} kind
+   */
+  async onRequestAwaitingGs(requestId, requestCode, requesterId, kind = 'request') {
+    const copy = {
+      request: {
+        title: `Float Request for GS Approval: ${requestCode}`,
+        message: 'A Head of Department has submitted a float request that requires your approval.',
+        entityType: 'request', link: '/finance/approvals'
+      },
+      proc_request: {
+        title: `Purchase Request for GS Approval: ${requestCode}`,
+        message: 'A Head of Department has submitted a purchase request that requires your approval.',
+        entityType: 'proc_request', link: `/procurement/requests/${requestId}`
+      },
+      reconciliation: {
+        title: `Reconciliation for GS Review: ${requestCode}`,
+        message: 'A Head of Department has submitted a reconciliation that requires your review.',
+        entityType: 'request', link: '/finance/reconciliation'
+      }
+    }[kind];
+    await this._notifyByRole(
+      ['ADMIN'], copy.title, copy.message,
+      kind === 'reconciliation' ? 'reconciliation_pending' : 'approval_pending',
+      copy.entityType, requestId, copy.link, requesterId
+    );
+  }
+
+  /**
    * Requester amended a request that is already awaiting approval — tell the desk
    * holding it, so nobody approves a version they have not seen. Same routing as
    * onRequestSubmitted: the project-owning department for cross-department
    * requests, otherwise the requester's own department.
    */
-  async onRequestAmended(requestId, requestCode, requesterId, departmentId, routingDepartmentId = null) {
+  async onRequestAmended(requestId, requestCode, requesterId, departmentId, routingDepartmentId = null, gsOnly = false) {
     const link = `/finance/approvals`;
     const title = `Request Amended: ${requestCode}`;
     const message = `The requester has changed this float request while it is awaiting your approval. Please re-check the details before approving.`;
     const isCrossDept = Boolean(routingDepartmentId && routingDepartmentId !== departmentId);
     const notifyDeptId = (isCrossDept ? routingDepartmentId : departmentId);
+    if (gsOnly) {
+      // Awaiting the General Secretary — no departmental desk holds it.
+      await this._notifyByRole(['ADMIN'], title, message, 'approval_pending', 'request', requestId, link, requesterId);
+      return;
+    }
     try {
       const leads = await query(
         `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.role_name = 'PROGRAM_LEAD' AND u.department_id = ? AND u.is_active = 1 AND u.id != ?`,

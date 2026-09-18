@@ -51,6 +51,8 @@ import { format } from '../utils/datetime';
 import { useAuthStore } from '../store/authStore';
 import { requestService } from '../services/requestService';
 import { Request, RequestStatus } from '../types';
+import { usePersistentState } from '../utils/navigationState';
+import { isRequesterEditable } from '../utils/requestStatus';
 
 // ── HARDCODED BRANDING ─────────────────────────────────────────────────────
 const DOC_TITLE  = 'Float Requisition' as const;
@@ -60,6 +62,7 @@ const REQUEST_STATUSES: { value: RequestStatus | ''; label: string }[] = [
   { value: '', label: 'All Statuses' },
   { value: 'DRAFT', label: 'Draft' },
   { value: 'PENDING_ADMIN_APPROVAL', label: 'Pending Admin' },
+  { value: 'PENDING_GS_APPROVAL', label: 'Pending General Secretary' },
   { value: 'PENDING_LEAD_APPROVAL', label: 'Pending Lead' },
   { value: 'PENDING_HOP_APPROVAL', label: 'Pending Head of Department' },
   { value: 'PENDING_FINANCE_APPROVAL', label: 'Pending Finance' },
@@ -75,28 +78,31 @@ const RequestsListPage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
   const { hasPermission, user } = useAuthStore();
+  // A Head of Department raises floats of their own; on this page they see only
+  // those. Requests they approve are on the Approvals page.
+  const onlyMine = user?.role === 'HEAD_OF_PROGRAMS';
 
   const [requests, setRequests] = useState<Request[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Pagination
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(25);
+  // Pagination and filters survive opening a request and coming back.
+  const [page, setPage] = usePersistentState('requests.page', 0);
+  const [rowsPerPage, setRowsPerPage] = usePersistentState('requests.rowsPerPage', 25);
 
   // Filters
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<RequestStatus | ''>('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [searchTerm, setSearchTerm] = usePersistentState('requests.search', '');
+  const [statusFilter, setStatusFilter] = usePersistentState<RequestStatus | ''>('requests.status', '');
+  const [dateFrom, setDateFrom] = usePersistentState('requests.dateFrom', '');
+  const [dateTo, setDateTo] = usePersistentState('requests.dateTo', '');
 
   // Selection
   const [selected, setSelected] = useState<number[]>([]);
 
   useEffect(() => {
     fetchRequests();
-  }, [page, rowsPerPage, statusFilter, refreshTrigger]);
+  }, [page, rowsPerPage, statusFilter, refreshTrigger, onlyMine]);
 
   // Refresh data when page becomes visible
   useEffect(() => {
@@ -122,7 +128,8 @@ const RequestsListPage: React.FC = () => {
         page: page + 1,
         limit: rowsPerPage,
         status: statusFilter || undefined,
-        search: searchTerm || undefined
+        search: searchTerm || undefined,
+        ...(onlyMine ? { mine: true } : {})
       });
 
       if (response.success && response.data) {
@@ -152,6 +159,7 @@ const RequestsListPage: React.FC = () => {
       case 'REJECTED': return 'error';
       case 'DRAFT':    return 'default';
       case 'PENDING_ADMIN_APPROVAL': return 'info';
+      case 'PENDING_GS_APPROVAL':
       case 'PENDING_LEAD_APPROVAL':
       case 'PENDING_HOP_APPROVAL':
       case 'PENDING_FINANCE_APPROVAL': return 'warning';
@@ -262,7 +270,7 @@ const RequestsListPage: React.FC = () => {
           <Box display="flex" alignItems="center" gap={2}>
             <RequisitionIcon sx={{ fontSize: 36 }} />
             <Box>
-              <Typography variant="h5" fontWeight={700}>{DOC_TITLE}s</Typography>
+              <Typography variant="h5" fontWeight={700}>{onlyMine ? `My ${DOC_TITLE}s` : `${DOC_TITLE}s`}</Typography>
               <Typography variant="body2" sx={{ opacity: 0.85 }}>Manage and export float requisitions</Typography>
             </Box>
           </Box>
@@ -373,7 +381,7 @@ const RequestsListPage: React.FC = () => {
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center">
                         <Tooltip title="View"><IconButton size="small" color="primary" onClick={e => { e.stopPropagation(); navigate(`/finance/requests/${request.id}`); }}><ViewIcon fontSize="small" /></IconButton></Tooltip>
-                        {['DRAFT', 'REJECTED', 'PENDING_LEAD_APPROVAL', 'PENDING_ADMIN_APPROVAL', 'PENDING_HOP_APPROVAL'].includes(request.status) && request.requester_id === user?.id && hasPermission('create_request') && (
+                        {isRequesterEditable(request.status) && request.requester_id === user?.id && hasPermission('create_request') && (
                           <Tooltip title="Edit"><IconButton size="small" onClick={e => { e.stopPropagation(); navigate(`/finance/requests/${request.id}/edit`); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
                         )}
                       </Stack>

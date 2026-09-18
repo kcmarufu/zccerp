@@ -395,7 +395,7 @@ exports.deleteAttachment = async (req, res) => {
     if (isUploader && !isPrivileged && attachment.entity_type === 'REQUEST') {
       const UPLOADER_DELETABLE_STATUSES = [
         'DRAFT', 'REJECTED',
-        'PENDING_ADMIN_APPROVAL', 'PENDING_LEAD_APPROVAL',
+        'PENDING_ADMIN_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_LEAD_APPROVAL',
         'PENDING_HOP_APPROVAL', 'PENDING_FINANCE_APPROVAL',
         'DISPATCHED', 'PENDING_RECONCILIATION',
         'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE'

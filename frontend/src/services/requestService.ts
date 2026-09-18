@@ -19,6 +19,8 @@ interface RequestFilters {
   sortBy?: string;
   sortOrder?: 'ASC' | 'DESC';
   search?: string;
+  /** Only the caller's own requests, for roles that can otherwise see more. */
+  mine?: boolean;
 }
 
 export const requestService = {

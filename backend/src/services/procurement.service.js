@@ -5,12 +5,15 @@
  */
 
 const { query, transaction } = require('../config/database');
-const { ROLES, isAdminHrManager, FINANCE_DEPT_CODE } = require('../config/roles');
+const { ROLES, isAdminHrManager, FINANCE_DEPT_CODE, isGsTrackRole } = require('../config/roles');
 const notificationService = require('./notification.service');
 
 const PROC_STATUS = {
   DRAFT: 'DRAFT',
   PENDING_DEPT_APPROVAL: 'PENDING_DEPT_APPROVAL',
+  // A Head of Department's request: the General Secretary approves it in place
+  // of a departmental Lead/HOD. Everything after is the ordinary flow.
+  PENDING_GS_APPROVAL: 'PENDING_GS_APPROVAL',
   PENDING_FINANCE_APPROVAL: 'PENDING_FINANCE_APPROVAL',
   PENDING_PROCUREMENT: 'PENDING_PROCUREMENT',
   PENDING_COMMITTEE: 'PENDING_COMMITTEE',
@@ -245,8 +248,10 @@ class ProcurementService {
         //   4. Finance's Lead/HOD additionally sees every high-value request
         //      awaiting the dual approval, whichever department raised it —
         //      they hold one of the two seats, so it has to reach their desk
+        //   5. Finance's Lead/HOD also sees Heads of Department's requests
+        //      awaiting the General Secretary — view only; the GS decides them
         const financeSeat = user.department_code === FINANCE_DEPT_CODE
-          ? `OR pr.status = 'PENDING_HIGH_VALUE_APPROVAL'`
+          ? `OR pr.status IN ('PENDING_HIGH_VALUE_APPROVAL', 'PENDING_GS_APPROVAL')`
           : '';
         where = `WHERE (
           (pr.status = 'PENDING_DEPT_APPROVAL' AND COALESCE(pr.routing_department_id, pr.department_id) = ?) OR
@@ -309,11 +314,13 @@ class ProcurementService {
       query(
         `SELECT pr.*,
           u.first_name, u.last_name, u.email AS requester_email,
+          rr.role_name AS requester_role,
           d.department_name, d.department_code,
           dn.donor_name, dn.donor_code,
           p.project_name, p.project_code
          FROM proc_requests pr
          JOIN users u ON pr.requester_id = u.id
+         LEFT JOIN roles rr ON rr.id = u.role_id
          LEFT JOIN departments d ON pr.department_id = d.id
          LEFT JOIN donors dn ON pr.donor_id = dn.id
          LEFT JOIN projects p ON pr.project_id = p.id
@@ -325,6 +332,7 @@ class ProcurementService {
     if (!requests.length) return null;
 
     const request = requests[0];
+    request.is_gs_track = isGsTrackRole(request.requester_role) ? 1 : 0;
 
     // Flag high-value requests so the UI can mark them for special approval.
     const highValue = await this.isHighValueRequest(requestId);
@@ -389,7 +397,7 @@ class ProcurementService {
     if (!existing) throw new Error('Request not found');
     // Editable until the Procurement Committee unanimously approves (which moves status
     // to PENDING_FINAL_FINANCE). Everything before that stage is still open to amendment.
-    if (!['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(existing.status)) {
+    if (!['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(existing.status)) {
       throw new Error('Requests can only be edited before the Procurement Committee has approved');
     }
     if (existing.requester_id !== user.id && user.role !== ROLES.ADMIN) {
@@ -469,10 +477,17 @@ class ProcurementService {
         conn, existing.project_id, requestId, existing.department_id
       );
 
+      // A Head of Department's request is approved by the General Secretary in
+      // place of a departmental Lead/HOD — judged on who raised it, since an
+      // Admin may submit on the requester's behalf.
+      const firstDesk = existing.is_gs_track
+        ? PROC_STATUS.PENDING_GS_APPROVAL
+        : PROC_STATUS.PENDING_DEPT_APPROVAL;
+
       // A resubmission returns to the desk that rejected it — a request rejected by
       // Finance goes back to Finance, not through the whole pipeline again. Only a
-      // first-time submission starts at department approval.
-      let targetStatus = PROC_STATUS.PENDING_DEPT_APPROVAL;
+      // first-time submission starts at the first approval desk.
+      let targetStatus = firstDesk;
       if (isResubmission) {
         // rejected_from_status is recorded when a high-value approver rejects;
         // fall back to the approval trail for rejections logged before it existed.
@@ -488,6 +503,7 @@ class ProcurementService {
         }
         const resumable = [
           PROC_STATUS.PENDING_DEPT_APPROVAL,
+          PROC_STATUS.PENDING_GS_APPROVAL,
           PROC_STATUS.PENDING_PROCUREMENT,
           PROC_STATUS.PENDING_COMMITTEE,
           PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
@@ -495,6 +511,12 @@ class ProcurementService {
         ];
         if (resumable.includes(rejectedFrom)) {
           targetStatus = rejectedFrom;
+        }
+        // The first desk is decided by the requester, not by the trail — a
+        // request rejected at the departmental stage before this route existed
+        // still goes to the General Secretary if a Head of Department raised it.
+        if ([PROC_STATUS.PENDING_DEPT_APPROVAL, PROC_STATUS.PENDING_GS_APPROVAL].includes(targetStatus)) {
+          targetStatus = firstDesk;
         }
 
         // Returning to the high-value stage means both approvers assess the
@@ -533,6 +555,8 @@ class ProcurementService {
         // that resumes further down the pipeline must not ping them again.
         if (n.targetStatus === PROC_STATUS.PENDING_DEPT_APPROVAL) {
           notificationService.onProcurementSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.routingDeptId).catch(() => {});
+        } else if (n.targetStatus === PROC_STATUS.PENDING_GS_APPROVAL) {
+          notificationService.onRequestAwaitingGs(requestId, n.requestCode, n.requesterId, 'proc_request').catch(() => {});
         }
       }
       return result;
@@ -546,6 +570,27 @@ class ProcurementService {
   async approveDeptLevel(requestId, user, comments = '') {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
+
+    // General Secretary stage (a Head of Department's request). Same outcome as a
+    // departmental approval — on to Procurement — but only a Super Admin decides it.
+    if (req.status === PROC_STATUS.PENDING_GS_APPROVAL) {
+      if (user.role !== ROLES.ADMIN) {
+        throw new Error("A Head of Department's purchase request is approved by the General Secretary");
+      }
+      return transaction(async (conn) => {
+        await conn.execute(
+          `UPDATE proc_requests SET status='PENDING_PROCUREMENT', dept_approved_at=NOW(), updated_at=NOW() WHERE id=?`,
+          [requestId]
+        );
+        await conn.execute(
+          `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+           VALUES (?, ?, ?, 'APPROVED', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', ?)`,
+          [requestId, user.id, user.role, comments || 'Approved by the General Secretary — forwarded to procurement']
+        );
+        return { success: true };
+      });
+    }
+
     if (req.status !== 'PENDING_DEPT_APPROVAL') {
       throw new Error('Request is not pending department approval');
     }
@@ -600,14 +645,21 @@ class ProcurementService {
     if (quotations.length > 0) {
       throw new Error('Cannot reverse — the Procurement team has already added quotations. Contact an Admin.');
     }
+    // An approval given at the General Secretary stage goes back there, and only
+    // a Super Admin may undo it.
+    const revertTo = req.is_gs_track ? PROC_STATUS.PENDING_GS_APPROVAL : PROC_STATUS.PENDING_DEPT_APPROVAL;
+    if (revertTo === PROC_STATUS.PENDING_GS_APPROVAL && user.role !== ROLES.ADMIN) {
+      throw new Error("Only the General Secretary can reverse the approval of a Head of Department's request");
+    }
     await query(
-      `UPDATE proc_requests SET status='PENDING_DEPT_APPROVAL', dept_approved_at=NULL, updated_at=NOW() WHERE id=?`,
-      [requestId]
+      `UPDATE proc_requests SET status=?, dept_approved_at=NULL, updated_at=NOW() WHERE id=?`,
+      [revertTo, requestId]
     );
     await query(
       `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-       VALUES (?, ?, ?, 'REVERSED', 'PENDING_PROCUREMENT', 'PENDING_DEPT_APPROVAL', 'Department approval reversed')`,
-      [requestId, user.id, user.role]
+       VALUES (?, ?, ?, 'REVERSED', 'PENDING_PROCUREMENT', ?, ?)`,
+      [requestId, user.id, user.role, revertTo,
+       revertTo === PROC_STATUS.PENDING_GS_APPROVAL ? 'General Secretary approval reversed' : 'Department approval reversed']
     );
     return { success: true };
   }
@@ -641,7 +693,7 @@ class ProcurementService {
     if (!req) throw new Error('Request not found');
 
     const allowedStatuses = [
-      'PENDING_DEPT_APPROVAL',
+      'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL',
       'PENDING_PROCUREMENT', 'PENDING_FINAL_FINANCE'
     ];
     if (!allowedStatuses.includes(req.status)) {
@@ -649,6 +701,10 @@ class ProcurementService {
         throw new Error('At committee stage, use the Committee Vote action to record a rejection — not the Reject button');
       }
       throw new Error('Request cannot be rejected at this stage');
+    }
+
+    if (req.status === PROC_STATUS.PENDING_GS_APPROVAL && user.role !== ROLES.ADMIN) {
+      throw new Error("A Head of Department's purchase request is actioned by the General Secretary");
     }
 
     // The dept-approval decision — approve or reject — belongs to the Lead/HOD of the
@@ -1570,7 +1626,7 @@ class ProcurementService {
     return {
       statusSummary: statusMap,
       totalCompleted: statusMap['COMPLETED'] || 0,
-      totalPending: (statusMap['PENDING_DEPT_APPROVAL'] || 0) + (statusMap['PENDING_FINANCE_APPROVAL'] || 0),
+      totalPending: (statusMap['PENDING_DEPT_APPROVAL'] || 0) + (statusMap['PENDING_GS_APPROVAL'] || 0) + (statusMap['PENDING_FINANCE_APPROVAL'] || 0),
       totalInProcurement: statusMap['PENDING_PROCUREMENT'] || 0,
       totalAwaitingCommittee: statusMap['PENDING_COMMITTEE'] || 0,
       totalFinalFinance: statusMap['PENDING_FINAL_FINANCE'] || 0,

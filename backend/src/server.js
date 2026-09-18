@@ -9,6 +9,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
 const { testConnection, logger } = require('./config/database');
 const routes = require('./routes');
 const leaveAccrualScheduler = require('./scheduler/leaveAccrual.scheduler');
@@ -33,10 +34,32 @@ app.use(cors({
   credentials: true
 }));
 
-// General API rate limiter — 300 requests per 15 minutes per IP
+// General API rate limiter.
+//
+// Counted per signed-in user, not per IP. Everyone in the office reaches the
+// server through the same internet connection, so an IP-based limit made the
+// whole organisation share one budget — normal use (notification polling,
+// queue refreshes, page loads) exhausted it and people got "Too many requests".
+// Requests without a valid token (e.g. probing) are still limited per IP.
+const userIdFromToken = (req) => {
+  const header = req.headers.authorization || '';
+  if (!header.startsWith('Bearer ')) return null;
+  try {
+    return jwt.verify(header.slice(7), process.env.JWT_SECRET).userId || null;
+  } catch {
+    return null; // expired/invalid — fall back to the IP
+  }
+};
+
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 300,
+  max: (req) => (userIdFromToken(req)
+    ? parseInt(process.env.RATE_LIMIT_MAX_PER_USER) || 1500
+    : parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 300),
+  keyGenerator: (req) => {
+    const userId = userIdFromToken(req);
+    return userId ? `user:${userId}` : `ip:${req.ip}`;
+  },
   message: { success: false, error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false

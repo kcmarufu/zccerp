@@ -43,6 +43,8 @@ import {
   ListItem,
   ListItemIcon,
   ListItemText,
+  ToggleButton,
+  ToggleButtonGroup,
   useTheme,
   useMediaQuery
 } from '@mui/material';
@@ -83,6 +85,25 @@ import { useAuthStore } from '../store/authStore';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
 import { reconciliationService, LeadDeskBacklog } from '../services/reconciliationService';
 import { formatRoleLabel } from '../utils/roleUtils';
+import { usePersistentState } from '../utils/navigationState';
+
+/**
+ * The Super Admin sees every pending float in the organisation. Splitting the
+ * Pending tab by desk puts what only they can decide — Heads of Department's
+ * requests awaiting the General Secretary — first, with the oversight queues
+ * one click away instead of mixed into it.
+ */
+type AdminDesk = 'gs' | 'department' | 'finance' | 'all';
+const ADMIN_DESKS: { key: AdminDesk; label: string; statuses: string[] | null }[] = [
+  { key: 'gs', label: 'Awaiting GS Approval', statuses: ['PENDING_GS_APPROVAL'] },
+  { key: 'department', label: 'Department Stage', statuses: ['PENDING_ADMIN_APPROVAL', 'PENDING_LEAD_APPROVAL', 'PENDING_HOP_APPROVAL'] },
+  { key: 'finance', label: 'Finance Stage', statuses: ['PENDING_FINANCE_APPROVAL'] },
+  { key: 'all', label: 'All Pending', statuses: null },
+];
+const inDesk = (desk: AdminDesk, status: string) => {
+  const statuses = ADMIN_DESKS.find(d => d.key === desk)?.statuses;
+  return !statuses || statuses.includes(status);
+};
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -118,9 +139,13 @@ const ApprovalsPage: React.FC = () => {
   const DOC_TITLE  = 'Float Requisition' as const;
   // ──────────────────────────────────────────────────────────────────────────
   
-  const [tabValue, setTabValue] = useState(0);
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(15);
+  // Tab, page and filters are remembered, so opening a request and coming back
+  // lands the approver where they were.
+  const [tabValue, setTabValue] = usePersistentState('approvals.tab', 0);
+  const [page, setPage] = usePersistentState('approvals.page', 0);
+  const [rowsPerPage, setRowsPerPage] = usePersistentState('approvals.rowsPerPage', 15);
+  const isSuperAdmin = user?.role === 'ADMIN';
+  const [adminDesk, setAdminDesk] = usePersistentState<AdminDesk>('approvals.adminDesk', 'gs');
   const [pendingRequests, setPendingRequests] = useState<Request[]>([]);
   const [approvedRequests, setApprovedRequests] = useState<RequestWithReversal[]>([]);
   const [rejectedRequests, setRejectedRequests] = useState<Request[]>([]);
@@ -138,13 +163,13 @@ const ApprovalsPage: React.FC = () => {
   const [dialogPerDiemClaim, setDialogPerDiemClaim] = useState<PerDiemClaim | null>(null);
 
   // ── Filter state ─────────────────────────────────────────────────────────
-  const [filterSearch, setFilterSearch] = useState('');
-  const [filterDept, setFilterDept] = useState('');
-  const [filterProject, setFilterProject] = useState('');
-  const [filterPriority, setFilterPriority] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
-  const [filterDateFrom, setFilterDateFrom] = useState('');
-  const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterSearch, setFilterSearch] = usePersistentState('approvals.search', '');
+  const [filterDept, setFilterDept] = usePersistentState('approvals.dept', '');
+  const [filterProject, setFilterProject] = usePersistentState('approvals.project', '');
+  const [filterPriority, setFilterPriority] = usePersistentState('approvals.priority', '');
+  const [filterStatus, setFilterStatus] = usePersistentState('approvals.status', '');
+  const [filterDateFrom, setFilterDateFrom] = usePersistentState('approvals.dateFrom', '');
+  const [filterDateTo, setFilterDateTo] = usePersistentState('approvals.dateTo', '');
 
   // ── Post-approval PDF download ────────────────────────────────────────────
   const [postApprovalPDFDialog, setPostApprovalPDFDialog] = useState(false);
@@ -366,6 +391,7 @@ const ApprovalsPage: React.FC = () => {
   const getStatusColor = (status: string): 'warning' | 'info' | 'success' | 'error' | 'default' => {
     switch (status) {
       case 'PENDING_ADMIN_APPROVAL': return 'info';
+      case 'PENDING_GS_APPROVAL': return 'warning';
       case 'PENDING_LEAD_APPROVAL': return 'warning';
       case 'PENDING_HOP_APPROVAL': return 'info';
       case 'PENDING_FINANCE_APPROVAL': return 'success';
@@ -543,6 +569,10 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
   const canActOnRequest = (request: Request): boolean => {
     if (!user) return false;
     const role = user.role;
+
+    // A Head of Department's request awaiting the General Secretary: only the
+    // Super Admin decides it. Finance sees it here but acts once it reaches them.
+    if (request.status === 'PENDING_GS_APPROVAL') return role === 'ADMIN';
 
     // Finance HOP/Lead: restrict approval at dept level to FOS only
     if (isFinanceManager && (role === 'HEAD_OF_PROGRAMS' || role === 'PROGRAM_LEAD')) {
@@ -800,6 +830,15 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                             </span>
                           </Tooltip>
                         )}
+                        {!approvalsBlocked && !canApproveInList(request) && request.status === 'PENDING_GS_APPROVAL' && (
+                          <Tooltip title="View only — awaiting the General Secretary's approval. You can approve it once it reaches the Finance desk.">
+                            <span>
+                              <IconButton size="small" disabled>
+                                <ApproveIcon />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
                         {!approvalsBlocked && !canApproveInList(request) && request.status === 'PENDING_LEAD_APPROVAL' && (
                           <Tooltip title="View only — request is pending approval by its Department Lead / Head of Department">
                             <span>
@@ -1004,11 +1043,17 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
             </TextField>
             <TextField
               select size="small" label="Status" sx={{ minWidth: 180, flex: 1 }}
-              value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+              value={filterStatus} onChange={e => {
+                setFilterStatus(e.target.value);
+                setPage(0);
+                // A status already picks the stage — don't let the desk hide it.
+                if (isSuperAdmin && e.target.value) setAdminDesk('all');
+              }}
             >
               <MenuItem value="">All Statuses</MenuItem>
               {[
                 { v: 'PENDING_ADMIN_APPROVAL', l: 'Pending Admin' },
+                { v: 'PENDING_GS_APPROVAL', l: 'Pending General Secretary' },
                 { v: 'PENDING_LEAD_APPROVAL', l: 'Pending Lead' },
                 { v: 'PENDING_HOP_APPROVAL', l: 'Pending Head of Department' },
                 { v: 'PENDING_FINANCE_APPROVAL', l: 'Pending Finance' },
@@ -1040,7 +1085,31 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
         </Tabs>
 
         <TabPanel value={tabValue} index={0}>
-          {renderRequestsTable(pendingRequests, true, 'pending')}
+          {isSuperAdmin && (
+            <ToggleButtonGroup
+              exclusive size="small" value={adminDesk}
+              onChange={(_, v) => { if (v) { setAdminDesk(v); setPage(0); } }}
+              sx={{ mb: 2, flexWrap: 'wrap' }}
+            >
+              {ADMIN_DESKS.map(d => {
+                const count = pendingRequests.filter(r => inDesk(d.key, r.status)).length;
+                return (
+                  <ToggleButton key={d.key} value={d.key} sx={{ textTransform: 'none', px: 2 }}>
+                    {d.label}
+                    <Chip
+                      label={count} size="small"
+                      color={d.key === 'gs' && count > 0 ? 'warning' : 'default'}
+                      sx={{ ml: 1, height: 20 }}
+                    />
+                  </ToggleButton>
+                );
+              })}
+            </ToggleButtonGroup>
+          )}
+          {renderRequestsTable(
+            isSuperAdmin ? pendingRequests.filter(r => inDesk(adminDesk, r.status)) : pendingRequests,
+            true, 'pending'
+          )}
         </TabPanel>
         <TabPanel value={tabValue} index={1}>
           {renderRequestsTable(approvedRequests, false, 'approved')}
@@ -1073,6 +1142,13 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
             </Box>
           ) : selectedRequest && (
             <Box>
+              {selectedRequest.status === 'PENDING_GS_APPROVAL' && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  <strong>Head of Department request.</strong> This request needs the General Secretary's
+                  approval in place of a departmental approval. Once approved it goes to Finance for approval and dispatch.
+                </Alert>
+              )}
+
               {/* Cross-department routing notice */}
               {selectedRequest.routing_department_id && (
                 <Alert severity="info" icon={<WarningIcon />} sx={{ mb: 2 }}>

@@ -14,7 +14,8 @@ const {
   ROLES,
   getNextApprovalStatus,
   getRequiredApprovalRole,
-  isValidTransition
+  isValidTransition,
+  isGsTrackRole
 } = require('../config/roles');
 
 const { OVERDUE_RECON_LIMIT } = reconciliationService;
@@ -85,9 +86,19 @@ class ApprovalService {
         }
       }
 
+      const [requesterRows] = await connection.execute(
+        'SELECT r.role_name AS role FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?',
+        [userId]
+      );
+      const requesterRole = requesterRows[0]?.role;
+      // A Head of Department's request skips the departmental desk entirely: the
+      // General Secretary approves it, then Finance.
+      const isGsTrack = isGsTrackRole(requesterRole);
+      const firstDesk = isGsTrack ? REQUEST_STATUS.PENDING_GS_APPROVAL : REQUEST_STATUS.PENDING_LEAD_APPROVAL;
+
       // For resubmissions, route back to the level that last rejected the request
       // so the user doesn't have to go through already-approved levels again.
-      let targetStatus = REQUEST_STATUS.PENDING_LEAD_APPROVAL;
+      let targetStatus = firstDesk;
       if (isResubmission) {
         // Reconciliation rejections also log action='REJECTED', but they send the
         // request back to DISPATCHED to be reconciled again — they are not approval
@@ -111,25 +122,25 @@ class ApprovalService {
             [REQUEST_STATUS.PENDING_FINANCE_APPROVAL]: REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
             [REQUEST_STATUS.PENDING_HOP_APPROVAL]: REQUEST_STATUS.PENDING_HOP_APPROVAL,
             [REQUEST_STATUS.PENDING_ADMIN_APPROVAL]: REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+            [REQUEST_STATUS.PENDING_GS_APPROVAL]: REQUEST_STATUS.PENDING_GS_APPROVAL,
             [REQUEST_STATUS.PENDING_LEAD_APPROVAL]: REQUEST_STATUS.PENDING_LEAD_APPROVAL,
             [REQUEST_STATUS.APPROVED]: REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
             [REQUEST_STATUS.DISPATCHED]: REQUEST_STATUS.PENDING_FINANCE_APPROVAL
           };
-          // Unrecognised origin — fall back to starting at Lead level.
-          targetStatus = resumeAt[rejectedFromStatus] || REQUEST_STATUS.PENDING_LEAD_APPROVAL;
+          // Unrecognised origin — fall back to the requester's first desk.
+          targetStatus = resumeAt[rejectedFromStatus] || firstDesk;
         }
+        // A departmental stage never applies to a Head of Department's request,
+        // whatever the trail says (e.g. one rejected before this routing existed).
+        if (isGsTrack && targetStatus !== REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
+          targetStatus = REQUEST_STATUS.PENDING_GS_APPROVAL;
+        }
+      } else if (isGsTrack) {
+        targetStatus = REQUEST_STATUS.PENDING_GS_APPROVAL;
       } else {
         // New submission: determine routing based on donor type and requester role.
 
-        // 1. Check if the requester is a Finance Clerk — their requests must go to
-        //    Finance HOP/Lead first (PENDING_LEAD_APPROVAL at Finance dept).
-        const [requesterRows] = await connection.execute(
-          'SELECT r.role_name AS role FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?',
-          [userId]
-        );
-        const requesterRole = requesterRows[0]?.role;
-
-        // 2. Check if this request targets an Admin-type donor.
+        // Check if this request targets an Admin-type donor.
         if (request.donor_id) {
           const [donorRows] = await connection.execute(
             'SELECT donor_type FROM donors WHERE id = ?',
@@ -154,7 +165,9 @@ class ApprovalService {
       // the Admin/HR Lead or HOP handles them (not the requester's own dept Lead).
       let routingDepartmentId = null;
       const isAdminDonorSubmit = (targetStatus === REQUEST_STATUS.PENDING_ADMIN_APPROVAL);
-      if (isAdminDonorSubmit) {
+      if (isGsTrack) {
+        // No departmental desk is involved, so there is nothing to route.
+      } else if (isAdminDonorSubmit) {
         // Look up AHR department and route there if requester is not already AHR.
         const [ahrDeptRows] = await connection.execute(
           "SELECT id FROM departments WHERE department_code = 'AHR' LIMIT 1"
@@ -221,13 +234,17 @@ class ApprovalService {
       return {
         success: true,
         message: isResubmission ? 'Request resubmitted successfully' : 'Request submitted successfully',
-        _notif: { requestCode: request.request_code, requesterId: userId, deptId: request.department_id, routingDeptId: routingDepartmentId }
+        _notif: { requestCode: request.request_code, requesterId: userId, deptId: request.department_id, routingDeptId: routingDepartmentId, targetStatus }
       };
     });
     // Fire notification outside transaction (silent)
     if (result._notif) {
       const n = result._notif; delete result._notif;
-      notificationService.onRequestSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.routingDeptId).catch(() => {});
+      if (n.targetStatus === REQUEST_STATUS.PENDING_GS_APPROVAL) {
+        notificationService.onRequestAwaitingGs(requestId, n.requestCode, n.requesterId).catch(() => {});
+      } else {
+        notificationService.onRequestSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.routingDeptId).catch(() => {});
+      }
     }
     return result;
   }
@@ -423,6 +440,7 @@ class ApprovalService {
 
       const validStatuses = [
         REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+        REQUEST_STATUS.PENDING_GS_APPROVAL,
         REQUEST_STATUS.PENDING_LEAD_APPROVAL,
         REQUEST_STATUS.PENDING_HOP_APPROVAL,
         REQUEST_STATUS.PENDING_FINANCE_APPROVAL
@@ -433,10 +451,19 @@ class ApprovalService {
 
       // Admin-donor request at PENDING_ADMIN_APPROVAL: advance directly to Finance.
       // (HR Lead/HOP act at the same stage — first to approve wins.)
-      if (request.status === REQUEST_STATUS.PENDING_ADMIN_APPROVAL) {
+      // A Head of Department's request at PENDING_GS_APPROVAL goes the same way:
+      // the General Secretary's approval replaces the departmental one, and
+      // Finance still approves and dispatches it — Admin does not bypass Finance.
+      const forwardsToFinance = [
+        REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+        REQUEST_STATUS.PENDING_GS_APPROVAL
+      ];
+      if (forwardsToFinance.includes(request.status)) {
+        const isGsStage = request.status === REQUEST_STATUS.PENDING_GS_APPROVAL;
         await connection.execute(
           `UPDATE requests
            SET status = ?,
+               ${isGsStage ? 'hop_approved_at = CURRENT_TIMESTAMP,' : ''}
                updated_at = NOW(),
                version = version + 1
            WHERE id = ?`,
@@ -446,15 +473,17 @@ class ApprovalService {
         await connection.execute(
           `INSERT INTO approval_logs (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
            VALUES (?, ?, ?, 'APPROVED', ?, ?, ?, ?)`,
-          [requestId, approverId, ROLES.ADMIN, REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+          [requestId, approverId, ROLES.ADMIN, request.status,
            REQUEST_STATUS.PENDING_FINANCE_APPROVAL, comments, ipAddress]
         );
 
         return {
           success: true,
-          message: 'Request approved — sent to Finance for final processing',
+          message: isGsStage
+            ? 'Request approved by the General Secretary — sent to Finance for approval'
+            : 'Request approved — sent to Finance for final processing',
           newStatus: REQUEST_STATUS.PENDING_FINANCE_APPROVAL,
-          _notif: { requestCode: request.request_code, requesterId: request.requester_id, approverId }
+          _notif: { requestCode: request.request_code, requesterId: request.requester_id, approverId, toFinance: true }
         };
       }
 
@@ -488,7 +517,11 @@ class ApprovalService {
       const n = result._notif; delete result._notif;
       const approver = await query('SELECT first_name, last_name FROM users WHERE id = ?', [n.approverId]).catch(() => [{}]);
       const approverName = approver[0] ? `${approver[0].first_name} ${approver[0].last_name}` : 'Admin';
-      notificationService.onRequestFinanceApproved(requestId, n.requestCode, n.requesterId, approverName).catch(() => {});
+      if (n.toFinance) {
+        notificationService.onRequestLeadApproved(requestId, n.requestCode, n.requesterId, approverName).catch(() => {});
+      } else {
+        notificationService.onRequestFinanceApproved(requestId, n.requestCode, n.requesterId, approverName).catch(() => {});
+      }
     }
     return result;
   }
@@ -577,6 +610,7 @@ class ApprovalService {
       // Validate can reject from current status
       const validRejectStatuses = [
         REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+        REQUEST_STATUS.PENDING_GS_APPROVAL,
         REQUEST_STATUS.PENDING_LEAD_APPROVAL,
         REQUEST_STATUS.PENDING_HOP_APPROVAL,
         REQUEST_STATUS.PENDING_FINANCE_APPROVAL
@@ -648,7 +682,9 @@ class ApprovalService {
           // Finance Lead (FOS): ALL pending stages visible (PENDING_LEAD_APPROVAL from any dept + Finance stage).
           // PENDING_ADMIN_APPROVAL is AHR's domain — Finance Lead must not see or action those.
           // Approval restriction enforced in approveAsLead (FOS dept only at dept level).
-          statusFilter = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
+          // Plus Heads of Department's requests awaiting the General Secretary —
+          // visible so Finance can prepare, but only actionable at the Finance stage.
+          statusFilter = [REQUEST_STATUS.PENDING_GS_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
           departmentFilter = '';
         } else if (deptCode === 'AHR') {
           // Admin/HR Lead: own dept + ALL Admin-type donor requests (any pending status)
@@ -674,7 +710,8 @@ class ApprovalService {
         useInClause = true;
         if (filters.isFinanceManager) {
           // Finance HOP (FOS): all pending stages except PENDING_ADMIN_APPROVAL (AHR's domain)
-          statusFilter = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
+          // Plus Heads of Department's requests awaiting the GS (view only).
+          statusFilter = [REQUEST_STATUS.PENDING_GS_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
           departmentFilter = '';
         } else if (deptCode === 'AHR') {
           // Admin/HR HOP: own dept + ALL Admin-type donor requests (any pending status)
@@ -701,9 +738,11 @@ class ApprovalService {
         // Finance sees all requests at Finance stage
         break;
       case ROLES.ADMIN:
-        // Admin sees ALL pending requests across all stages and departments
+        // Admin sees ALL pending requests across all stages and departments,
+        // including Heads of Department's requests awaiting the General Secretary.
         statusFilter = [
           REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+          REQUEST_STATUS.PENDING_GS_APPROVAL,
           REQUEST_STATUS.PENDING_LEAD_APPROVAL,
           REQUEST_STATUS.PENDING_HOP_APPROVAL,
           REQUEST_STATUS.PENDING_FINANCE_APPROVAL
@@ -1200,6 +1239,14 @@ class ApprovalService {
     }
     // Finance/Admin can view cross-department approved requests.
 
+    // For departmental approvers "approved" includes requests they have passed on
+    // to Finance. Anyone whose own pending queue holds the Finance stage — the
+    // Finance desk, the Finance Lead/HOD and the Super Admin — would otherwise see
+    // the same request under Pending *and* Approved, so for them it only counts
+    // as approved once Finance has approved it.
+    const holdsFinanceStage = role === ROLES.FINANCE_CLERK || role === ROLES.ADMIN || filters.isFinanceManager;
+    const financeStage = holdsFinanceStage ? '' : "'PENDING_FINANCE_APPROVAL',";
+
     const sql = `
       SELECT DISTINCT
         r.*,
@@ -1212,7 +1259,7 @@ class ApprovalService {
       JOIN users u ON r.requester_id = u.id
       LEFT JOIN departments d ON r.department_id = d.id
       WHERE r.status IN (
-        'PENDING_FINANCE_APPROVAL',
+        ${financeStage}
         'APPROVED', 'DISPATCHED',
         'PENDING_RECONCILIATION',
         'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE', 'RECONCILED'
@@ -1294,7 +1341,7 @@ class ApprovalService {
         if (isFinanceManager) {
           // Finance Lead (FOS): ALL pending stages except PENDING_ADMIN_APPROVAL (AHR domain).
           // Finance Lead can view all dept-level requests; approval restriction is enforced separately.
-          pendingStatus = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
+          pendingStatus = [REQUEST_STATUS.PENDING_GS_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
           departmentFilter = '';
           // No dept params needed — baseParams push is skipped below for Finance Lead
         } else if (departmentCode === 'AHR') {
@@ -1315,7 +1362,7 @@ class ApprovalService {
         useInClause = true;
         if (isFinanceManager) {
           // Finance HOP: all pending except PENDING_ADMIN_APPROVAL (AHR domain), no dept filter
-          pendingStatus = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
+          pendingStatus = [REQUEST_STATUS.PENDING_GS_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL, REQUEST_STATUS.PENDING_FINANCE_APPROVAL];
           departmentFilter = '';
         } else if (departmentCode === 'AHR') {
           // Admin/HR HOP: own dept + ALL Admin donor requests (any pending status)
@@ -1338,6 +1385,7 @@ class ApprovalService {
         // Admin sees ALL pending requests across all stages
         pendingStatus = [
           REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+          REQUEST_STATUS.PENDING_GS_APPROVAL,
           REQUEST_STATUS.PENDING_LEAD_APPROVAL,
           REQUEST_STATUS.PENDING_HOP_APPROVAL,
           REQUEST_STATUS.PENDING_FINANCE_APPROVAL

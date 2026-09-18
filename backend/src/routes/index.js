@@ -22,6 +22,8 @@ const hrExportController = require('../controllers/hrExport.controller');
 const perDiemController = require('../controllers/perdiem.controller');
 const projectController = require('../controllers/project.controller');
 const procurementController = require('../controllers/procurement.controller');
+const timesheetController = require('../controllers/timesheet.controller');
+const timesheetExportController = require('../controllers/timesheetExport.controller');
 const notificationService = require('../services/notification.service');
 
 // Middleware
@@ -445,6 +447,68 @@ router.post('/hr/documents', authenticateToken, uploadSingle, handleUploadError,
 router.get('/hr/documents/:documentId/download', authenticateToken, hrController.downloadEmployeeDocument.bind(hrController));
 router.delete('/hr/documents/:documentId', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS), hrController.deleteDocument.bind(hrController));
 
+
+// ============================================================================
+// TIMESHEET MODULE
+// ============================================================================
+// Every route is behind authenticateToken; who may see or change what is
+// decided per-endpoint by the TIMESHEET_ACCESS ladder in config/roles.js,
+// because the answer depends on the caller's department as well as their role.
+
+// The module is built but switched off until the organisation is ready to use
+// it. While off, every timesheet endpoint answers 403 instead of running, so
+// nothing can be created or changed through it. Set to true to open it.
+const TIMESHEETS_ENABLED = false;
+router.use('/timesheets', (req, res, next) => {
+  if (TIMESHEETS_ENABLED) return next();
+  return res.status(403).json({ success: false, error: 'The Timesheet module is not available yet.' });
+});
+
+// Reference data — projects and partners come from the Float Requisition
+// registers, so nothing here is a second copy.
+router.get('/timesheets/projects', authenticateToken, timesheetController.getProjects.bind(timesheetController));
+router.get('/timesheets/partners', authenticateToken, timesheetController.getPartners.bind(timesheetController));
+router.get('/timesheets/context', authenticateToken, timesheetController.getMyContext.bind(timesheetController));
+router.get('/timesheets/employees', authenticateToken, timesheetController.getEmployees.bind(timesheetController));
+
+// Settings and public holidays — HR Office / Super Admin write, everyone reads.
+router.get('/timesheets/settings', authenticateToken, timesheetController.getSettings.bind(timesheetController));
+router.put('/timesheets/settings', authenticateToken, timesheetController.updateSettings.bind(timesheetController));
+router.get('/timesheets/holidays', authenticateToken, timesheetController.getHolidays.bind(timesheetController));
+router.post('/timesheets/holidays', authenticateToken, timesheetController.createHoliday.bind(timesheetController));
+router.put('/timesheets/holidays/:id', authenticateToken, timesheetController.updateHoliday.bind(timesheetController));
+router.delete('/timesheets/holidays/:id', authenticateToken, timesheetController.deleteHoliday.bind(timesheetController));
+
+// Level of effort — read by any manager, written only by the HR Office.
+router.get('/timesheets/loe', authenticateToken, timesheetController.getLoeRegister.bind(timesheetController));
+router.get('/timesheets/loe/:employeeId', authenticateToken, timesheetController.getEmployeeLoe.bind(timesheetController));
+router.put('/timesheets/loe/:employeeId', authenticateToken, timesheetController.saveEmployeeLoe.bind(timesheetController));
+router.post('/timesheets/loe/copy-year', authenticateToken, timesheetController.copyLoeYear.bind(timesheetController));
+
+// My Timesheets.
+router.get('/timesheets/my/year', authenticateToken, timesheetController.getMyYear.bind(timesheetController));
+router.get('/timesheets/my/:year/:month', authenticateToken, timesheetController.openMyTimesheet.bind(timesheetController));
+
+// Team and Organisation trackers, approval queue and reports.
+router.get('/timesheets/tracker', authenticateToken, timesheetController.getPeriodTracker.bind(timesheetController));
+router.get('/timesheets/stats', authenticateToken, timesheetController.getPeriodStats.bind(timesheetController));
+router.get('/timesheets/approvals', authenticateToken, timesheetController.getApprovalQueue.bind(timesheetController));
+router.get('/timesheets/project-summary', authenticateToken, timesheetController.getProjectSummary.bind(timesheetController));
+router.get('/timesheets/employee/:employeeId/year', authenticateToken, timesheetController.getEmployeeYear.bind(timesheetController));
+router.get('/timesheets', authenticateToken, timesheetController.listTimesheets.bind(timesheetController));
+
+// Exports. Declared before /timesheets/:id so the literal segments win.
+router.get('/timesheets/report/excel', authenticateToken, timesheetExportController.generateReportExcel.bind(timesheetExportController));
+router.get('/timesheets/:id/export/pdf', authenticateToken, timesheetExportController.generateTimesheetPDF.bind(timesheetExportController));
+router.get('/timesheets/:id/export/excel', authenticateToken, timesheetExportController.generateTimesheetExcel.bind(timesheetExportController));
+
+// One timesheet, and the actions on it.
+router.get('/timesheets/:id/audit', authenticateToken, timesheetController.getAuditTrail.bind(timesheetController));
+router.get('/timesheets/:id', authenticateToken, timesheetController.getTimesheet.bind(timesheetController));
+router.put('/timesheets/:id', authenticateToken, timesheetController.saveTimesheet.bind(timesheetController));
+router.post('/timesheets/:id/submit', authenticateToken, timesheetController.submitTimesheet.bind(timesheetController));
+router.post('/timesheets/:id/action', authenticateToken, timesheetController.actOnTimesheet.bind(timesheetController));
+router.post('/timesheets/:id/reopen', authenticateToken, timesheetController.reopenTimesheet.bind(timesheetController));
 
 // ============================================================================
 // LOOKUP ROUTES

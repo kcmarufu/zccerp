@@ -756,7 +756,7 @@ class BudgetController {
         `SELECT 
            COUNT(DISTINCT r.id) as total_requests,
            SUM(CASE WHEN r.status = 'APPROVED' THEN ri.quantity * ri.unit_price ELSE 0 END) as total_approved_amount,
-           SUM(CASE WHEN r.status IN ('PENDING_LEAD_APPROVAL', 'PENDING_HOP_APPROVAL', 'PENDING_FINANCE_APPROVAL') 
+           SUM(CASE WHEN r.status IN ('PENDING_ADMIN_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_LEAD_APPROVAL', 'PENDING_HOP_APPROVAL', 'PENDING_FINANCE_APPROVAL') 
                THEN ri.quantity * ri.unit_price ELSE 0 END) as total_pending_amount
          FROM requests r
          JOIN request_items ri ON r.id = ri.request_id

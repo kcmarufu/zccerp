@@ -4,6 +4,7 @@
  */
 
 const { body, param, query } = require('express-validator');
+const { REQUEST_STATUS } = require('../config/roles');
 
 // Validate request creation
 const createRequestValidator = [
@@ -215,8 +216,7 @@ const paginationValidator = [
 const filterValidator = [
   query('status')
     .optional()
-    .isIn(['DRAFT', 'PENDING_LEAD_APPROVAL', 'PENDING_HOP_APPROVAL', 
-           'PENDING_FINANCE_APPROVAL', 'APPROVED', 'REJECTED', 'CANCELLED'])
+    .isIn(Object.values(REQUEST_STATUS))
     .withMessage('Invalid status filter'),
   
   query('departmentId')

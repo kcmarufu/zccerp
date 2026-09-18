@@ -37,9 +37,10 @@ import api from '../../services/api';
 import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
 import { toast } from 'react-toastify';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
+import { usePersistentState } from '../../utils/navigationState';
 
 const STATUSES: ProcurementStatus[] = [
-  'DRAFT', 'PENDING_DEPT_APPROVAL', 'PENDING_FINANCE_APPROVAL',
+  'DRAFT', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_FINANCE_APPROVAL',
   'PENDING_PROCUREMENT', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE',
   'COMPLETED', 'REJECTED', 'CANCELLED'
 ];
@@ -54,15 +55,17 @@ const PurchaseRequestList: React.FC = () => {
   const navigate = useNavigate();
   const { hasPermission } = useAuthStore();
 
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [priorityFilter, setPriorityFilter] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [deptFilter, setDeptFilter] = useState('');
-  const [donorFilter, setDonorFilter] = useState('');
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(15);
+  // Filters and paging are remembered, so opening a request and pressing Back
+  // returns to the same filtered list.
+  const [search, setSearch] = usePersistentState('procRequests.search', '');
+  const [statusFilter, setStatusFilter] = usePersistentState('procRequests.status', '');
+  const [priorityFilter, setPriorityFilter] = usePersistentState('procRequests.priority', '');
+  const [dateFrom, setDateFrom] = usePersistentState('procRequests.dateFrom', '');
+  const [dateTo, setDateTo] = usePersistentState('procRequests.dateTo', '');
+  const [deptFilter, setDeptFilter] = usePersistentState('procRequests.dept', '');
+  const [donorFilter, setDonorFilter] = usePersistentState('procRequests.donor', '');
+  const [page, setPage] = usePersistentState('procRequests.page', 0);
+  const [rowsPerPage, setRowsPerPage] = usePersistentState('procRequests.rowsPerPage', 15);
 
   const [departments, setDepartments] = useState<{id: number; department_name: string}[]>([]);
 

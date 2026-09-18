@@ -452,6 +452,13 @@ class RequestController {
       }
       // Finance PROGRAM_LEAD, HEAD_OF_PROGRAMS, FINANCE_CLERK and ADMIN can see all requests.
 
+      // "My Requests" for anyone who can also see other people's — e.g. a Head
+      // of Department who raises their own floats.
+      if (req.query.mine === 'true' && userRole !== ROLES.GENERAL_USER) {
+        whereClause += ' AND r.requester_id = ?';
+        params.push(userId);
+      }
+
       // Search filter — matches reference code, justification, or requester name
       if (search) {
         const sp = `%${search}%`;
@@ -765,7 +772,8 @@ class RequestController {
           amendedWhilePending = {
             requestCode: reissuedCode || requests[0].request_code,
             deptId: requests[0].department_id,
-            routingDeptId: routingDepartmentId || requests[0].routing_department_id || null
+            routingDeptId: routingDepartmentId || requests[0].routing_department_id || null,
+            gsOnly: previousStatus === REQUEST_STATUS.PENDING_GS_APPROVAL
           };
         }
       });
@@ -775,7 +783,8 @@ class RequestController {
       if (amendedWhilePending) {
         notificationService.onRequestAmended(
           Number(requestId), amendedWhilePending.requestCode, userId,
-          amendedWhilePending.deptId, amendedWhilePending.routingDeptId
+          amendedWhilePending.deptId, amendedWhilePending.routingDeptId,
+          amendedWhilePending.gsOnly
         ).catch(() => {});
       }
 

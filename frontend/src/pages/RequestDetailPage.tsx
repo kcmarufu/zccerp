@@ -67,6 +67,8 @@ import TravelClaimSection from '../components/requests/TravelClaimSection';
 import { buildTravelClaimPageHTML, downloadHTMLAsPDF } from '../utils/pdfUtils';
 import { formatDate as formatCalendarDate, formatDateTime } from '../utils/datetime';
 import { formatRoleLabel } from '../utils/roleUtils';
+import { useGoBack } from '../utils/navigationState';
+import { isRequesterEditable } from '../utils/requestStatus';
 import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
@@ -79,6 +81,9 @@ const RequestDetailPage: React.FC = () => {
   const { id, requestId: routeRequestId } = useParams<{ id: string; requestId: string }>();
   const requestId = id || routeRequestId;
   const navigate = useNavigate();
+  // Back returns to wherever the request was opened from (an approval queue, a
+  // filtered list), not always to the requests list.
+  const goBack = useGoBack('/finance/requests');
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, hasRole, hasPermission, isFinanceManager } = useAuthStore();
@@ -325,6 +330,7 @@ const RequestDetailPage: React.FC = () => {
       case 'DRAFT':
         return 'default';
       case 'PENDING_ADMIN_APPROVAL':
+      case 'PENDING_GS_APPROVAL':
       case 'PENDING_LEAD_APPROVAL':
       case 'PENDING_HOP_APPROVAL':
       case 'PENDING_FINANCE_APPROVAL':
@@ -334,10 +340,19 @@ const RequestDetailPage: React.FC = () => {
     }
   };
 
+  // A Head of Department's request is approved by the General Secretary in
+  // place of a departmental Lead/HOD.
+  const isGsTrack = request?.status === 'PENDING_GS_APPROVAL' ||
+    approvalLogs.some(l => l.previous_status === 'PENDING_GS_APPROVAL' || l.new_status === 'PENDING_GS_APPROVAL');
+  const approvalSteps = isGsTrack
+    ? [{ ...APPROVAL_STEPS[0], label: 'General Secretary Approval' }, ...APPROVAL_STEPS.slice(1)]
+    : APPROVAL_STEPS;
+
   const getActiveStep = () => {
     if (!request) return 0;
     const statusToStep: Record<string, number> = {
       'PENDING_ADMIN_APPROVAL': 0,
+      'PENDING_GS_APPROVAL': 0,
       'PENDING_LEAD_APPROVAL': 0,
       'PENDING_HOP_APPROVAL': 0,
       'PENDING_FINANCE_APPROVAL': 1,
@@ -356,6 +371,7 @@ const RequestDetailPage: React.FC = () => {
     // Admin can approve at any pending stage
     if (hasRole('ADMIN') && [
       'PENDING_ADMIN_APPROVAL',
+      'PENDING_GS_APPROVAL',
       'PENDING_LEAD_APPROVAL',
       'PENDING_HOP_APPROVAL',
       'PENDING_FINANCE_APPROVAL'
@@ -456,12 +472,12 @@ const RequestDetailPage: React.FC = () => {
 
     const statusColor = {
       APPROVED: '#2e7d32', REJECTED: '#c62828', DRAFT: '#616161',
-      PENDING_ADMIN_APPROVAL: '#6a1b9a',
+      PENDING_ADMIN_APPROVAL: '#6a1b9a', PENDING_GS_APPROVAL: '#6a1b9a',
       PENDING_LEAD_APPROVAL: '#e65100', PENDING_HOP_APPROVAL: '#e65100', PENDING_FINANCE_APPROVAL: '#1565c0'
     } as Record<string, string>;
     const statusBg = {
       APPROVED: '#e8f5e9', REJECTED: '#ffebee', DRAFT: '#f5f5f5',
-      PENDING_ADMIN_APPROVAL: '#f3e5f5',
+      PENDING_ADMIN_APPROVAL: '#f3e5f5', PENDING_GS_APPROVAL: '#f3e5f5',
       PENDING_LEAD_APPROVAL: '#fff3e0', PENDING_HOP_APPROVAL: '#fff3e0', PENDING_FINANCE_APPROVAL: '#e3f2fd'
     } as Record<string, string>;
     const sc = statusColor[request.status] || '#1565c0';
@@ -729,8 +745,8 @@ ${buildClaimPage()}
   if (error && !request) {
     return (
       <Box>
-        <Button startIcon={<BackIcon />} onClick={() => navigate('/finance/requests')} sx={{ mb: 2 }}>
-          Back to Requests
+        <Button startIcon={<BackIcon />} onClick={goBack} sx={{ mb: 2 }}>
+          Back
         </Button>
         <Alert severity="error">{error}</Alert>
       </Box>
@@ -745,7 +761,7 @@ ${buildClaimPage()}
     <Box>
       {/* Header */}
       <Box display="flex" alignItems="center" gap={2} mb={3} flexWrap="wrap">
-        <IconButton onClick={() => navigate('/finance/requests')}>
+        <IconButton onClick={goBack}>
           <BackIcon />
         </IconButton>
         <Typography variant="h5" sx={{ flex: 1 }}>
@@ -1036,7 +1052,7 @@ ${buildClaimPage()}
             <Divider sx={{ mb: 2 }} />
             <Box display="flex" flexDirection="column" gap={2}>
               {/* Draft/Rejected owner actions */}
-              {['DRAFT', 'REJECTED', 'PENDING_LEAD_APPROVAL', 'PENDING_ADMIN_APPROVAL', 'PENDING_HOP_APPROVAL'].includes(request.status) && request.requester_id === user?.id && (
+              {isRequesterEditable(request.status) && request.requester_id === user?.id && (
                 <>
                   <Button
                     variant="outlined"
@@ -1174,7 +1190,7 @@ ${buildClaimPage()}
               </Alert>
             ) : (
               <Stepper activeStep={getActiveStep()} orientation="vertical">
-                {APPROVAL_STEPS.map((step, index) => {
+                {approvalSteps.map((step, index) => {
                   const stepApproval = getApprovalForStep(index);
                   const isCompleted = index < getActiveStep();
                   const isCurrent = index === getActiveStep();

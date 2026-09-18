@@ -30,6 +30,7 @@ import { getHRDashboardStats } from '../../services/hrService';
 import AccrualStatement from '../../components/hr/AccrualStatement';
 import { HRDashboardStats } from '../../types';
 import { formatDate } from '../../utils/datetime';
+import { TIMESHEETS_ENABLED } from '../../utils/timesheetAccess';
 
 /**
  * The dashboard a member of staff sees.
@@ -476,9 +477,11 @@ const HRDashboardPage: React.FC = () => {
           <Button variant="outlined" startIcon={<LeaveIcon />} onClick={() => navigate('/hr/leave')}>
             Leave Management
           </Button>
-          <Button variant="outlined" startIcon={<ContractIcon />} onClick={() => navigate('/hr/timesheets')}>
-            Timesheets
-          </Button>
+          {TIMESHEETS_ENABLED && (
+            <Button variant="outlined" startIcon={<ContractIcon />} onClick={() => navigate('/hr/timesheets')}>
+              Timesheets
+            </Button>
+          )}
           <Button variant="outlined" startIcon={<TrendingUpIcon />} onClick={() => navigate('/hr/performance')}>
             Performance Reviews
           </Button>

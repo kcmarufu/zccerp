@@ -6,10 +6,10 @@
 import React, { useState } from 'react';
 import {
   Box, Paper, Typography, Grid, Chip, Button, Divider, CircularProgress, Alert,
-  Table, TableHead, TableRow, TableCell, TableBody, Dialog, DialogTitle,
+  Table, TableContainer, TableHead, TableRow, TableCell, TableBody, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, IconButton, Tooltip, Stack,
   Stepper, Step, StepLabel, Avatar, List, ListItem, ListItemText,
-  ListItemAvatar, alpha, useTheme, Tab, Tabs, MenuItem, Autocomplete
+  ListItemAvatar, alpha, useTheme, MenuItem, Autocomplete
 } from '@mui/material';
 import {
   ArrowBack as BackIcon,
@@ -29,7 +29,8 @@ import {
   TableChart as ExportIcon,
   Undo as UndoIcon,
   HowToVote as VoteIcon,
-  HourglassEmpty as PendingIcon
+  HourglassEmpty as PendingIcon,
+  Visibility as ViewIcon
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -63,26 +64,28 @@ import {
   PROC_STATUS_COLORS,
   PROC_WORKFLOW_STEPS,
   submitPurchaseRequest,
-  getVendors
+  getVendors,
+  isViewableInBrowser,
+  viewRequestAttachment,
+  viewQuotationFile,
+  viewProofOfPayment
 } from '../../services/procurementService';
 import { ProcQuotation, ProcVendor } from '../../types';
 import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
 import { formatRoleLabel } from '../../utils/roleUtils';
+import { useGoBack } from '../../utils/navigationState';
 import * as XLSX from 'xlsx';
-
-interface TabPanelProps { value: number; index: number; children: React.ReactNode; }
-const TabPanel: React.FC<TabPanelProps> = ({ value, index, children }) => (
-  <Box role="tabpanel" hidden={value !== index} sx={{ pt: 2 }}>{value === index && children}</Box>
-);
 
 const PurchaseRequestDetail: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  // Back returns to wherever the request was opened from (the approval queue,
+  // a filtered list) rather than always to the purchase request list.
+  const goBack = useGoBack('/procurement/requests');
   const { id } = useParams<{ id: string }>();
   const { user, hasPermission, hasRole } = useAuthStore();
   const qc = useQueryClient();
 
-  const [tab, setTab] = useState(0);
   const [actionDialog, setActionDialog] = useState<null | 'approve_dept' | 'reject' | 'submit_committee' | 'committee' | 'final_finance' | 'high_value'>(null);
   const [highValueDecisionVal, setHighValueDecisionVal] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
   const [comments, setComments] = useState('');
@@ -162,13 +165,22 @@ const PurchaseRequestDetail: React.FC = () => {
     qc.invalidateQueries({ queryKey: ['proc-pops', id] });
   };
 
-  const currentStepIndex = PROC_WORKFLOW_STEPS.findIndex(s => s.status === request?.status);
+  // A Head of Department's request is approved by the General Secretary at the
+  // point where everyone else's gets a departmental approval.
+  const isGsTrack = Number(request?.is_gs_track) === 1 || request?.status === 'PENDING_GS_APPROVAL';
+  const workflowSteps = PROC_WORKFLOW_STEPS.map(s =>
+    isGsTrack && s.status === 'PENDING_DEPT_APPROVAL' ? { ...s, label: 'General Secretary Approval' } : s
+  );
+  const stepStatus = request?.status === 'PENDING_GS_APPROVAL' ? 'PENDING_DEPT_APPROVAL' : request?.status;
+  const currentStepIndex = PROC_WORKFLOW_STEPS.findIndex(s => s.status === stepStatus);
 
   // Role checks
-  const canApproveDept = (hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN') && ['PENDING_DEPT_APPROVAL'].includes(request?.status || ''));
+  const canApproveDept =
+    (hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN') && request?.status === 'PENDING_DEPT_APPROVAL') ||
+    (hasRole('ADMIN') && request?.status === 'PENDING_GS_APPROVAL');
   // HOP/Lead can reverse dept approval within 12 hours (before quotations are added)
   const canReverseDept = (
-    hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN') &&
+    (isGsTrack ? hasRole('ADMIN') : hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN')) &&
     request?.status === 'PENDING_PROCUREMENT' &&
     (() => {
       const deptAt = (request as any)?.dept_approved_at;
@@ -181,7 +193,7 @@ const PurchaseRequestDetail: React.FC = () => {
     (hasPermission('approve_purchase_request') && ['PENDING_DEPT_APPROVAL'].includes(request?.status || '')) ||
     (hasPermission('manage_quotations') && ['PENDING_PROCUREMENT'].includes(request?.status || '')) ||
     (hasPermission('proc_finance_approve') && ['PENDING_FINAL_FINANCE'].includes(request?.status || '')) ||
-    (hasRole('ADMIN') && ['PENDING_DEPT_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE'].includes(request?.status || ''))
+    (hasRole('ADMIN') && ['PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE'].includes(request?.status || ''))
   );
   const canUploadQuotation = hasPermission('manage_quotations') && ['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '');
   const canSubmitCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_PROCUREMENT';
@@ -199,7 +211,7 @@ const PurchaseRequestDetail: React.FC = () => {
   // whole point of supporting more than one POP per request.
   const canManagePOP = (hasPermission('proc_finance_approve') || hasRole('ADMIN')) &&
     ['PENDING_FINAL_FINANCE', 'COMPLETED'].includes(request?.status || '');
-  const canEdit = ['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
+  const canEdit = ['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
   const canSubmit = ['DRAFT', 'REJECTED'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
 
   const doAction = async () => {
@@ -373,6 +385,14 @@ const PurchaseRequestDetail: React.FC = () => {
       toast.error(e?.response?.data?.error || 'Resubmission failed');
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const viewDocument = async (open: () => Promise<void>) => {
+    try {
+      await open();
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not open the document. Try downloading it instead.');
     }
   };
 
@@ -616,7 +636,9 @@ ${allCommitteeApproved ? `
     setReversingDept(true);
     try {
       await reverseDeptApproval(id!);
-      toast.success('Department approval reversed. Request returned to Pending Department Approval.');
+      toast.success(isGsTrack
+        ? 'Approval reversed. Request returned to Pending General Secretary Approval.'
+        : 'Department approval reversed. Request returned to Pending Department Approval.');
       setDeptConfirmData(null);
       invalidate();
     } catch (e: any) {
@@ -633,640 +655,649 @@ ${allCommitteeApproved ? `
     ? [...request.quotations].sort((a, b) => a.total_amount - b.total_amount)[0]
     : null;
 
+  const money = (n: number | string | null | undefined, currency = '$') =>
+    `${currency}${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const infoFields: { label: string; value: React.ReactNode }[] = [
+    { label: 'Request Number', value: request.request_code },
+    { label: 'Department', value: `${request.department_name} (${request.department_code})` },
+    { label: 'Requested By', value: `${request.first_name} ${request.last_name}` },
+    { label: 'Priority', value: request.priority },
+    { label: 'Partner / Donor', value: request.donor_name ? `${request.donor_name}${(request as any).donor_code ? ` (${(request as any).donor_code})` : ''}` : '—' },
+    { label: 'Project', value: (request as any).project_name ? `${(request as any).project_name}${(request as any).project_code ? ` (${(request as any).project_code})` : ''}` : '—' },
+    { label: 'Expected Delivery', value: request.expected_delivery_date ? format(new Date(request.expected_delivery_date), 'dd MMM yyyy') : '—' },
+    { label: 'Created', value: format(new Date(request.created_at), 'dd MMM yyyy HH:mm') },
+    { label: 'Submitted', value: request.submitted_at ? format(new Date(request.submitted_at), 'dd MMM yyyy HH:mm') : '—' },
+    { label: 'Total Estimated Amount', value: money(request.total_estimated_amount) },
+  ];
+
+  const hasAnyAction = canEdit || canSubmit || canApproveDept || canReverseDept || canReject ||
+    canSubmitCommittee || canResubmitToCommittee || canCommitteeDecide || canHighValueDecide || canFinalApprove ||
+    (['PENDING_FINAL_FINANCE', 'COMPLETED'] as string[]).includes(request.status);
+
+  const showCommittee = ['PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', 'COMPLETED'].includes(request.status);
+
   return (
     <Box>
-      {/* Header */}
-      <Box display="flex" alignItems="flex-start" justifyContent="space-between" mb={2} flexWrap="wrap" gap={2}>
-        <Box display="flex" alignItems="center" gap={1}>
-          <IconButton onClick={() => navigate('/procurement/requests')}><BackIcon /></IconButton>
-          <Box>
-            <Typography variant="h5" fontWeight={700}>{request.request_code}</Typography>
-            <Typography variant="body2" color="text.secondary">{request.title}</Typography>
-          </Box>
+      {/* Header — same shape as the Float Requisition page */}
+      <Box display="flex" alignItems="center" gap={2} mb={3} flexWrap="wrap">
+        <IconButton onClick={goBack}>
+          <BackIcon />
+        </IconButton>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="h5">Purchase Request — {request.request_code}</Typography>
+          {request.title && (
+            <Typography variant="body2" color="text.secondary" noWrap>{request.title}</Typography>
+          )}
         </Box>
-        <Stack direction="row" spacing={1} flexWrap="wrap">
-          <Chip
-            label={PROC_STATUS_LABELS[request.status] || request.status}
-            color={PROC_STATUS_COLORS[request.status] as any || 'default'}
-          />
-          <Chip label={request.priority} size="small" variant="outlined" />
-          <Tooltip title="Download Purchase Request PDF">
-            <IconButton size="small" onClick={downloadAsPDF}><PdfIcon /></IconButton>
-          </Tooltip>
-          <Tooltip title="Export to Excel">
-            <IconButton size="small" onClick={exportToExcel}><ExportIcon /></IconButton>
-          </Tooltip>
-          {(['PENDING_FINAL_FINANCE', 'COMPLETED'] as string[]).includes(request.status) && (
-            <Button
-              size="small"
-              variant="contained"
-              color="success"
-              startIcon={<DownloadIcon />}
-              onClick={downloadPurchaseOrder}
-            >
-              Download PO
-            </Button>
-          )}
-          {canEdit && (
-            <Button size="small" startIcon={<EditIcon />} onClick={() => navigate(`/procurement/requests/${id}/edit`)} variant="outlined">
-              {request.status === 'REJECTED' ? 'Edit & Resubmit' : 'Edit'}
-            </Button>
-          )}
-          {canSubmit && (
-            <Button size="small" startIcon={<SendIcon />} variant="contained" onClick={handleSubmitRequest} disabled={actionLoading}>
-              {request.status === 'REJECTED' ? 'Resubmit for Approval' : 'Submit for Approval'}
-            </Button>
-          )}
-        </Stack>
+        <Chip
+          label={PROC_STATUS_LABELS[request.status] || request.status}
+          color={PROC_STATUS_COLORS[request.status] as any || 'default'}
+          size="medium"
+        />
+        <Tooltip title="Download PDF">
+          <IconButton color="primary" onClick={downloadAsPDF}><PdfIcon /></IconButton>
+        </Tooltip>
+        <Tooltip title="Export to Excel">
+          <IconButton color="success" onClick={exportToExcel}><ExportIcon /></IconButton>
+        </Tooltip>
       </Box>
 
-      {/* Rejection Reason Banner */}
       {request.status === 'REJECTED' && request.rejection_reason && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          <Typography variant="subtitle2" fontWeight={700}>Rejection Reason:</Typography>
+        <Alert severity="error" sx={{ mb: 3 }}>
+          <Typography variant="subtitle2" fontWeight={700}>Rejection Reason</Typography>
           <Typography variant="body2">{request.rejection_reason}</Typography>
         </Alert>
       )}
 
-      {/* Workflow Stepper */}
-      <Paper elevation={1} sx={{ p: 2, mb: 2, borderRadius: 2 }}>
-        <Stepper alternativeLabel activeStep={currentStepIndex}>
-          {PROC_WORKFLOW_STEPS.map((step, idx) => (
-            <Step key={step.status} completed={currentStepIndex > idx || request.status === 'COMPLETED'}>
-              <StepLabel
-                error={request.status === 'REJECTED' && idx === currentStepIndex}
-                StepIconProps={{ style: { color: idx <= currentStepIndex ? theme.palette.primary.main : undefined } }}
-              >
-                <Typography variant="caption" fontWeight={idx === currentStepIndex ? 700 : 400}>
-                  {step.label}
-                </Typography>
-              </StepLabel>
-            </Step>
-          ))}
-        </Stepper>
-      </Paper>
-
-      {/* Action Buttons */}
-      {(canApproveDept || canReverseDept || canReject || canSubmitCommittee || canResubmitToCommittee || canCommitteeDecide || canHighValueDecide || canFinalApprove) && (
-        <Paper elevation={0} sx={{ p: 2, mb: 2, borderRadius: 2, bgcolor: alpha(theme.palette.primary.main, 0.04), border: `1px solid ${theme.palette.primary.light}` }}>
-          <Typography variant="body2" fontWeight={600} mb={1}>Actions Available:</Typography>
-          <Stack direction="row" spacing={1} flexWrap="wrap">
-            {canApproveDept && (
-              <Button variant="contained" color="success" startIcon={<ApproveIcon />} size="small" onClick={() => setActionDialog('approve_dept')}>
-                Approve (Dept Level)
-              </Button>
-            )}
-            {canReverseDept && (
-              <Button variant="outlined" color="warning" startIcon={<RejectIcon />} size="small" onClick={handleReverseDept} disabled={reversingDept}>
-                Reverse / Undo Approval
-              </Button>
-            )}
-            {canSubmitCommittee && (
-              <Button variant="contained" color="primary" startIcon={<CommitteeIcon />} size="small" onClick={() => { setSelectedQuotId(lowestQuotation?.id || null); setActionDialog('submit_committee'); }}>
-                Submit to Committee
-              </Button>
-            )}
-            {canResubmitToCommittee && (
-              <Button variant="outlined" color="warning" startIcon={<SendIcon />} size="small" onClick={() => { setResubmitQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); setResubmitDialog(true); }}>
-                Resubmit Amended Quotations
-              </Button>
-            )}
-            {canCommitteeDecide && (
-              <Button variant="contained" color="primary" startIcon={<CommitteeIcon />} size="small" onClick={() => { setSelectedQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); setActionDialog('committee'); }}>
-                Record Committee Decision
-              </Button>
-            )}
-            {canHighValueDecide && (
-              <>
-                <Button variant="contained" color="success" startIcon={<ApproveIcon />} size="small"
-                  onClick={() => { setHighValueDecisionVal('APPROVED'); setActionDialog('high_value'); }}>
-                  Approve (High-Value)
-                </Button>
-                <Button variant="outlined" color="error" startIcon={<RejectIcon />} size="small"
-                  onClick={() => { setHighValueDecisionVal('REJECTED'); setActionDialog('high_value'); }}>
-                  Reject
-                </Button>
-              </>
-            )}
-            {canFinalApprove && (
-              <Button variant="contained" color="success" startIcon={<ApproveIcon />} size="small" onClick={() => setActionDialog('final_finance')}>
-                Final Finance Approval
-              </Button>
-            )}
-            {canReject && (
-              <Button variant="outlined" color="error" startIcon={<RejectIcon />} size="small" onClick={() => setActionDialog('reject')}>
-                Reject
-              </Button>
-            )}
-          </Stack>
-        </Paper>
+      {request.status === 'PENDING_GS_APPROVAL' && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          This request was raised by a Head of Department, so it is approved by the General Secretary
+          in place of a departmental approval. It then continues to Procurement as normal.
+        </Alert>
       )}
 
-      {/* Committee Review Status Banner */}
-      {['PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', 'COMPLETED'].includes(request.status) && (
-        <Paper elevation={0} sx={{ p: 2, mb: 2, borderRadius: 2, bgcolor: alpha(theme.palette.secondary.main, 0.05), border: `1px solid ${theme.palette.secondary.light}` }}>
-          <Typography variant="subtitle2" fontWeight={700} mb={1.5} color="secondary.dark" display="flex" alignItems="center" gap={0.5}>
-            <VoteIcon fontSize="small" /> Committee Review
-            {request.status === 'PENDING_COMMITTEE' && (
-              <Chip label="Under Review" color="secondary" size="small" sx={{ ml: 1 }} />
-            )}
-            {request.status !== 'PENDING_COMMITTEE' && (
-              <Chip label="Decision Recorded" color="success" size="small" sx={{ ml: 1 }} />
-            )}
-          </Typography>
-
-          {(() => {
-            const votes = committeeVotes as any[];
-            const approvedVotes = votes.filter(v => v.vote === 'APPROVED');
-            const remainingCount = 3 - votes.length;
-
-            return (
-              <Stack spacing={1}>
-                {/* Approved votes — show approver names */}
-                {approvedVotes.map((v: any) => (
-                  <Box key={v.id ?? v.committee_seat} display="flex" alignItems="center" gap={1}>
-                    <ApproveIcon fontSize="small" color="success" />
-                    <Typography variant="body2" fontWeight={600}>
-                      {v.first_name} {v.last_name}
-                    </Typography>
-                    <Chip label="Approved" color="success" size="small" sx={{ height: 18, fontSize: '0.65rem' }} />
-                  </Box>
-                ))}
-
-                {/* Rejected votes — show name */}
-                {votes.filter((v: any) => v.vote !== 'APPROVED').map((v: any) => (
-                  <Box key={v.id ?? v.committee_seat} display="flex" alignItems="center" gap={1}>
-                    <RejectIcon fontSize="small" color="warning" />
-                    <Typography variant="body2" fontWeight={600}>
-                      {v.first_name} {v.last_name}
-                    </Typography>
-                    <Chip label="Not Approved" color="warning" size="small" sx={{ height: 18, fontSize: '0.65rem' }} />
-                  </Box>
-                ))}
-
-                {/* Remaining votes */}
-                {remainingCount > 0 && request.status === 'PENDING_COMMITTEE' && (
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <PendingIcon fontSize="small" color="disabled" />
-                    <Typography variant="body2" color="text.secondary" fontStyle="italic">
-                      {remainingCount} vote{remainingCount > 1 ? 's' : ''} remaining
-                    </Typography>
-                  </Box>
-                )}
-
-                {votes.length === 0 && request.status === 'PENDING_COMMITTEE' && (
-                  <Typography variant="body2" color="text.secondary" fontStyle="italic">
-                    3 votes remaining — awaiting committee members
-                  </Typography>
-                )}
-
-                {/* Committee declaration — shown once all 3 votes are APPROVED */}
-                {votes.length >= 3 && votes.every((v: any) => v.vote === 'APPROVED') && (
-                  <Box sx={{ mt: 2, p: 1.5, bgcolor: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: 1 }}>
-                    <Typography variant="caption" fontWeight={700} color="success.dark" display="block" mb={0.5}>
-                      Procurement Committee Declaration
-                    </Typography>
-                    <Typography variant="caption" color="success.dark" fontStyle="italic">
-                      "The Committee hereby declares that it has no actual, potential, or perceived conflict of interest in relation to this procurement process or any of the bidders being evaluated."
-                    </Typography>
-                  </Box>
-                )}
-              </Stack>
-            );
-          })()}
-        </Paper>
-      )}
-
-      {/* Tabs */}
-      <Paper elevation={1} sx={{ borderRadius: 2 }}>
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}>
-          <Tab label="Overview" />
-          <Tab label={`Items (${request.items?.length || 0})`} />
-          <Tab label={`Bid Analysis (${request.quotations?.length || 0})`} />
-          <Tab label={`Attachments (${(attachments as any[]).length})`} />
-          <Tab label="Approval Trail (Bid Analysis)" />
-        </Tabs>
-
-        <Box sx={{ p: 2 }}>
-          {/* TAB 0: Overview */}
-          <TabPanel value={tab} index={0}>
+      <Grid container spacing={3}>
+        {/* ── Main column ─────────────────────────────────────────────── */}
+        <Grid item xs={12} md={8}>
+          {/* Request Information */}
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>Request Information</Typography>
+            <Divider sx={{ mb: 2 }} />
             <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
-                <Stack spacing={1.5}>
-                  {[
-                    { label: 'Requester', value: `${request.first_name} ${request.last_name}` },
-                    { label: 'Department', value: `${request.department_name} (${request.department_code})` },
-                    { label: 'Donor', value: request.donor_name || '—' },
-                    { label: 'Expected Delivery', value: request.expected_delivery_date ? format(new Date(request.expected_delivery_date), 'dd MMM yyyy') : '—' },
-                    { label: 'Created', value: format(new Date(request.created_at), 'dd MMM yyyy HH:mm') },
-                    { label: 'Submitted', value: request.submitted_at ? format(new Date(request.submitted_at), 'dd MMM yyyy HH:mm') : '—' }
-                  ].map(row => (
-                    <Box key={row.label} display="flex" gap={2}>
-                      <Typography variant="body2" color="text.secondary" sx={{ minWidth: 140 }}>{row.label}:</Typography>
-                      <Typography variant="body2" fontWeight={500}>{row.value}</Typography>
-                    </Box>
-                  ))}
-                </Stack>
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-                  <Typography variant="subtitle2" fontWeight={600} mb={1}>Justification</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
-                    {request.justification}
-                  </Typography>
-                </Paper>
-                <Box mt={2} textAlign="right">
-                  <Typography variant="caption" color="text.secondary">Total Estimated Amount</Typography>
-                  <Typography variant="h4" fontWeight={700} color="primary">
-                    ${Number(request.total_estimated_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                  </Typography>
-                </Box>
-                {/* High-value approval — the committee recommends, then the
-                    Super Admin and Finance's Lead/HOD must both approve before
-                    the request reaches the Finance desk. */}
-                {Number((request as any).is_high_value) === 1 && (
-                  <Paper variant="outlined" sx={{ mt: 2, p: 1.5, borderColor: 'secondary.main' }}>
-                    <Typography variant="subtitle2" fontWeight={700} gutterBottom>
-                      High-Value Approval
-                      <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                        (selected quotation ${Number((request as any).selected_quotation_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                        {' '}— threshold ${Number((request as any).high_value_threshold || 5000).toLocaleString()})
-                      </Typography>
-                    </Typography>
-                    <Stack spacing={0.75}>
-                      {(['SUPER_ADMIN', 'FINANCE'] as const).map(seat => {
-                        const rec = ((request as any).high_value_approvals || [])
-                          .find((a: any) => a.seat === seat);
-                        const seatName = seat === 'SUPER_ADMIN'
-                          ? 'Super Admin'
-                          : 'Finance Lead / Head of Department';
-                        return (
-                          <Box key={seat} display="flex" alignItems="center" gap={1}>
-                            <Chip
-                              size="small"
-                              label={rec ? (rec.decision === 'APPROVED' ? 'Approved' : 'Rejected') : 'Awaiting'}
-                              color={rec ? (rec.decision === 'APPROVED' ? 'success' : 'error') : 'default'}
-                              sx={{ minWidth: 88 }}
-                            />
-                            <Box sx={{ flex: 1, minWidth: 0 }}>
-                              <Typography variant="body2">{seatName}</Typography>
-                              {rec && (
-                                <Typography variant="caption" color="text.secondary">
-                                  {rec.first_name} {rec.last_name} · {formatDate(rec.created_at)}
-                                  {rec.comments ? ` · ${rec.comments}` : ''}
-                                </Typography>
-                              )}
-                            </Box>
-                          </Box>
-                        );
-                      })}
-                    </Stack>
-                  </Paper>
-                )}
-
-                {/* Proof of Payment — a request may carry several, because
-                    payments are often settled in batches rather than at once. */}
-                {(pops.length > 0 || canManagePOP) && (
-                  <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
-                    <Box display="flex" alignItems="center" justifyContent="space-between" mb={1} gap={1}>
-                      <Typography variant="subtitle2" fontWeight={700}>
-                        Proof of Payment {pops.length > 0 ? `(${pops.length})` : ''}
-                      </Typography>
-                      {canManagePOP && (
-                        <Button
-                          component="label"
-                          size="small"
-                          variant="outlined"
-                          startIcon={popUploading ? <CircularProgress size={14} /> : <UploadIcon />}
-                          disabled={popUploading}
-                        >
-                          Attach payment batch
-                          <input
-                            type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                            onChange={async e => {
-                              const files = Array.from(e.target.files || []);
-                              e.target.value = '';
-                              if (!files.length) return;
-                              setPopUploading(true);
-                              try {
-                                await addProofOfPayments(id!, files);
-                                toast.success(`${files.length} document(s) attached`);
-                                await loadPops();
-                              } catch (err: any) {
-                                toast.error(err?.response?.data?.error || 'Failed to attach proof of payment');
-                              } finally {
-                                setPopUploading(false);
-                              }
-                            }}
-                          />
-                        </Button>
-                      )}
-                    </Box>
-
-                    {pops.length === 0 ? (
-                      <Typography variant="caption" color="text.secondary">
-                        No proof of payment attached yet.
-                      </Typography>
-                    ) : (
-                      <Stack spacing={0.75}>
-                        {pops.map(pop => (
-                          <Box key={pop.id} display="flex" alignItems="center" gap={1}>
-                            <Box sx={{ flex: 1, minWidth: 0 }}>
-                              <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>{pop.file_name}</Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {formatDate(pop.created_at)}
-                                {pop.first_name ? ` · ${pop.first_name} ${pop.last_name || ''}` : ''}
-                              </Typography>
-                            </Box>
-                            <Tooltip title="Download">
-                              <IconButton
-                                size="small"
-                                onClick={async () => {
-                                  try {
-                                    await downloadProofOfPayment(id!, pop.id, pop.file_name);
-                                  } catch (err: any) {
-                                    toast.error(err?.message || 'Failed to download proof of payment');
-                                  }
-                                }}
-                              >
-                                <DownloadIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                            {canManagePOP && (
-                              <Tooltip title="Remove">
-                                <IconButton
-                                  size="small" color="error"
-                                  onClick={async () => {
-                                    try {
-                                      await deleteProofOfPayment(id!, pop.id);
-                                      toast.success('Proof of payment removed');
-                                      await loadPops();
-                                    } catch (err: any) {
-                                      toast.error(err?.response?.data?.error || 'Failed to remove proof of payment');
-                                    }
-                                  }}
-                                >
-                                  <DeleteIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                            )}
-                          </Box>
-                        ))}
-                      </Stack>
-                    )}
-                  </Paper>
-                )}
+              {infoFields.map(f => (
+                <Grid item xs={12} sm={6} key={f.label}>
+                  <Typography variant="body2" color="text.secondary">{f.label}</Typography>
+                  <Typography variant="body1" fontWeight="medium">{f.value}</Typography>
+                </Grid>
+              ))}
+              <Grid item xs={12}>
+                <Typography variant="body2" color="text.secondary">Justification</Typography>
+                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>{request.justification || '—'}</Typography>
               </Grid>
             </Grid>
-          </TabPanel>
+          </Paper>
 
-          {/* TAB 1: Items */}
-          <TabPanel value={tab} index={1}>
-            <Table size="small">
-              <TableHead>
-                <TableRow sx={{ bgcolor: 'grey.50' }}>
-                  <TableCell>#</TableCell>
-                  <TableCell>Description</TableCell>
-                  <TableCell>Specifications</TableCell>
-                  <TableCell align="right">Qty</TableCell>
-                  <TableCell>UOM</TableCell>
-                  <TableCell align="right">Unit Price</TableCell>
-                  <TableCell align="right">Total</TableCell>
-                  <TableCell>Budget Line</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {request.items?.map((item, idx) => (
-                  <TableRow key={item.id}>
-                    <TableCell>{idx + 1}</TableCell>
-                    <TableCell><Typography variant="body2" fontWeight={500}>{item.item_description}</Typography></TableCell>
-                    <TableCell><Typography variant="caption" color="text.secondary">{item.specifications || '—'}</Typography></TableCell>
-                    <TableCell align="right">{item.quantity} {item.unit_of_measure}</TableCell>
-                    <TableCell>{item.unit_of_measure}</TableCell>
-                    <TableCell align="right">${Number(item.estimated_unit_price || 0).toFixed(2)}</TableCell>
-                    <TableCell align="right"><Typography fontWeight={600}>${Number(item.estimated_total || (item.quantity * item.estimated_unit_price) || 0).toFixed(2)}</Typography></TableCell>
-                    <TableCell>
-                      {item.budget_code ? (
-                        <Chip label={item.budget_code} size="small" variant="outlined" />
-                      ) : <Typography variant="caption" color="text.disabled">Not assigned</Typography>}
-                    </TableCell>
+          {/* Items */}
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>Request Items</Typography>
+            <Divider sx={{ mb: 2 }} />
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>#</TableCell>
+                    <TableCell>Budget Line</TableCell>
+                    <TableCell>Description</TableCell>
+                    <TableCell align="right">Qty</TableCell>
+                    <TableCell>Unit</TableCell>
+                    <TableCell align="right">Unit Price</TableCell>
+                    <TableCell align="right">Subtotal</TableCell>
                   </TableRow>
-                ))}
-                <TableRow sx={{ bgcolor: 'grey.50' }}>
-                  <TableCell colSpan={6} align="right"><strong>Total Estimated</strong></TableCell>
-                  <TableCell align="right">
-                    <strong>${Number(request.total_estimated_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
-                  </TableCell>
-                  <TableCell />
-                </TableRow>
-              </TableBody>
-            </Table>
-          </TabPanel>
+                </TableHead>
+                <TableBody>
+                  {(request.items || []).map((item, idx) => (
+                    <TableRow key={item.id}>
+                      <TableCell>{idx + 1}</TableCell>
+                      <TableCell>
+                        {item.budget_code
+                          ? <Tooltip title={(item as any).budget_name || ''}><span>{item.budget_code}</span></Tooltip>
+                          : <Typography variant="caption" color="text.disabled">Not assigned</Typography>}
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{item.item_description}</Typography>
+                        {item.specifications && (
+                          <Typography variant="caption" color="text.secondary" display="block">{item.specifications}</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell align="right">{item.quantity}</TableCell>
+                      <TableCell>{item.unit_of_measure}</TableCell>
+                      <TableCell align="right">{money(item.estimated_unit_price)}</TableCell>
+                      <TableCell align="right">{money(item.estimated_total || (item.quantity * item.estimated_unit_price))}</TableCell>
+                    </TableRow>
+                  ))}
+                  <TableRow>
+                    <TableCell colSpan={6} align="right"><Typography fontWeight="bold">Total Estimated:</Typography></TableCell>
+                    <TableCell align="right"><Typography fontWeight="bold">{money(request.total_estimated_amount)}</Typography></TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
 
-          {/* TAB 2: Quotations */}
-          <TabPanel value={tab} index={2}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-              <Typography variant="subtitle1" fontWeight={600}>Bid Analysis</Typography>
+          {/* Bid Analysis */}
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Box display="flex" justifyContent="space-between" alignItems="center" gap={1}>
+              <Typography variant="h6">Bid Analysis {request.quotations?.length ? `(${request.quotations.length})` : ''}</Typography>
               {canUploadQuotation && (
                 <Button startIcon={<UploadIcon />} variant="contained" size="small" onClick={() => setUploadDialog(true)}>
                   Upload Quotation
                 </Button>
               )}
             </Box>
-
+            <Divider sx={{ my: 2 }} />
             {(!request.quotations || request.quotations.length === 0) ? (
-              <Box textAlign="center" py={4}>
-                <FileIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
-                <Typography color="text.secondary">No quotations uploaded yet</Typography>
-              </Box>
+              <Typography color="text.secondary" textAlign="center" py={2}>No quotations uploaded yet</Typography>
             ) : (
-              <Stack spacing={2}>
-                {request.quotations.map((quot) => (
-                  <Paper
-                    key={quot.id}
-                    variant="outlined"
-                    sx={{
-                      p: 2, borderRadius: 2,
-                      borderColor: quot.is_selected ? theme.palette.success.main : theme.palette.divider,
-                      bgcolor: quot.is_selected ? alpha(theme.palette.success.main, 0.04) : 'inherit'
-                    }}
-                  >
-                    <Box display="flex" alignItems="flex-start" justifyContent="space-between" flexWrap="wrap" gap={1}>
-                      <Box>
-                        <Box display="flex" alignItems="center" gap={1} mb={0.5}>
-                          <VendorIcon fontSize="small" color="action" />
-                          <Typography variant="subtitle2" fontWeight={700}>{quot.vendor_name}</Typography>
-                          {quot.is_selected && <Chip label="Selected" color="success" size="small" />}
-                          {quot.is_prequalified && <Chip label="Prequalified" color="info" size="small" />}
-                        </Box>
-                        <Grid container spacing={2} sx={{ mt: 0.5 }}>
-                          {[
-                            { label: 'Ref', value: quot.quotation_number || '—' },
-                            { label: 'Amount', value: `${quot.currency} ${Number(quot.total_amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}` },
-                            { label: 'Valid Until', value: quot.validity_date ? format(new Date(quot.validity_date), 'dd MMM yyyy') : '—' },
-                            { label: 'Delivery', value: quot.delivery_timeline || '—' }
-                          ].map(f => (
-                            <Grid item key={f.label}>
-                              <Typography variant="caption" color="text.secondary">{f.label}</Typography>
-                              <Typography variant="body2" fontWeight={500}>{f.value}</Typography>
-                            </Grid>
-                          ))}
-                        </Grid>
-                        {quot.notes && (
-                          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                            Note: {quot.notes}
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Vendor</TableCell>
+                      <TableCell>Ref</TableCell>
+                      <TableCell align="right">Amount</TableCell>
+                      <TableCell>Valid Until</TableCell>
+                      <TableCell>Delivery</TableCell>
+                      <TableCell align="center">Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {request.quotations.map(quot => (
+                      <TableRow
+                        key={quot.id}
+                        sx={quot.is_selected ? { bgcolor: alpha(theme.palette.success.main, 0.06) } : undefined}
+                      >
+                        <TableCell>
+                          <Box display="flex" alignItems="center" gap={0.75} flexWrap="wrap">
+                            <VendorIcon fontSize="small" color="action" />
+                            <Typography variant="body2" fontWeight={600}>{quot.vendor_name}</Typography>
+                            {quot.is_selected && <Chip label="Selected" color="success" size="small" />}
+                            {quot.is_prequalified && <Chip label="Prequalified" color="info" size="small" variant="outlined" />}
+                          </Box>
+                          {quot.notes && (
+                            <Typography variant="caption" color="text.secondary" display="block">Note: {quot.notes}</Typography>
+                          )}
+                        </TableCell>
+                        <TableCell>{quot.quotation_number || '—'}</TableCell>
+                        <TableCell align="right">
+                          <Typography variant="body2" fontWeight={600}>
+                            {quot.currency} {Number(quot.total_amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                           </Typography>
-                        )}
-                      </Box>
-                      <Stack direction="row" spacing={0.5}>
-                        {quot.file_name && (
-                          <Tooltip title="Download file">
-                            <IconButton size="small" onClick={() => handleDownloadQuotation(quot.id, quot.file_name ?? undefined)}>
-                              <DownloadIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                        {canUploadQuotation && (
-                          <Tooltip title="Edit quotation">
-                            <IconButton size="small" color="primary" onClick={() => openEditQuot(quot)}>
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                        {canUploadQuotation && (
-                          <Tooltip title="Delete">
-                            <IconButton size="small" color="error" onClick={() => handleDeleteQuotation(quot.id)}>
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </Stack>
-                    </Box>
-                  </Paper>
-                ))}
-              </Stack>
+                        </TableCell>
+                        <TableCell>{quot.validity_date ? format(new Date(quot.validity_date), 'dd MMM yyyy') : '—'}</TableCell>
+                        <TableCell>{quot.delivery_timeline || '—'}</TableCell>
+                        <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                          {quot.file_name && (
+                            <>
+                              <Tooltip title={isViewableInBrowser(quot.file_name) ? 'View in browser' : 'This file type cannot be previewed — use Download'}>
+                                <span>
+                                  <IconButton size="small" color="primary" disabled={!isViewableInBrowser(quot.file_name)}
+                                    onClick={() => viewDocument(() => viewQuotationFile(id!, quot.id, quot.file_name ?? undefined))}>
+                                    <ViewIcon fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="Download">
+                                <IconButton size="small" color="primary" onClick={() => handleDownloadQuotation(quot.id, quot.file_name ?? undefined)}>
+                                  <DownloadIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </>
+                          )}
+                          {canUploadQuotation && (
+                            <>
+                              <Tooltip title="Edit quotation">
+                                <IconButton size="small" onClick={() => openEditQuot(quot)}><EditIcon fontSize="small" /></IconButton>
+                              </Tooltip>
+                              <Tooltip title="Delete">
+                                <IconButton size="small" color="error" onClick={() => handleDeleteQuotation(quot.id)}><DeleteIcon fontSize="small" /></IconButton>
+                              </Tooltip>
+                            </>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
             )}
-          </TabPanel>
+          </Paper>
 
-          {/* TAB 3: Attachments */}
-          <TabPanel value={tab} index={3}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-              <Typography variant="subtitle1" fontWeight={600}>Supporting Documents</Typography>
-              <Typography variant="caption" color="text.secondary">
-                Documents uploaded by the requester and procurement team
-              </Typography>
-            </Box>
-            {(attachments as any[]).length === 0 ? (
-              <Box textAlign="center" py={4}>
-                <FileIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
-                <Typography color="text.secondary">No attachments uploaded</Typography>
-              </Box>
-            ) : (
-              <Stack spacing={1}>
-                {(attachments as any[]).map((att: any) => (
-                  <Paper key={att.id} variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <FileIcon color="action" />
-                    <Box flex={1} minWidth={0}>
-                      <Typography variant="body2" fontWeight={600} noWrap>{att.original_name}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {att.attachment_type} &middot; {att.file_size ? `${(att.file_size / 1024).toFixed(1)} KB` : ''} &middot; Uploaded by {att.first_name} {att.last_name}
-                      </Typography>
-                      {att.description && (
-                        <Typography variant="caption" color="text.disabled" display="block">{att.description}</Typography>
-                      )}
-                    </Box>
-                    <Tooltip title="Download">
-                      <IconButton size="small" color="primary" onClick={() => handleDownloadAttachment(att.id, att.original_name)}>
-                        <DownloadIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </Paper>
-                ))}
-              </Stack>
-            )}
-          </TabPanel>
-
-          {/* TAB 4: Approval Trail */}
-          <TabPanel value={tab} index={4}>
+          {/* Approval Trail */}
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>Approval Trail</Typography>
+            <Divider sx={{ mb: 1 }} />
             {(!request.approvalTrail || request.approvalTrail.length === 0) ? (
-              <Box textAlign="center" py={4}>
-                <TimelineIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+              <Box textAlign="center" py={3}>
+                <TimelineIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
                 <Typography color="text.secondary">No activity recorded yet</Typography>
               </Box>
             ) : (
               <List disablePadding>
-                {request.approvalTrail.map((log, idx) => (
-                  <React.Fragment key={log.id}>
-                    {idx > 0 && <Divider component="li" variant="inset" />}
-                    <ListItem alignItems="flex-start">
-                      <ListItemAvatar>
-                        <Avatar
-                          sx={{
-                            bgcolor: log.action.includes('APPROVED') || log.action === 'FINAL_APPROVED' || log.action === 'COMMITTEE_APPROVED'
-                              ? alpha(theme.palette.success.main, 0.15)
-                              : log.action.includes('REJECT') || log.action === 'COMMITTEE_REJECTED'
-                              ? alpha(theme.palette.error.main, 0.15)
-                              : alpha(theme.palette.primary.main, 0.15),
-                            color: log.action.includes('APPROVED') || log.action === 'FINAL_APPROVED' || log.action === 'COMMITTEE_APPROVED'
-                              ? theme.palette.success.main
-                              : log.action.includes('REJECT') || log.action === 'COMMITTEE_REJECTED'
-                              ? theme.palette.error.main
-                              : theme.palette.primary.main,
-                            width: 36, height: 36, fontSize: '0.75rem'
-                          }}
-                        >
-                          {(log.actor_first_name?.[0] || '') + (log.actor_last_name?.[0] || '')}
-                        </Avatar>
-                      </ListItemAvatar>
-                      <ListItemText
-                        primary={
-                          <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
-                            <Typography variant="body2" fontWeight={600}>
-                              {log.actor_first_name} {log.actor_last_name}
-                            </Typography>
-                            <Chip
-                              label={log.actor_role === 'PROCUREMENT_COMMITTEE'
-                                ? `Committee Member`
-                                : formatRoleLabel(log.actor_role, log.actor_job_title)}
-                              size="small" variant="outlined" sx={{ fontSize: '0.65rem' }}
-                            />
-                            <Chip
-                              label={log.action.replace(/_/g, ' ')}
-                              size="small"
-                              color={
-                                log.action.includes('APPROVED') ? 'success'
-                                : log.action.includes('REJECT') ? 'error'
-                                : 'info'
-                              }
-                            />
-                          </Box>
-                        }
-                        secondary={
-                          <Box>
-                            {log.comments && (
-                              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                                "{log.comments}"
+                {request.approvalTrail.map((log, idx) => {
+                  const tone = log.action.includes('APPROVED')
+                    ? theme.palette.success.main
+                    : log.action.includes('REJECT') ? theme.palette.error.main : theme.palette.primary.main;
+                  return (
+                    <React.Fragment key={log.id}>
+                      {idx > 0 && <Divider component="li" />}
+                      <ListItem alignItems="flex-start" disableGutters>
+                        <ListItemAvatar sx={{ minWidth: 44 }}>
+                          <Avatar sx={{ bgcolor: alpha(tone, 0.15), color: tone, width: 32, height: 32, fontSize: '0.7rem' }}>
+                            {(log.actor_first_name?.[0] || '') + (log.actor_last_name?.[0] || '')}
+                          </Avatar>
+                        </ListItemAvatar>
+                        <ListItemText
+                          primary={
+                            <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+                              <Typography variant="body2" fontWeight={600}>{log.actor_first_name} {log.actor_last_name}</Typography>
+                              <Chip
+                                label={log.action.replace(/_/g, ' ')} size="small"
+                                color={log.action.includes('APPROVED') ? 'success' : log.action.includes('REJECT') ? 'error' : 'info'}
+                                sx={{ height: 20, fontSize: '0.65rem' }}
+                              />
+                            </Box>
+                          }
+                          secondary={
+                            <Box component="span" display="block">
+                              <Typography component="span" variant="caption" color="text.secondary" display="block">
+                                {log.actor_role === 'PROCUREMENT_COMMITTEE' ? 'Committee Member' : formatRoleLabel(log.actor_role, log.actor_job_title)}
                               </Typography>
-                            )}
-                            <Typography variant="caption" color="text.disabled">
-                              {format(new Date(log.created_at), 'dd MMM yyyy HH:mm')}
-                            </Typography>
-                          </Box>
-                        }
-                      />
-                    </ListItem>
-                  </React.Fragment>
-                ))}
+                              {log.comments && (
+                                <Typography component="span" variant="body2" color="text.secondary" display="block" sx={{ fontStyle: 'italic' }}>
+                                  "{log.comments}"
+                                </Typography>
+                              )}
+                              <Typography component="span" variant="caption" color="text.disabled" display="block">
+                                {format(new Date(log.created_at), 'dd MMM yyyy HH:mm')}
+                              </Typography>
+                            </Box>
+                          }
+                        />
+                      </ListItem>
+                    </React.Fragment>
+                  );
+                })}
               </List>
             )}
-          </TabPanel>
-        </Box>
-      </Paper>
+          </Paper>
+          {/* Attachments */}
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>Attachments & Documents</Typography>
+            <Divider sx={{ mb: 2 }} />
+            {(attachments as any[]).length === 0 ? (
+              <Typography color="text.secondary" textAlign="center" py={2}>No attachments uploaded for this request</Typography>
+            ) : (
+              <Table size="small" sx={{ tableLayout: 'fixed' }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ width: '40%' }}>File</TableCell>
+                    <TableCell sx={{ width: '16%' }}>Type</TableCell>
+                    <TableCell sx={{ width: '18%' }}>Uploaded By</TableCell>
+                    <TableCell sx={{ width: '14%' }}>Date</TableCell>
+                    <TableCell align="center" sx={{ width: '12%' }}>View / Download</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {(attachments as any[]).map((att: any) => (
+                    <TableRow key={att.id}>
+                      <TableCell sx={{ maxWidth: 0 }}>
+                        <Box display="flex" alignItems="center" gap={0.75} sx={{ overflow: 'hidden' }}>
+                          <FileIcon fontSize="small" color="action" sx={{ flexShrink: 0 }} />
+                          <Tooltip title={att.original_name} placement="top-start">
+                            <Typography variant="body2" noWrap>{att.original_name}</Typography>
+                          </Tooltip>
+                        </Box>
+                        <Typography variant="caption" color="text.secondary" display="block" noWrap>
+                          {att.file_size ? `${(att.file_size / 1024).toFixed(1)} KB` : ''}
+                          {att.description ? ` · ${att.description}` : ''}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip label={String(att.attachment_type || 'OTHER').replace(/_/g, ' ')} size="small" variant="outlined" />
+                      </TableCell>
+                      <TableCell><Typography variant="body2" noWrap>{att.first_name} {att.last_name}</Typography></TableCell>
+                      <TableCell><Typography variant="body2">{att.created_at ? formatDate(att.created_at) : '—'}</Typography></TableCell>
+                      <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                        <Tooltip title={isViewableInBrowser(att.file_type || att.original_name) ? 'View in browser' : 'This file type cannot be previewed — use Download'}>
+                          <span>
+                            <IconButton size="small" color="primary" disabled={!isViewableInBrowser(att.file_type || att.original_name)}
+                              onClick={() => viewDocument(() => viewRequestAttachment(att.id, att.original_name))}>
+                              <ViewIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <Tooltip title="Download">
+                          <IconButton size="small" color="primary" onClick={() => handleDownloadAttachment(att.id, att.original_name)}>
+                            <DownloadIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Paper>
+
+          {/* Proof of Payment — a request may carry several, because payments
+              are often settled in batches rather than at once. */}
+          {(pops.length > 0 || canManagePOP) && (
+            <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+              <Box display="flex" justifyContent="space-between" alignItems="center" gap={1}>
+                <Typography variant="h6">Proof of Payment {pops.length > 0 ? `(${pops.length})` : ''}</Typography>
+                {canManagePOP && (
+                  <Button
+                    component="label" size="small" variant="outlined"
+                    startIcon={popUploading ? <CircularProgress size={14} /> : <UploadIcon />}
+                    disabled={popUploading}
+                  >
+                    Attach payment batch
+                    <input
+                      type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                      onChange={async e => {
+                        const files = Array.from(e.target.files || []);
+                        e.target.value = '';
+                        if (!files.length) return;
+                        setPopUploading(true);
+                        try {
+                          await addProofOfPayments(id!, files);
+                          toast.success(`${files.length} document(s) attached`);
+                          await loadPops();
+                        } catch (err: any) {
+                          toast.error(err?.response?.data?.error || 'Failed to attach proof of payment');
+                        } finally {
+                          setPopUploading(false);
+                        }
+                      }}
+                    />
+                  </Button>
+                )}
+              </Box>
+              <Divider sx={{ my: 2 }} />
+              {pops.length === 0 ? (
+                <Typography color="text.secondary" textAlign="center" py={2}>No proof of payment attached yet</Typography>
+              ) : (
+                <Table size="small" sx={{ tableLayout: 'fixed' }}>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ width: '46%' }}>File</TableCell>
+                      <TableCell sx={{ width: '22%' }}>Uploaded By</TableCell>
+                      <TableCell sx={{ width: '16%' }}>Date</TableCell>
+                      <TableCell align="center" sx={{ width: '16%' }}>View / Download</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {pops.map(pop => (
+                      <TableRow key={pop.id}>
+                        <TableCell sx={{ maxWidth: 0 }}>
+                          <Tooltip title={pop.file_name} placement="top-start">
+                            <Typography variant="body2" noWrap>{pop.file_name}</Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell><Typography variant="body2" noWrap>{pop.first_name ? `${pop.first_name} ${pop.last_name || ''}` : '—'}</Typography></TableCell>
+                        <TableCell><Typography variant="body2">{formatDate(pop.created_at)}</Typography></TableCell>
+                        <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                          <Tooltip title={isViewableInBrowser(pop.file_name) ? 'View in browser' : 'This file type cannot be previewed — use Download'}>
+                            <span>
+                              <IconButton size="small" color="primary" disabled={!isViewableInBrowser(pop.file_name)}
+                                onClick={() => viewDocument(() => viewProofOfPayment(id!, pop.id, pop.file_name))}>
+                                <ViewIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title="Download">
+                            <IconButton
+                              size="small" color="primary"
+                              onClick={async () => {
+                                try {
+                                  await downloadProofOfPayment(id!, pop.id, pop.file_name);
+                                } catch (err: any) {
+                                  toast.error(err?.message || 'Failed to download proof of payment');
+                                }
+                              }}
+                            >
+                              <DownloadIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          {canManagePOP && (
+                            <Tooltip title="Remove">
+                              <IconButton
+                                size="small" color="error"
+                                onClick={async () => {
+                                  try {
+                                    await deleteProofOfPayment(id!, pop.id);
+                                    toast.success('Proof of payment removed');
+                                    await loadPops();
+                                  } catch (err: any) {
+                                    toast.error(err?.response?.data?.error || 'Failed to remove proof of payment');
+                                  }
+                                }}
+                              >
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </Paper>
+          )}
+        </Grid>
+
+        {/* ── Sidebar ─────────────────────────────────────────────────── */}
+        <Grid item xs={12} md={4}>
+          {/* Actions */}
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>Actions</Typography>
+            <Divider sx={{ mb: 2 }} />
+            <Box display="flex" flexDirection="column" gap={1.5}>
+              {canEdit && (
+                <Button fullWidth variant="outlined" startIcon={<EditIcon />} onClick={() => navigate(`/procurement/requests/${id}/edit`)}>
+                  {request.status === 'REJECTED' ? 'Edit & Resubmit' : 'Edit Request'}
+                </Button>
+              )}
+              {canSubmit && (
+                <Button fullWidth variant="contained" startIcon={<SendIcon />} onClick={handleSubmitRequest} disabled={actionLoading}>
+                  {request.status === 'REJECTED' ? 'Resubmit for Approval' : 'Submit for Approval'}
+                </Button>
+              )}
+              {canApproveDept && (
+                <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />} onClick={() => setActionDialog('approve_dept')}>
+                  {request.status === 'PENDING_GS_APPROVAL' ? 'Approve (General Secretary)' : 'Approve (Dept Level)'}
+                </Button>
+              )}
+              {canReverseDept && (
+                <Button fullWidth variant="outlined" color="warning" startIcon={<UndoIcon />} onClick={handleReverseDept} disabled={reversingDept}>
+                  Reverse / Undo Approval
+                </Button>
+              )}
+              {canSubmitCommittee && (
+                <Button fullWidth variant="contained" startIcon={<CommitteeIcon />}
+                  onClick={() => { setSelectedQuotId(lowestQuotation?.id || null); setActionDialog('submit_committee'); }}>
+                  Submit to Committee
+                </Button>
+              )}
+              {canResubmitToCommittee && (
+                <Button fullWidth variant="outlined" color="warning" startIcon={<SendIcon />}
+                  onClick={() => { setResubmitQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); setResubmitDialog(true); }}>
+                  Resubmit Amended Quotations
+                </Button>
+              )}
+              {canCommitteeDecide && (
+                <Button fullWidth variant="contained" startIcon={<CommitteeIcon />}
+                  onClick={() => { setSelectedQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); setActionDialog('committee'); }}>
+                  Record Committee Decision
+                </Button>
+              )}
+              {canHighValueDecide && (
+                <>
+                  <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />}
+                    onClick={() => { setHighValueDecisionVal('APPROVED'); setActionDialog('high_value'); }}>
+                    Approve (High-Value)
+                  </Button>
+                  <Button fullWidth variant="outlined" color="error" startIcon={<RejectIcon />}
+                    onClick={() => { setHighValueDecisionVal('REJECTED'); setActionDialog('high_value'); }}>
+                    Reject (High-Value)
+                  </Button>
+                </>
+              )}
+              {canFinalApprove && (
+                <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />} onClick={() => setActionDialog('final_finance')}>
+                  Final Finance Approval
+                </Button>
+              )}
+              {canReject && (
+                <Button fullWidth variant="outlined" color="error" startIcon={<RejectIcon />} onClick={() => setActionDialog('reject')}>
+                  Reject
+                </Button>
+              )}
+              {(['PENDING_FINAL_FINANCE', 'COMPLETED'] as string[]).includes(request.status) && (
+                <Button fullWidth variant="outlined" color="success" startIcon={<DownloadIcon />} onClick={downloadPurchaseOrder}>
+                  Download Purchase Order
+                </Button>
+              )}
+              {!hasAnyAction && (
+                <Typography variant="body2" color="text.secondary" textAlign="center">
+                  No actions available for you at this stage
+                </Typography>
+              )}
+            </Box>
+          </Paper>
+
+          {/* Approval Progress */}
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>Approval Progress</Typography>
+            <Divider sx={{ mb: 2 }} />
+            {request.status === 'REJECTED' && (
+              <Alert severity="error" sx={{ mb: 2 }}>Rejected — the requester can amend and resubmit.</Alert>
+            )}
+            <Stepper activeStep={currentStepIndex} orientation="vertical">
+              {workflowSteps.map((step, idx) => (
+                <Step key={step.status} completed={currentStepIndex > idx || request.status === 'COMPLETED'}>
+                  <StepLabel>
+                    <Typography variant="body2" fontWeight={idx === currentStepIndex ? 700 : 400}>{step.label}</Typography>
+                    {idx === currentStepIndex && request.status !== 'COMPLETED' && (
+                      <Typography variant="caption" color="text.secondary">Current stage</Typography>
+                    )}
+                  </StepLabel>
+                </Step>
+              ))}
+            </Stepper>
+          </Paper>
+
+          {/* High-value approval — the committee recommends, then the Super
+              Admin and Finance's Lead/HOD must both approve. */}
+          {Number((request as any).is_high_value) === 1 && (
+            <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+              <Typography variant="h6" gutterBottom>High-Value Approval</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Selected quotation {money((request as any).selected_quotation_amount)} — threshold {money((request as any).high_value_threshold || 5000)}
+              </Typography>
+              <Divider sx={{ my: 2 }} />
+              <Stack spacing={1}>
+                {(['SUPER_ADMIN', 'FINANCE'] as const).map(seat => {
+                  const rec = ((request as any).high_value_approvals || []).find((a: any) => a.seat === seat);
+                  const seatName = seat === 'SUPER_ADMIN' ? 'Super Admin' : 'Finance Lead / Head of Department';
+                  return (
+                    <Box key={seat} display="flex" alignItems="center" gap={1}>
+                      <Chip
+                        size="small"
+                        label={rec ? (rec.decision === 'APPROVED' ? 'Approved' : 'Rejected') : 'Awaiting'}
+                        color={rec ? (rec.decision === 'APPROVED' ? 'success' : 'error') : 'default'}
+                        sx={{ minWidth: 88 }}
+                      />
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="body2">{seatName}</Typography>
+                        {rec && (
+                          <Typography variant="caption" color="text.secondary">
+                            {rec.first_name} {rec.last_name} · {formatDate(rec.created_at)}
+                            {rec.comments ? ` · ${rec.comments}` : ''}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </Stack>
+            </Paper>
+          )}
+
+          {/* Committee Review */}
+          {showCommittee && (
+            <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+              <Box display="flex" alignItems="center" gap={1}>
+                <VoteIcon fontSize="small" color="secondary" />
+                <Typography variant="h6" sx={{ flex: 1 }}>Committee Review</Typography>
+                <Chip
+                  size="small"
+                  label={request.status === 'PENDING_COMMITTEE' ? 'Under Review' : 'Decision Recorded'}
+                  color={request.status === 'PENDING_COMMITTEE' ? 'secondary' : 'success'}
+                />
+              </Box>
+              <Divider sx={{ my: 2 }} />
+              {(() => {
+                const votes = committeeVotes as any[];
+                const remainingCount = 3 - votes.length;
+                return (
+                  <Stack spacing={1}>
+                    {votes.map((v: any) => (
+                      <Box key={v.id ?? v.committee_seat} display="flex" alignItems="center" gap={1}>
+                        {v.vote === 'APPROVED'
+                          ? <ApproveIcon fontSize="small" color="success" />
+                          : <RejectIcon fontSize="small" color="warning" />}
+                        <Typography variant="body2" fontWeight={600} sx={{ flex: 1 }}>{v.first_name} {v.last_name}</Typography>
+                        <Chip
+                          label={v.vote === 'APPROVED' ? 'Approved' : 'Not Approved'}
+                          color={v.vote === 'APPROVED' ? 'success' : 'warning'}
+                          size="small" sx={{ height: 18, fontSize: '0.65rem' }}
+                        />
+                      </Box>
+                    ))}
+                    {remainingCount > 0 && request.status === 'PENDING_COMMITTEE' && (
+                      <Box display="flex" alignItems="center" gap={1}>
+                        <PendingIcon fontSize="small" color="disabled" />
+                        <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                          {remainingCount} vote{remainingCount > 1 ? 's' : ''} remaining
+                        </Typography>
+                      </Box>
+                    )}
+                    {votes.length >= 3 && votes.every((v: any) => v.vote === 'APPROVED') && (
+                      <Box sx={{ mt: 1, p: 1.5, bgcolor: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: 1 }}>
+                        <Typography variant="caption" fontWeight={700} color="success.dark" display="block" mb={0.5}>
+                          Procurement Committee Declaration
+                        </Typography>
+                        <Typography variant="caption" color="success.dark" fontStyle="italic">
+                          "The Committee hereby declares that it has no actual, potential, or perceived conflict of interest in relation to this procurement process or any of the bidders being evaluated."
+                        </Typography>
+                      </Box>
+                    )}
+                  </Stack>
+                );
+              })()}
+            </Paper>
+          )}
+
+        </Grid>
+      </Grid>
 
       {/* Action Dialog */}
       <Dialog open={Boolean(actionDialog)} onClose={() => !actionLoading && setActionDialog(null)} maxWidth="sm" fullWidth>
         <DialogTitle>
-          {actionDialog === 'approve_dept' && 'Approve (Department Level)'}
+          {actionDialog === 'approve_dept' && (request.status === 'PENDING_GS_APPROVAL' ? 'Approve (General Secretary)' : 'Approve (Department Level)')}
           {actionDialog === 'reject' && 'Reject Request'}
           {actionDialog === 'submit_committee' && 'Submit to Procurement Committee'}
           {actionDialog === 'committee' && 'Record Committee Decision'}

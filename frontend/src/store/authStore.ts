@@ -7,6 +7,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { User, UserRole, AuthState } from '../types';
 import api from '../services/api';
+import { clearPersistentState } from '../utils/navigationState';
 
 interface AuthStore extends AuthState {
   login: (email: string, password: string) => Promise<void>;
@@ -43,8 +44,8 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'export_data',
     'view_users',
     'manage_users',
-    // Procurement
-    'create_purchase_request',
+    // Procurement — the Super Admin approves purchase requests but does not
+    // raise them, so create_purchase_request is deliberately absent.
     'view_purchase_requests',
     'approve_purchase_request',
     'manage_quotations',
@@ -84,6 +85,12 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'approve_purchase_request'
   ],
   HEAD_OF_PROGRAMS: [
+    // Heads of Department raise their own floats and purchase requests; those
+    // are approved by the General Secretary, then Finance.
+    'create_request',
+    'edit_request',
+    'delete_request',
+    'submit_request',
     'view_own_requests',
     'view_all_requests',
     'approve_as_hop',
@@ -93,7 +100,8 @@ const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'top_up_budget',
     'view_reports',
     'export_data',
-    // Procurement: dept-level approval only
+    // Procurement: dept-level approval, plus their own requests
+    'create_purchase_request',
     'view_purchase_requests',
     'approve_purchase_request'
   ],
@@ -160,6 +168,7 @@ export const useAuthStore = create<AuthStore>()(
       },
 
       logout: () => {
+        clearPersistentState();
         set({
           user: null,
           accessToken: null,

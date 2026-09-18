@@ -38,7 +38,7 @@ class AdminController {
         safe('SELECT COUNT(*) as total FROM departments WHERE is_active = TRUE'),
         safe(
           `SELECT COUNT(*) as total,
-                  SUM(CASE WHEN status IN ('PENDING_LEAD_APPROVAL', 'PENDING_HOP_APPROVAL', 'PENDING_FINANCE_APPROVAL', 'PENDING_RECONCILIATION', 'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE') THEN 1 ELSE 0 END) as pending,
+                  SUM(CASE WHEN status IN ('PENDING_ADMIN_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_LEAD_APPROVAL', 'PENDING_HOP_APPROVAL', 'PENDING_FINANCE_APPROVAL', 'PENDING_RECONCILIATION', 'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE') THEN 1 ELSE 0 END) as pending,
                   SUM(CASE WHEN status IN ('APPROVED', 'DISPATCHED', 'RECONCILED') THEN 1 ELSE 0 END) as approved,
                   SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END) as rejected
            FROM requests`
