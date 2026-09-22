@@ -871,16 +871,29 @@ class ApprovalService {
 
       const request = requests[0];
       
-      // Get the last approval log for this approver
-      const [lastApproval] = await connection.execute(
-        `SELECT * FROM approval_logs 
-         WHERE request_id = ? AND approver_id = ? AND action = 'APPROVED'
-         ORDER BY created_at DESC LIMIT 1`,
-        [requestId, approverId]
-      );
+      // Whose approval may be undone: your own, except for a system
+      // administrator, who may undo the most recent approval on the request
+      // whoever made it. Without that an Admin could only ever reverse
+      // approvals they had personally made.
+      const isSystemAdmin = approverRole === ROLES.ADMIN;
+      const [lastApproval] = isSystemAdmin
+        ? await connection.execute(
+            `SELECT * FROM approval_logs
+             WHERE request_id = ? AND action = 'APPROVED'
+             ORDER BY created_at DESC, id DESC LIMIT 1`,
+            [requestId]
+          )
+        : await connection.execute(
+            `SELECT * FROM approval_logs
+             WHERE request_id = ? AND approver_id = ? AND action = 'APPROVED'
+             ORDER BY created_at DESC, id DESC LIMIT 1`,
+            [requestId, approverId]
+          );
 
       if (lastApproval.length === 0) {
-        throw new Error('No approval found to reverse');
+        throw new Error(isSystemAdmin
+          ? 'There is no approval on this request to reverse'
+          : 'No approval of yours was found on this request to reverse');
       }
 
       const approval = lastApproval[0];
@@ -892,101 +905,112 @@ class ApprovalService {
         throw new Error('Approval reversal window has expired (12 hours limit)');
       }
 
-      // Determine the previous status based on who approved
-      let revertToStatus;
-      switch (approverRole) {
-        case ROLES.PROGRAM_LEAD:
-          // Updated: Lead approval now goes to Finance, so revert from Finance stage
-          if (request.status !== REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
-            throw new Error('Cannot reverse - request has already progressed');
-          }
-          revertToStatus = REQUEST_STATUS.PENDING_LEAD_APPROVAL;
-          await connection.execute(
-            'UPDATE requests SET lead_approved_at = NULL, updated_at = NOW() WHERE id = ?',
-            [requestId]
+      // ── What to undo ────────────────────────────────────────────────────
+      // The approval log row records exactly what this approval changed, so
+      // reverse that. The previous code inferred it from the approver's ROLE,
+      // which was wrong in three ways:
+      //
+      //  - A Finance Lead or Finance HOP carries the role PROGRAM_LEAD /
+      //    HEAD_OF_PROGRAMS. Approving at the Finance stage leaves the request
+      //    APPROVED, but the departmental branch demanded it still be at
+      //    PENDING_FINANCE_APPROVAL, so their reversal always failed with
+      //    "request has already progressed".
+      //  - ROLES.ADMIN matched no branch at all and fell through to
+      //    "Invalid approver role for reversal".
+      //  - A HOP who approved at the Admin or HOP desk was sent back to
+      //    PENDING_LEAD_APPROVAL — a desk the request had never been at.
+      const revertToStatus = approval.previous_status;
+      if (!revertToStatus) {
+        throw new Error('Cannot reverse — the trail does not record what this approval changed');
+      }
+
+      // Nothing may have happened since: the request must still be where this
+      // approval left it. Dispatch is the one permitted follow-on, because
+      // dispatch is what spends the budget and the reversal below gives it back.
+      const reversibleFrom = [approval.new_status];
+      if (approval.new_status === REQUEST_STATUS.APPROVED) {
+        reversibleFrom.push(REQUEST_STATUS.DISPATCHED);
+      }
+      if (!reversibleFrom.includes(request.status)) {
+        throw new Error(
+          `Cannot reverse — this approval moved the request to ${approval.new_status}, ` +
+          `but it has since moved on to ${request.status}.`
+        );
+      }
+
+      // ── Give back any budget the request has taken ──────────────────────
+      // Driven by the transactions that actually exist, not by the approver's
+      // role. Deduction happens at dispatch rather than at Finance approval, so
+      // there is usually nothing here unless the request was dispatched — but
+      // keying this on the role is what previously let a Finance Lead's
+      // reversal complete with the money still shown as spent.
+      const [transactions] = await connection.execute(
+        `SELECT bt.*, bl.donor_id FROM budget_transactions bt
+         JOIN budget_lines bl ON bt.budget_line_id = bl.id
+         WHERE bt.request_id = ? AND bt.transaction_type = 'DEDUCTION'`,
+        [requestId]
+      );
+
+      const donorReversals = new Map();
+
+      for (const trans of transactions) {
+        await connection.execute(
+          `UPDATE budget_lines
+           SET spent_amount = spent_amount - ?, updated_at = NOW()
+           WHERE id = ?`,
+          [trans.amount, trans.budget_line_id]
+        );
+
+        if (trans.donor_id) {
+          donorReversals.set(
+            trans.donor_id,
+            (donorReversals.get(trans.donor_id) || 0) + parseFloat(trans.amount)
           );
-          break;
-        case ROLES.HEAD_OF_PROGRAMS:
-          // Updated: HOP approval also goes to Finance, so revert from Finance stage
-          if (request.status !== REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
-            throw new Error('Cannot reverse - request has already progressed');
-          }
-          revertToStatus = REQUEST_STATUS.PENDING_LEAD_APPROVAL;
-          await connection.execute(
-            'UPDATE requests SET hop_approved_at = NULL, updated_at = NOW() WHERE id = ?',
-            [requestId]
-          );
-          break;
-        case ROLES.FINANCE_CLERK:
-          // Finance reversal - need to restore budget
-          if (request.status !== REQUEST_STATUS.APPROVED && request.status !== 'DISPATCHED') {
-            throw new Error('Cannot reverse - request is not in approved state');
-          }
-          
-          // Get deductions to reverse
-          const [transactions] = await connection.execute(
-            `SELECT bt.*, bl.donor_id FROM budget_transactions bt
-             JOIN budget_lines bl ON bt.budget_line_id = bl.id
-             WHERE bt.request_id = ? AND bt.transaction_type = 'DEDUCTION'`,
-            [requestId]
-          );
+        }
 
-          // Track donor reversals
-          const donorReversals = new Map();
+        const [bl] = await connection.execute(
+          'SELECT (allocated_amount - spent_amount) as balance FROM budget_lines WHERE id = ?',
+          [trans.budget_line_id]
+        );
 
-          // Reverse each budget deduction
-          for (const trans of transactions) {
-            await connection.execute(
-              `UPDATE budget_lines 
-               SET spent_amount = spent_amount - ?, updated_at = NOW()
-               WHERE id = ?`,
-              [trans.amount, trans.budget_line_id]
-            );
+        await connection.execute(
+          `INSERT INTO budget_transactions
+           (budget_line_id, request_id, transaction_type, amount,
+            balance_before, balance_after, description, performed_by)
+           VALUES (?, ?, 'REVERSAL', ?, ?, ?, ?, ?)`,
+          [trans.budget_line_id, requestId, trans.amount,
+           bl[0].balance - trans.amount, bl[0].balance,
+           `Budget reversal for request #${request.request_code} - approval withdrawn`,
+           approverId]
+        );
+      }
 
-            // Track reversal per donor
-            if (trans.donor_id) {
-              if (!donorReversals.has(trans.donor_id)) {
-                donorReversals.set(trans.donor_id, 0);
-              }
-              donorReversals.set(trans.donor_id, donorReversals.get(trans.donor_id) + parseFloat(trans.amount));
-            }
+      for (const [donorId, reversalAmount] of donorReversals) {
+        await connection.execute(
+          `UPDATE donors SET total_spent = total_spent - ?, updated_at = NOW() WHERE id = ?`,
+          [reversalAmount, donorId]
+        );
+      }
 
-            // Log the reversal
-            const [bl] = await connection.execute(
-              'SELECT (allocated_amount - spent_amount) as balance FROM budget_lines WHERE id = ?',
-              [trans.budget_line_id]
-            );
-
-            await connection.execute(
-              `INSERT INTO budget_transactions 
-               (budget_line_id, request_id, transaction_type, amount, 
-                balance_before, balance_after, description, performed_by)
-               VALUES (?, ?, 'REVERSAL', ?, ?, ?, ?, ?)`,
-              [trans.budget_line_id, requestId, trans.amount,
-               bl[0].balance - trans.amount, bl[0].balance,
-               `Budget reversal for request #${request.request_code} - approval withdrawn`,
-               approverId]
-            );
-          }
-
-          // Reverse donor total_spent
-          for (const [donorId, reversalAmount] of donorReversals) {
-            await connection.execute(
-              `UPDATE donors 
-               SET total_spent = total_spent - ?, updated_at = NOW()
-               WHERE id = ?`,
-              [reversalAmount, donorId]
-            );
-          }
-
-          revertToStatus = REQUEST_STATUS.PENDING_FINANCE_APPROVAL;
-          await connection.execute(
-            'UPDATE requests SET finance_approved_at = NULL, completed_at = NULL, updated_at = NOW() WHERE id = ?',
-            [requestId]
-          );
-          break;
-        default:
-          throw new Error('Invalid approver role for reversal');
+      // ── Clear the stage timestamps this reversal undoes ─────────────────
+      if (revertToStatus === REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
+        // Undoing the Finance decision only; the departmental approvals stand.
+        await connection.execute(
+          `UPDATE requests
+           SET finance_approved_at = NULL, completed_at = NULL, dispatched_at = NULL, updated_at = NOW()
+           WHERE id = ?`,
+          [requestId]
+        );
+      } else {
+        // Back to a departmental desk. An Admin approval can set all three
+        // stamps in one go, so every downstream stamp has to come off.
+        await connection.execute(
+          `UPDATE requests
+           SET lead_approved_at = NULL, hop_approved_at = NULL, finance_approved_at = NULL,
+               completed_at = NULL, dispatched_at = NULL, updated_at = NOW()
+           WHERE id = ?`,
+          [requestId]
+        );
       }
 
       // Update request status
@@ -1121,35 +1145,68 @@ class ApprovalService {
    * Check if an approver can reverse their approval
    */
   async canReverseApproval(requestId, approverId, approverRole) {
-    // Get the last approval log for this approver
-    const results = await query(
-      `SELECT * FROM approval_logs 
-       WHERE request_id = ? AND approver_id = ? AND action = 'APPROVED'
-       ORDER BY created_at DESC LIMIT 1`,
-      [requestId, approverId]
-    );
+    // This must apply the SAME tests as reverseApproval. It used to check only
+    // "did you approve" and "within the window", so the UI offered a Reverse
+    // button on requests that had already moved on — the button appeared, and
+    // clicking it failed with "request has already progressed". Any rule added
+    // to reverseApproval belongs here too.
+    const isSystemAdmin = approverRole === ROLES.ADMIN;
+
+    const requests = await query('SELECT status FROM requests WHERE id = ?', [requestId]);
+    if (requests.length === 0) {
+      return { canReverse: false, reason: 'Request not found' };
+    }
+    const currentStatus = requests[0].status;
+
+    const results = isSystemAdmin
+      ? await query(
+          `SELECT * FROM approval_logs
+           WHERE request_id = ? AND action = 'APPROVED'
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [requestId]
+        )
+      : await query(
+          `SELECT * FROM approval_logs
+           WHERE request_id = ? AND approver_id = ? AND action = 'APPROVED'
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [requestId, approverId]
+        );
 
     if (results.length === 0) {
-      return { canReverse: false, reason: 'No approval found' };
+      return { canReverse: false, reason: 'No approval found to reverse' };
     }
 
     const approval = results[0];
-    const approvalTime = new Date(approval.created_at);
-    const now = new Date();
-    const hoursSinceApproval = (now - approvalTime) / (1000 * 60 * 60);
+    const hoursSinceApproval = (Date.now() - new Date(approval.created_at)) / (1000 * 60 * 60);
 
     if (hoursSinceApproval > 12) {
-      return { 
-        canReverse: false, 
+      return {
+        canReverse: false,
         reason: 'Reversal window expired',
         hoursAgo: hoursSinceApproval.toFixed(2)
+      };
+    }
+
+    if (!approval.previous_status) {
+      return { canReverse: false, reason: 'The trail does not record what this approval changed' };
+    }
+
+    const reversibleFrom = [approval.new_status];
+    if (approval.new_status === REQUEST_STATUS.APPROVED) {
+      reversibleFrom.push(REQUEST_STATUS.DISPATCHED);
+    }
+    if (!reversibleFrom.includes(currentStatus)) {
+      return {
+        canReverse: false,
+        reason: `This approval moved the request to ${approval.new_status}, but it has since moved on to ${currentStatus}`
       };
     }
 
     return {
       canReverse: true,
       hoursRemaining: (12 - hoursSinceApproval).toFixed(2),
-      approvedAt: approval.created_at
+      approvedAt: approval.created_at,
+      revertsTo: approval.previous_status
     };
   }
 

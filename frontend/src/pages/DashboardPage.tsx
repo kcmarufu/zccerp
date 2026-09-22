@@ -100,77 +100,70 @@ const DashboardPage: React.FC = () => {
   const isProcurementOnly = hasRole('PROCUREMENT_OFFICER', 'PROCUREMENT_COMMITTEE');
 
   const fetchDashboardData = async () => {
+    setIsLoading(true);
     try {
       const isApprover = hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK');
       const isGeneralUser = hasRole('GENERAL_USER') || (!isApprover);
+      const canReviewLead = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN');
 
-      // Overdue reconciliation check for general users
+      // Everything the dashboard needs, requested at once. These used to be
+      // awaited one at a time — up to six round trips before the landing page
+      // finished loading, even though none of them depends on another.
+      //
+      // The results are applied AFTER they have all arrived, in a fixed order,
+      // because two of them write the same counters: the approver stats are
+      // meant to override the totals derived from the request list. Applying
+      // them as they landed would have let network timing decide which won.
+      const settled = await Promise.allSettled([
+        isGeneralUser ? reconciliationService.getOverdueCheck() : Promise.resolve(null),
+        isApprover ? reconciliationService.getPendingReconciliations() : Promise.resolve(null),
+        (isApprover && canReviewLead) ? reconciliationService.getPendingLeadReconciliations() : Promise.resolve(null),
+        isGeneralUser ? reconciliationService.getMyReconciliations() : Promise.resolve(null),
+        isGeneralUser ? reconciliationService.getMyDispatchedRequests() : Promise.resolve(null),
+        requestService.getAll({ limit: 100 }),
+        isApprover ? approvalService.getApproverStats() : Promise.resolve(null),
+        budgetService.getAll({ isActive: true }),
+        getProcurementDashboard()
+      ]);
+
+      const value = (i: number): any =>
+        settled[i].status === 'fulfilled' ? (settled[i] as PromiseFulfilledResult<any>).value : null;
+
+      const [overdueRes, pendingReconRes, leadReconRes, myReconRes,
+             myDispatchedRes, requestsResponse, statsResponse, budgetResponse, pd]: any[] =
+        settled.map((_, i) => value(i));
+
+      // ── Reconciliation counters ────────────────────────────────────────
+      if (isGeneralUser && overdueRes) setOverdueRecon(overdueRes);
+
+      if (pendingReconRes?.success && pendingReconRes.data) {
+        setPendingReconDesk(Array.isArray(pendingReconRes.data) ? pendingReconRes.data.length : 0);
+      }
+
+      if (leadReconRes?.success && leadReconRes.data) {
+        setPendingLeadCount(Array.isArray(leadReconRes.data) ? leadReconRes.data.length : 0);
+      }
+
+      // Both submitted reconciliations and dispatched requests, so a user with a
+      // DISPATCHED request they have not yet reconciled still sees the card.
       if (isGeneralUser) {
-        try {
-          const overdueRes = await reconciliationService.getOverdueCheck();
-          setOverdueRecon(overdueRes);
-        } catch { /* silent */ }
+        const dispatched: any[] = (myDispatchedRes?.success && Array.isArray(myDispatchedRes.data))
+          ? myDispatchedRes.data : [];
+        const awaitingSubmission = dispatched.filter((r: any) => r.status === 'DISPATCHED').length;
+        // Already submitted and awaiting lead/finance approval — the same record
+        // moves to RECON_PENDING_*, so this is not double-counted.
+        const pendingApproval = dispatched.filter((r: any) =>
+          r.status === 'RECON_PENDING_LEAD' || r.status === 'RECON_PENDING_FINANCE'
+        ).length;
+        setMyReconStats({
+          total: dispatched.length,
+          pending: awaitingSubmission + pendingApproval,
+          approved: dispatched.filter((r: any) => r.status === 'RECONCILED').length
+        });
       }
 
-      // Pending reconciliations on desk for approvers
-      if (isApprover) {
-        try {
-          const pendingRes = await reconciliationService.getPendingReconciliations();
-          if (pendingRes.success && pendingRes.data) {
-            setPendingReconDesk(Array.isArray(pendingRes.data) ? pendingRes.data.length : 0);
-          }
-        } catch { /* silent */ }
-
-        // Pending lead review for HOP/LEAD
-        const canReviewLead = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN');
-        if (canReviewLead) {
-          try {
-            const leadRes = await reconciliationService.getPendingLeadReconciliations();
-            if (leadRes.success && leadRes.data) {
-              setPendingLeadCount(Array.isArray(leadRes.data) ? leadRes.data.length : 0);
-            }
-          } catch { /* silent */ }
-        }
-      }
-
-      // My reconciliation stats for general users
-      // Fetch both submitted reconciliations AND dispatched requests (pre-submission)
-      // so users like Fungai who have a DISPATCHED request but haven't submitted yet
-      // still see the reconciliation card with accurate pending counts.
-      if (isGeneralUser) {
-        try {
-          const [myReconRes, myDispatchedRes] = await Promise.allSettled([
-            reconciliationService.getMyReconciliations(),
-            reconciliationService.getMyDispatchedRequests()
-          ]);
-
-          const recs: any[] = (myReconRes.status === 'fulfilled' && myReconRes.value?.success)
-            ? (Array.isArray(myReconRes.value.data) ? myReconRes.value.data : [])
-            : [];
-
-          const dispatched: any[] = (myDispatchedRes.status === 'fulfilled' && myDispatchedRes.value?.success)
-            ? (Array.isArray(myDispatchedRes.value.data) ? myDispatchedRes.value.data : [])
-            : [];
-
-          // Requests awaiting reconciliation submission (status DISPATCHED = no reconciliation yet)
-          const awaitingSubmission = dispatched.filter((r: any) => r.status === 'DISPATCHED').length;
-          // Reconciliations already submitted and awaiting lead/finance approval
-          // (request moves to RECON_PENDING_LEAD or RECON_PENDING_FINANCE — same record, not double-counted)
-          const pendingApproval = dispatched.filter((r: any) =>
-            r.status === 'RECON_PENDING_LEAD' || r.status === 'RECON_PENDING_FINANCE'
-          ).length;
-
-          setMyReconStats({
-            total: dispatched.length, // all requests in the reconciliation workflow
-            pending: awaitingSubmission + pendingApproval, // needs action
-            approved: dispatched.filter((r: any) => r.status === 'RECONCILED').length
-          });
-        } catch { /* silent */ }
-      }
-      setIsLoading(true);
-
-      const requestsResponse = await requestService.getAll({ limit: 100 });
-      if (requestsResponse.success && requestsResponse.data) {
+      // ── Request totals, then the approver stats that override them ─────
+      if (requestsResponse?.success && requestsResponse.data) {
         const requests = requestsResponse.data.requests;
         setStats(prev => ({
           ...prev,
@@ -181,49 +174,35 @@ const DashboardPage: React.FC = () => {
         setRecentRequests(requests.slice(0, 5));
       }
 
-      if (isApprover) {
-        try {
-          const statsResponse = await approvalService.getApproverStats();
-          if (statsResponse.success && statsResponse.data) {
-            setStats(prev => ({
-              ...prev,
-              pendingApprovals: statsResponse.data!.pending,
-              totalRequests: statsResponse.data!.total,
-              approved: statsResponse.data!.approved,
-              rejected: statsResponse.data!.rejected
-            }));
-          }
-        } catch (err) {
-          console.error('Error fetching approver stats:', err);
-        }
+      if (statsResponse?.success && statsResponse.data) {
+        setStats(prev => ({
+          ...prev,
+          pendingApprovals: statsResponse.data.pending,
+          totalRequests: statsResponse.data.total,
+          approved: statsResponse.data.approved,
+          rejected: statsResponse.data.rejected
+        }));
       }
 
-      try {
-        const budgetResponse = await budgetService.getAll({ isActive: true });
-        if (budgetResponse.success && budgetResponse.data) {
-          const budgets = budgetResponse.data;
-          const totalAllocated = budgets.reduce((sum: number, b: BudgetLine) => sum + (Number(b.allocated_amount) || 0), 0);
-          const totalSpent = budgets.reduce((sum: number, b: BudgetLine) => sum + (Number(b.spent_amount) || 0), 0);
-          setStats(prev => ({ ...prev, totalBudget: totalAllocated, totalSpent: totalSpent }));
-          const low = budgets.filter((b: BudgetLine) =>
-            Number(b.allocated_amount) > 0 && (Number(b.balance) / Number(b.allocated_amount)) < 0.1 && Number(b.balance) > 0
-          );
-          setLowBudgets(low);
-        }
-      } catch (err) {
-        console.error('Error fetching budgets:', err);
+      // ── Budget ─────────────────────────────────────────────────────────
+      if (budgetResponse?.success && budgetResponse.data) {
+        const budgets = budgetResponse.data;
+        const totalAllocated = budgets.reduce((sum: number, b: BudgetLine) => sum + (Number(b.allocated_amount) || 0), 0);
+        const totalSpent = budgets.reduce((sum: number, b: BudgetLine) => sum + (Number(b.spent_amount) || 0), 0);
+        setStats(prev => ({ ...prev, totalBudget: totalAllocated, totalSpent: totalSpent }));
+        const low = budgets.filter((b: BudgetLine) =>
+          Number(b.allocated_amount) > 0 && (Number(b.balance) / Number(b.allocated_amount)) < 0.1 && Number(b.balance) > 0
+        );
+        setLowBudgets(low);
       }
-      try {
-        const pd = await getProcurementDashboard();
-        const total = Object.values(pd.statusSummary || {}).reduce((a: number, b) => a + (b as number), 0);
-        const pending = (pd.pendingDeptApproval ?? 0) + (pd.totalAwaitingCommittee ?? 0) + (pd.totalInProcurement ?? 0) + (pd.totalFinalFinance ?? 0);
-        setProcStats({
-          total,
-          pending,
-          approved: pd.totalCompleted ?? 0,
-          rejected: pd.totalRejected ?? 0
-        });
-      } catch { /* silent — procurement stats are supplemental */ }
+
+      // ── Procurement (supplemental) ─────────────────────────────────────
+      if (pd) {
+        const summary = (pd.statusSummary || {}) as Record<string, number>;
+        const total: number = Object.values(summary).reduce((a, b) => a + Number(b || 0), 0);
+        const pending = Number(pd.pendingDeptApproval ?? 0) + Number(pd.totalAwaitingCommittee ?? 0) + Number(pd.totalInProcurement ?? 0) + Number(pd.totalFinalFinance ?? 0);
+        setProcStats({ total, pending, approved: pd.totalCompleted ?? 0, rejected: pd.totalRejected ?? 0 });
+      }
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
     } finally {

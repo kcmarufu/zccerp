@@ -647,85 +647,91 @@ ${buildDigitalStamp('')}
     try {
       setIsLoading(true);
 
-      // Fetch user's dispatched requests (for reconciliation)
-      try {
-        const myRes = await reconciliationService.getMyDispatchedRequests();
-        if (myRes.success && myRes.data) {
-          setMyRequests(myRes.data);
+      // Every query below is independent, so they go out together. They used to
+      // be awaited one after another — eight separate round trips for a Finance
+      // HOD or an administrator, with the spinner held up until the last one
+      // landed. The server answers all eight in about 0.2s combined; the wait
+      // was almost entirely network latency multiplied by eight. Issuing them
+      // at once collapses that to a single round trip's worth.
+      //
+      // allSettled, not all: one failing desk must not blank the whole page,
+      // which is what the individual try/catch blocks used to guarantee.
+      const tasks: { run: () => Promise<void>; label: string }[] = [
+        {
+          label: 'my dispatched requests',
+          run: async () => {
+            const res = await reconciliationService.getMyDispatchedRequests();
+            if (res.success && res.data) setMyRequests(res.data);
+          }
+        },
+        {
+          label: 'my reconciliations',
+          run: async () => {
+            const res = await reconciliationService.getMyReconciliations();
+            if (res.success && res.data) setMyReconciliations(res.data);
+          }
         }
-      } catch (err) {
-        console.error('Error fetching my dispatched requests:', err);
-      }
+      ];
 
-      // Fetch user's submitted reconciliations (all statuses)
-      try {
-        const reconRes = await reconciliationService.getMyReconciliations();
-        if (reconRes.success && reconRes.data) {
-          setMyReconciliations(reconRes.data);
-        }
-      } catch (err) {
-        console.error('Error fetching my reconciliations:', err);
-      }
-
-      // Lead/HOP/Admin: fetch pending reconciliations for lead review
       if (canReviewLead) {
-        try {
-          const leadRes = await reconciliationService.getPendingLeadReconciliations();
-          if (leadRes.success && leadRes.data) {
-            setPendingLeadReviews(leadRes.data);
+        tasks.push(
+          {
+            label: 'pending lead reconciliations',
+            run: async () => {
+              const res = await reconciliationService.getPendingLeadReconciliations();
+              if (res.success && res.data) setPendingLeadReviews(res.data);
+            }
+          },
+          {
+            label: 'lead review backlog',
+            run: async () => { setLeadBacklog(await reconciliationService.getLeadDeskBacklog()); }
+          },
+          {
+            label: 'lead reconciliation history',
+            run: async () => {
+              const res = await reconciliationService.getLeadApprovedReconciliations();
+              if (res.success && res.data) setLeadHistory(res.data);
+            }
           }
-        } catch (err) {
-          console.error('Error fetching pending lead reconciliations:', err);
-        }
-
-        try {
-          setLeadBacklog(await reconciliationService.getLeadDeskBacklog());
-        } catch (err) {
-          console.error('Error fetching lead review backlog:', err);
-        }
-
-        // Lead history — reconciliations already approved by this lead
-        try {
-          const leadHistRes = await reconciliationService.getLeadApprovedReconciliations();
-          if (leadHistRes.success && leadHistRes.data) {
-            setLeadHistory(leadHistRes.data);
-          }
-        } catch (err) {
-          console.error('Error fetching lead reconciliation history:', err);
-        }
+        );
       }
 
-      // Finance desk / Finance dept Lead / Admin: fetch pending reconciliations
       if (canReviewFinance) {
-        try {
-          const pendingRes = await reconciliationService.getPendingReconciliations();
-          if (pendingRes.success && pendingRes.data) {
-            setPendingReviews(pendingRes.data);
+        tasks.push({
+          label: 'pending reconciliations',
+          run: async () => {
+            const res = await reconciliationService.getPendingReconciliations();
+            if (res.success && res.data) setPendingReviews(res.data);
           }
-        } catch (err) {
-          console.error('Error fetching pending reconciliations:', err);
-        }
+        });
       }
 
       if (canSeeAllHistory) {
-        try {
-          const historyRes = await reconciliationService.getReconciliationHistory();
-          if (historyRes.success && historyRes.data) {
-            setHistory(historyRes.data);
+        tasks.push({
+          label: 'reconciliation history',
+          run: async () => {
+            const res = await reconciliationService.getReconciliationHistory();
+            if (res.success && res.data) setHistory(res.data);
           }
-        } catch (err) {
-          console.error('Error fetching reconciliation history:', err);
-        }
+        });
       }
-      // Finance Clerk: fetch their personal review history
+
       if (isFinance) {
-        try {
-          const frHistRes = await reconciliationService.getFinanceReviewHistory();
-          if (frHistRes.success && frHistRes.data) setFinanceReviewHistory(frHistRes.data);
-        } catch (err) {
-          console.error('Error fetching finance review history:', err);
-        }
+        tasks.push({
+          label: 'finance review history',
+          run: async () => {
+            const res = await reconciliationService.getFinanceReviewHistory();
+            if (res.success && res.data) setFinanceReviewHistory(res.data);
+          }
+        });
       }
+
+      const results = await Promise.allSettled(tasks.map(t => t.run()));
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          console.error(`Error fetching ${tasks[i].label}:`, r.reason);
+        }
+      });
     } finally {
       setIsLoading(false);
     }

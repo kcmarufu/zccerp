@@ -43,7 +43,8 @@ import {
   CheckCircle as ApprovedIcon,
   Receipt as ReconcileIcon,
   Undo as UndoIcon,
-  Warning as WarningIcon
+  Warning as WarningIcon,
+  Cancel as RejectIcon
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import { toast } from 'react-toastify';
@@ -51,6 +52,8 @@ import { format, formatDate } from '../../utils/datetime';
 
 import { Request, Department } from '../../types';
 import { requestService } from '../../services/requestService';
+import { approvalService } from '../../services/approvalService';
+import { useAuthStore } from '../../store/authStore';
 import { reconciliationService } from '../../services/reconciliationService';
 import api from '../../services/api';
 import { downloadHTMLAsPDF, buildTravelClaimPageHTML, buildDigitalStamp } from '../../utils/pdfUtils';
@@ -98,6 +101,23 @@ const DispatchDesk: React.FC = () => {
   const [reverseDispatchOpen, setReverseDispatchOpen] = useState(false);
   const [reverseDispatchTargetId, setReverseDispatchTargetId] = useState<number | null>(null);
   const [reverseDispatchReason, setReverseDispatchReason] = useState('');
+
+  // Reject-from-dispatch dialog (Finance / Admin)
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectTargetId, setRejectTargetId] = useState<number | null>(null);
+  const [rejectTargetCode, setRejectTargetCode] = useState('');
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejecting, setRejecting] = useState(false);
+
+  // Rejecting a request that Finance has already approved is a Finance
+  // decision, so the button is shown to exactly the accounts the server lets
+  // through: Finance Clerks, system administrators, and the Finance
+  // department's own Lead/HOD. Mirrors isFinanceManager() on the server.
+  const { user } = useAuthStore();
+  const canRejectFromDispatch =
+    user?.role === 'ADMIN' ||
+    user?.role === 'FINANCE_CLERK' ||
+    (['PROGRAM_LEAD', 'HEAD_OF_PROGRAMS'].includes(user?.role || '') && user?.department_code === 'FOS');
   const [reconSubFilter, setReconSubFilter] = useState('');
   const [searchText, setSearchText] = useState('');
 
@@ -537,6 +557,36 @@ ${buildDigitalStamp('')}
     }
   };
 
+  // Reject a request that has already been approved (and possibly dispatched).
+  // Uses the existing finance-force-reject endpoint, which reverses any budget
+  // the request has consumed and moves it to REJECTED.
+  const handleRejectFromDispatch = (requestId: number, requestCode: string) => {
+    setRejectTargetId(requestId);
+    setRejectTargetCode(requestCode);
+    setRejectReason('');
+    setRejectOpen(true);
+  };
+
+  const confirmRejectFromDispatch = async () => {
+    if (!rejectTargetId || !rejectReason.trim()) return;
+    setRejecting(true);
+    try {
+      const result = await approvalService.financeForceReject(rejectTargetId, rejectReason.trim());
+      if (result.success) {
+        toast.success('Request rejected. Any budget it had taken has been released.');
+        setRejectOpen(false);
+        setRejectTargetId(null);
+        fetchRequests();
+      } else {
+        toast.error(result.error || 'Failed to reject request');
+      }
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to reject request');
+    } finally {
+      setRejecting(false);
+    }
+  };
+
   const getStatusColor = (status: string): 'success' | 'error' | 'warning' | 'info' | 'default' => {
     switch (status) {
       case 'APPROVED': return 'success';
@@ -938,6 +988,19 @@ ${buildDigitalStamp('')}
                             </Button>
                           </Tooltip>
                         )}
+                        {canRejectFromDispatch && ['APPROVED', 'DISPATCHED'].includes(request.status) && (
+                          <Tooltip title="Reject this request and release its budget">
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="error"
+                              startIcon={<RejectIcon />}
+                              onClick={() => handleRejectFromDispatch(request.id, request.request_code)}
+                            >
+                              Reject
+                            </Button>
+                          </Tooltip>
+                        )}
                         <Tooltip title="Download PDF">
                           <IconButton
                             size="small"
@@ -1163,6 +1226,11 @@ ${buildDigitalStamp('')}
               Reverse Dispatch
             </Button>
           )}
+          {canRejectFromDispatch && detailRequest && ['APPROVED', 'DISPATCHED'].includes(detailRequest.status) && (
+            <Button variant="outlined" color="error" startIcon={<RejectIcon />} onClick={() => { handleRejectFromDispatch(detailRequest.id, detailRequest.request_code); setDetailOpen(false); }}>
+              Reject
+            </Button>
+          )}
           <Button variant="outlined" color="error" onClick={() => handleDownloadPDF(detailRequest?.id, detailRequest?.request_code)} startIcon={<PdfIcon />}>
             Print PDF
           </Button>
@@ -1226,6 +1294,44 @@ ${buildDigitalStamp('')}
             disabled={!reverseDispatchReason.trim()}
           >
             Reverse Dispatch
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ==================== REJECT FROM DISPATCH DIALOG ==================== */}
+      <Dialog open={rejectOpen} onClose={() => !rejecting && setRejectOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box display="flex" alignItems="center" gap={1}>
+            <WarningIcon color="error" />
+            <Typography variant="h6">Reject Request {rejectTargetCode}</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ mb: 2 }}>
+            This moves the request to <strong>REJECTED</strong> and releases any budget it has
+            already consumed back to its budget lines. The requester can correct it and resubmit.
+            The reason below is recorded on the approval trail.
+          </Typography>
+          <TextField
+            label="Reason for rejection *"
+            multiline
+            rows={3}
+            fullWidth
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            placeholder="e.g. Wrong budget line, duplicate request, amount incorrect..."
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRejectOpen(false)} disabled={rejecting}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            startIcon={<RejectIcon />}
+            onClick={confirmRejectFromDispatch}
+            disabled={!rejectReason.trim() || rejecting}
+          >
+            {rejecting ? 'Rejecting...' : 'Reject Request'}
           </Button>
         </DialogActions>
       </Dialog>
