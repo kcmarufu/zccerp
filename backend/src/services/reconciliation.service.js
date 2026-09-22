@@ -1424,10 +1424,18 @@ class ReconciliationService {
                WHERE al.request_id = r.request_id
                  AND al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
                  AND al.created_at >= r.created_at
-               ORDER BY al.created_at ASC LIMIT 1) AS rejection_comments
+               ORDER BY al.created_at ASC LIMIT 1) AS rejection_comments,
+              -- What the float was raised for. A reviewer deciding whether the
+              -- spending matches the request needs it beside the figures.
+              req.justification,
+              req.department_id,
+              d.department_code,
+              d.department_name
        FROM reconciliations r
        JOIN users u ON r.reconciled_by = u.id
        LEFT JOIN users fr ON r.finance_reviewer_id = fr.id
+       LEFT JOIN requests req ON r.request_id = req.id
+       LEFT JOIN departments d ON req.department_id = d.id
        WHERE r.request_id = ?
        ORDER BY r.created_at DESC`,
       [requestId]

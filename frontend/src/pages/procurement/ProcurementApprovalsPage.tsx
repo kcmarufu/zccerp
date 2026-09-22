@@ -14,7 +14,7 @@ import {
   Box, Paper, Typography, Chip, Button, Table, TableHead, TableRow,
   TableCell, TableBody, TableContainer, TablePagination, CircularProgress, Alert,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, IconButton,
-  Stack, Tooltip, Avatar, alpha, useTheme, Tab, Tabs, Divider, MenuItem, Autocomplete,
+  Stack, Tooltip, Avatar, alpha, useTheme, Tab, Tabs, Divider, MenuItem,
   InputAdornment
 } from '@mui/material';
 import {
@@ -52,14 +52,12 @@ import {
   committeeDecision,
   getCommitteeVotes,
   submitToCommittee,
-  uploadQuotation,
-  getVendors,
   reverseFinalApproval,
   reverseDeptApproval,
   PROC_STATUS_LABELS,
   PROC_STATUS_COLORS
 } from '../../services/procurementService';
-import { ProcRequest, ProcVendor } from '../../types';
+import { ProcRequest } from '../../types';
 import api from '../../services/api';
 import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
@@ -217,21 +215,7 @@ const ProcurementApprovalsPage: React.FC = () => {
   }, [action?.type, action?.request?.id]);
 
   // Quotation upload state (for PROCUREMENT_OFFICER)
-  const [uploadTarget, setUploadTarget] = useState<ProcRequest | null>(null);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [quotForm, setQuotForm] = useState({
-    vendor_name: '', vendor_email: '', vendor_phone: '',
-    quotation_number: '', total_amount: '', currency: 'USD',
-    validity_date: '', delivery_timeline: '', notes: ''
-  });
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [selectedVendor, setSelectedVendor] = useState<ProcVendor | null>(null);
 
-  const { data: vendors = [] } = useQuery({
-    queryKey: ['proc-vendors-list'],
-    queryFn: () => getVendors({ limit: 200 } as any),
-    staleTime: 60000
-  });
 
   const currentTab = tabs[tabIdx];
   const currentStatus = currentTab?.status;
@@ -374,30 +358,6 @@ const ProcurementApprovalsPage: React.FC = () => {
   };
 
   // ─── Upload quotation ────────────────────────────────────────────────────
-  const handleUploadQuotation = async () => {
-    if (!uploadTarget) return;
-    if (!quotForm.vendor_name.trim() || !quotForm.total_amount) {
-      toast.error('Vendor name and total amount are required');
-      return;
-    }
-    setUploadLoading(true);
-    try {
-      const fd = new FormData();
-      Object.entries(quotForm).forEach(([k, v]) => { if (v) fd.append(k, v); });
-      if (uploadFile) fd.append('file', uploadFile);
-      await uploadQuotation(uploadTarget.id, fd);
-      toast.success('Quotation uploaded successfully');
-      setUploadTarget(null);
-      setUploadFile(null);
-      setSelectedVendor(null);
-      setQuotForm({ vendor_name: '', vendor_email: '', vendor_phone: '', quotation_number: '', total_amount: '', currency: 'USD', validity_date: '', delivery_timeline: '', notes: '' });
-      invalidate();
-    } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Upload failed');
-    } finally {
-      setUploadLoading(false);
-    }
-  };
 
   // ─── Action buttons per row ──────────────────────────────────────────────
   const renderActions = (req: ProcRequest) => {
@@ -458,14 +418,26 @@ const ProcurementApprovalsPage: React.FC = () => {
     if (role === 'PROCUREMENT_OFFICER') {
       if (req.status === 'PENDING_PROCUREMENT') {
         btns.push(
-          <Button key="upload" size="small" variant="outlined" color="primary" startIcon={<UploadIcon />}
-            onClick={() => setUploadTarget(req)}>
-            Upload Quotation
-          </Button>,
-          <Button key="committee" size="small" variant="contained" color="primary" startIcon={<CommitteeIcon />}
-            onClick={() => { setAction({ type: 'submit_committee', request: req }); setComments(''); setSelectedQuotId(null); }}>
-            Send to Committee
-          </Button>
+          // Pricing a quotation means answering every requested item, which
+          // needs the request's own item list — so it is done on the request
+          // page rather than from a header-only dialog here.
+          <Tooltip key="upload" title="Price the supplier's quotation against the requested items">
+            <Button size="small" variant="outlined" color="primary" startIcon={<UploadIcon />}
+              onClick={() => navigate(`/procurement/requests/${req.id}`)}>
+              Upload Quotation
+            </Button>
+          </Tooltip>,
+          // Sending to the Committee means choosing one fully priced
+          // quotation, which only the request detail page can show. The
+          // dialog here could not, so it sent an unpriced request that the
+          // server then rejected — this takes the officer where the choice
+          // is actually made.
+          <Tooltip key="committee" title="Choose the recommended quotation on the request page">
+            <Button size="small" variant="contained" color="primary" startIcon={<CommitteeIcon />}
+              onClick={() => navigate(`/procurement/requests/${req.id}`)}>
+              Send to Committee
+            </Button>
+          </Tooltip>
         );
       }
     }
@@ -875,9 +847,17 @@ const ProcurementApprovalsPage: React.FC = () => {
               </TextField>
             )}
 
-            {(action?.type === 'submit_committee' || action?.type === 'committee') && action.request.quotation_count && action.request.quotation_count > 0 && (
-              <Alert severity="info" sx={{ mb: 2 }}>
-                This request has {action.request.quotation_count} quotation(s). Navigate to the request detail to select the recommended quotation before submitting.
+            {action?.type === 'committee' && Boolean(action.request.quotation_count) && (
+              <Alert
+                severity="info" sx={{ mb: 2 }}
+                action={
+                  <Button size="small" onClick={() => navigate(`/procurement/requests/${action.request.id}`)}>
+                    Open Bid Comparison
+                  </Button>
+                }
+              >
+                This request has {action.request.quotation_count} quotation(s). The Bid Comparison
+                on the request page shows what each supplier quoted for every requested item.
               </Alert>
             )}
 
@@ -954,76 +934,6 @@ const ProcurementApprovalsPage: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* ─── Upload Quotation Dialog (Procurement Officer) ─────────────────── */}
-      <Dialog open={Boolean(uploadTarget)} onClose={() => !uploadLoading && setUploadTarget(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Upload Quotation — {uploadTarget?.request_code}</DialogTitle>
-        <DialogContent>
-          <Box display="flex" flexDirection="column" gap={2} pt={1}>
-            <Autocomplete
-              options={vendors as ProcVendor[]}
-              getOptionLabel={(v) => typeof v === 'string' ? v : v.company_name || ''}
-              value={selectedVendor}
-              onChange={(_, newVal) => {
-                if (newVal && typeof newVal !== 'string') {
-                  setSelectedVendor(newVal);
-                  setQuotForm(f => ({
-                    ...f,
-                    vendor_name: newVal.company_name || '',
-                    vendor_email: newVal.email || '',
-                    vendor_phone: newVal.phone || ''
-                  }));
-                } else {
-                  setSelectedVendor(null);
-                }
-              }}
-              freeSolo
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  fullWidth
-                  required
-                  label="Vendor / Supplier Name *"
-                  value={quotForm.vendor_name}
-                  onChange={e => setQuotForm(f => ({ ...f, vendor_name: e.target.value }))}
-                />
-              )}
-            />
-            <Box display="flex" gap={2}>
-              <TextField fullWidth label="Quotation Ref #" value={quotForm.quotation_number}
-                onChange={e => setQuotForm(f => ({ ...f, quotation_number: e.target.value }))} />
-              <TextField required fullWidth type="number" label="Total Amount *" value={quotForm.total_amount}
-                onChange={e => setQuotForm(f => ({ ...f, total_amount: e.target.value }))}
-                inputProps={{ min: 0, step: 0.01 }} />
-            </Box>
-            <Box display="flex" gap={2}>
-              <TextField fullWidth label="Currency" value={quotForm.currency}
-                onChange={e => setQuotForm(f => ({ ...f, currency: e.target.value }))} />
-              <TextField fullWidth type="date" label="Valid Until" InputLabelProps={{ shrink: true }}
-                value={quotForm.validity_date} onChange={e => setQuotForm(f => ({ ...f, validity_date: e.target.value }))} />
-            </Box>
-            <Box display="flex" gap={2}>
-              <TextField fullWidth label="Vendor Email" value={quotForm.vendor_email}
-                onChange={e => setQuotForm(f => ({ ...f, vendor_email: e.target.value }))} />
-              <TextField fullWidth label="Delivery Timeline" placeholder="e.g. 2 weeks" value={quotForm.delivery_timeline}
-                onChange={e => setQuotForm(f => ({ ...f, delivery_timeline: e.target.value }))} />
-            </Box>
-            <TextField fullWidth multiline rows={2} label="Notes" value={quotForm.notes}
-              onChange={e => setQuotForm(f => ({ ...f, notes: e.target.value }))} />
-            <Button variant="outlined" component="label" startIcon={<UploadIcon />}>
-              {uploadFile ? uploadFile.name : 'Attach Document (PDF / Image)'}
-              <input type="file" hidden accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                onChange={e => setUploadFile(e.target.files?.[0] || null)} />
-            </Button>
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setUploadTarget(null)} disabled={uploadLoading}>Cancel</Button>
-          <Button variant="contained" onClick={handleUploadQuotation} disabled={uploadLoading}
-            startIcon={uploadLoading ? <CircularProgress size={16} /> : <UploadIcon />}>
-            Upload Quotation
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Post-Dept Approval Confirmation Dialog */}
       <Dialog open={Boolean(deptConfirmData)} maxWidth="sm" fullWidth>

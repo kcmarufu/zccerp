@@ -302,11 +302,15 @@ class ProcurementController {
       if (!data.vendor_name) {
         return res.status(400).json({ success: false, error: 'Vendor name is required' });
       }
-      if (!data.total_amount || isNaN(parseFloat(data.total_amount))) {
-        return res.status(400).json({ success: false, error: 'Valid total amount is required' });
+      // A quotation priced line by line derives its total from those lines, so
+      // a header figure is only required when no breakdown was sent.
+      const hasItems = Boolean(data.items) && data.items !== '[]';
+      if (!hasItems) {
+        if (!data.total_amount || isNaN(parseFloat(data.total_amount))) {
+          return res.status(400).json({ success: false, error: 'Valid total amount is required' });
+        }
+        data.total_amount = parseFloat(data.total_amount);
       }
-
-      data.total_amount = parseFloat(data.total_amount);
       const result = await procurementService.addQuotation(requestId, data, req.user);
       res.status(201).json({ success: true, data: result, message: 'Quotation uploaded successfully' });
     } catch (err) {

@@ -155,6 +155,40 @@ function pendingForApproverWhereClause(approver, scope = 'department') {
         params: [approver.id],
       };
     }
+
+    // The Super Admin / General Secretary is not the departmental desk. Within
+    // their own department the staff's leave belongs to that department's Head,
+    // so the department view holds only what this desk is actually the
+    // designated approver for: the Head of Department, another Super Admin,
+    // and — where the department has no active Head — everybody, because then
+    // there is no departmental desk for it to sit on.
+    if (approver.role === ROLES.ADMIN) {
+      return {
+        sql: `(
+          e.department_id = ?
+          AND (req_u.id IS NULL OR req_u.id <> ?)
+          AND (
+            req_r.role_name = ?
+            OR req_r.role_name = ?
+            OR NOT EXISTS (
+              SELECT 1 FROM users u2
+              JOIN roles r2 ON u2.role_id = r2.id
+              WHERE u2.department_id = e.department_id
+                AND r2.role_name = ?
+                AND u2.is_active = TRUE
+            )
+          )
+        )`,
+        params: [
+          approver.department_id, approver.id,
+          ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN,
+          ROLES.HEAD_OF_PROGRAMS,
+        ],
+      };
+    }
+
+    // The Admin & HR Lead/HOP *is* their department's desk, so theirs is the
+    // ordinary department queue.
     return {
       sql: '(e.department_id = ? AND (req_u.id IS NULL OR req_u.id <> ?))',
       params: [approver.department_id, approver.id],

@@ -1079,7 +1079,8 @@ const LeaveManagementPage: React.FC = () => {
           <strong>Your approval queue</strong> — only requests you are the designated
           approver for appear here.{' '}
           {isHrOffice
-            ? 'As Super Admin you approve Heads of Department, other Super Admins, and any department without a Head.'
+            ? 'As Super Admin you approve Heads of Department, other Super Admins, and any department without a Head. '
+              + 'My Department therefore lists your Head of Department’s requests — their staff’s leave sits on their desk, not yours.'
             : 'You approve staff in your own department; your own leave goes to a Super Admin.'}
         </Alert>
       )}

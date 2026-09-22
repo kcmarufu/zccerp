@@ -57,6 +57,14 @@ import { downloadHTMLAsPDF, buildTravelClaimPageHTML, buildDigitalStamp } from '
 import perDiemService from '../../services/perDiemService';
 import { formatRoleLabel } from '../../utils/roleUtils';
 
+/**
+ * The purpose of the float — what the money is for. It took the column Priority
+ * used to hold: a dispatch clerk reads the purpose on every row, and read the
+ * priority on none.
+ */
+const purposeOf = (request: any): string =>
+  (request?.justification || '').replace(/\s+/g, ' ').trim();
+
 const DispatchDesk: React.FC = () => {
   // ── HARDCODED BRANDING ────────────────────────────────────────────────
   const DOC_TITLE  = 'Float Requisition' as const;
@@ -312,7 +320,6 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
         ['Department', req.department_name || ''],
         ['Requester', `${req.requester_first_name||''} ${req.requester_last_name||''}`.trim()],
         ['Status', (req.status || '').replace(/_/g, ' ')],
-        ['Priority', req.priority || 'MEDIUM'],
         ['Total Amount', Number(req.total_amount || 0)],
         ['Purpose of Float', req.justification || ''],
         ['Submitted', req.submitted_at ? format(new Date(req.submitted_at), 'dd MMM yyyy') : ''],
@@ -395,18 +402,18 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
     if (targets.length === 0) { toast.warning('No requests to export'); return; }
     // Excel
     const wb = XLSX.utils.book_new();
-    const headers = ['#', 'Reference', 'Requester', 'Department', 'Priority', 'Total ($)', 'Status', 'Date'];
+    const headers = ['#', 'Reference', 'Requester', 'Department', 'Purpose of Float', 'Total ($)', 'Status', 'Date'];
     const rows = targets.map((r, i) => [
       i + 1, r.request_code,
       `${r.requester_first_name || ''} ${r.requester_last_name || ''}`.trim(),
-      r.department_name || r.department_code || '',
-      r.priority || 'MEDIUM',
+      r.department_code || r.department_name || '',
+      purposeOf(r),
       Number(r.total_amount || 0),
       r.status.replace(/_/g, ' '),
       (r as any).submitted_at ? format(new Date((r as any).submitted_at), 'dd MMM yyyy') : r.created_at ? format(new Date(r.created_at), 'dd MMM yyyy') : ''
     ]);
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws['!cols'] = [4, 16, 22, 20, 10, 14, 22, 14].map(w => ({ wch: w }));
+    ws['!cols'] = [4, 16, 22, 10, 40, 14, 22, 14].map(w => ({ wch: w }));
     XLSX.utils.book_append_sheet(wb, ws, 'Dispatch Report');
     XLSX.writeFile(wb, `dispatch-bulk-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
     toast.success(`Exported ${targets.length} records to Excel`);
@@ -425,8 +432,8 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
         <td>${i + 1}</td>
         <td><strong>${r.request_code}</strong></td>
         <td>${`${r.requester_first_name || ''} ${r.requester_last_name || ''}`.trim()}</td>
-        <td>${r.department_name || r.department_code || '—'}</td>
-        <td>${r.priority || 'MEDIUM'}</td>
+        <td>${r.department_code || r.department_name || '—'}</td>
+        <td>${purposeOf(r) || '—'}</td>
         <td align="right">$${Number(r.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
         <td>${r.status.replace(/_/g, ' ')}</td>
         <td>${(r as any).submitted_at ? format(new Date((r as any).submitted_at), 'dd MMM yyyy') : r.created_at ? format(new Date(r.created_at), 'dd MMM yyyy') : '—'}</td>
@@ -452,7 +459,7 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
 </div>
 <h3>Dispatch Summary (${targets.length} records)</h3>
 <table>
-  <thead><tr><th>#</th><th>Reference</th><th>Requester</th><th>Department</th><th>Priority</th><th align="right">Amount ($)</th><th>Status</th><th>Date</th></tr></thead>
+  <thead><tr><th>#</th><th>Reference</th><th>Requester</th><th>Department</th><th>Purpose of Float</th><th align="right">Amount ($)</th><th>Status</th><th>Date</th></tr></thead>
   <tbody>${tableRows}
   <tr class="total-row"><td colspan="5" align="right">TOTAL:</td><td align="right">$${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td><td colspan="2"></td></tr>
   </tbody>
@@ -828,7 +835,7 @@ ${buildDigitalStamp('')}
                 <TableCell sx={{ fontWeight: 'bold' }}>Requester</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Department</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Amount</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>Priority</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Purpose of Float</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Date</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }} align="center">Actions</TableCell>
@@ -867,12 +874,20 @@ ${buildDigitalStamp('')}
                     <TableCell>
                       ${Number(request.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </TableCell>
-                    <TableCell>
-                      <Chip 
-                        label={request.priority || 'MEDIUM'}
-                        size="small"
-                        color={request.priority === 'URGENT' ? 'error' : request.priority === 'HIGH' ? 'warning' : 'default'}
-                      />
+                    <TableCell sx={{ maxWidth: 260 }}>
+                      {purposeOf(request)
+                        ? <Tooltip title={purposeOf(request)} placement="top-start">
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden',
+                              }}
+                            >
+                              {purposeOf(request)}
+                            </Typography>
+                          </Tooltip>
+                        : <Typography variant="caption" color="text.disabled">Not stated</Typography>}
                     </TableCell>
                     <TableCell>
                       <Chip 
@@ -992,15 +1007,11 @@ ${buildDigitalStamp('')}
                     <Chip label={getStatusLabel(detailRequest.status)} color={getStatusColor(detailRequest.status)} size="small" />
                   </Box>
                 </Grid>
-                <Grid item xs={6} sm={3}>
-                  <Typography variant="caption" color="text.secondary">Priority</Typography>
-                  <Box mt={0.5}>
-                    <Chip 
-                      label={detailRequest.priority || 'MEDIUM'} 
-                      size="small"
-                      color={detailRequest.priority === 'URGENT' ? 'error' : detailRequest.priority === 'HIGH' ? 'warning' : 'default'}
-                    />
-                  </Box>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="caption" color="text.secondary">Purpose of Float</Typography>
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                    {purposeOf(detailRequest) || 'Not stated'}
+                  </Typography>
                 </Grid>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Total Amount</Typography>

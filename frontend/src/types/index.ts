@@ -1167,6 +1167,37 @@ export interface ProcRequestItem {
   budget_code?: string;        // used in some pages
   budget_name?: string;
   notes?: string;
+  /** Written from the selected quotation when it goes to the Committee. */
+  actual_unit_price?: number | null;
+  actual_total?: number | null;
+  actual_quotation_id?: number | null;
+  /** 0 when the selected supplier could not supply this line at all. */
+  is_available?: number;
+}
+
+/**
+ * One line of a supplier's quotation. Either priced against a requested item
+ * (`request_item_id` set) or keyed in by the Procurement team (`is_manual`),
+ * for a substitute or an extra the supplier proposes.
+ */
+export interface ProcQuotationItem {
+  id?: number;
+  quotation_id?: number;
+  request_item_id?: number | null;
+  description: string;
+  quantity: number;
+  unit_of_measure?: string;
+  /** Null when the line is marked not available. */
+  unit_price: number | null;
+  total_price?: number | null;
+  is_available: number | boolean;
+  is_manual?: number | boolean;
+  notes?: string | null;
+  sort_order?: number;
+  /** Joined from the requested item, for the side-by-side comparison. */
+  request_item_description?: string;
+  requested_quantity?: number;
+  requested_unit_price?: number;
 }
 
 export interface ProcRequest {
@@ -1235,6 +1266,8 @@ export interface ProcQuotation {
   uploader_name?: string;
   uploaded_at: string;
   created_at: string;
+  /** The supplier's priced breakdown, one line per requested item. */
+  items?: ProcQuotationItem[];
 }
 
 export interface ProcVendor {

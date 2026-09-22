@@ -216,21 +216,31 @@ export const buildPurchaseOrderHTML = (request: any): string => {
     ? Number(selectedQuot.total_amount || 0)
     : items.reduce((s: number, it: any) => s + Number(it.quantity || 1) * Number(it.estimated_unit_price || 0), 0);
 
-  // The order is placed at the selected supplier's quoted price. Line prices on
-  // the request are only the requester's estimates, so they are not printed —
-  // the one binding figure is the grand total from the selected quotation.
+  // The order is placed at the selected supplier's quoted price. Those prices
+  // are written onto each item as the actuals when the request goes to the
+  // Committee, so the PO prints what the supplier will actually charge, line by
+  // line. Where an item has no actual — an older request, priced before the
+  // breakdown existed — the line shows a dash rather than the requester's
+  // estimate, which was never a price the supplier agreed to.
   const currency = selectedQuot?.currency || 'USD';
   const money = (n: number) => `${currency === 'USD' ? '$' : `${currency} `}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  const itemRows = items.map((item: any, i: number) => `<tr>
+  const itemRows = items.map((item: any, i: number) => {
+    const unavailable = item.actual_quotation_id != null && Number(item.is_available) === 0;
+    const unitPrice = item.actual_unit_price == null ? null : Number(item.actual_unit_price);
+    const lineTotal = item.actual_total == null
+      ? (unitPrice == null ? null : unitPrice * Number(item.quantity || 1))
+      : Number(item.actual_total);
+    return `<tr${unavailable ? ' style="color:#999"' : ''}>
       <td>${i + 1}</td>
-      <td>${item.item_description || item.description || '—'}</td>
+      <td>${item.item_description || item.description || '—'}${unavailable ? ' <em>(not supplied)</em>' : ''}</td>
       <td>${item.specifications || '—'}</td>
       <td align="right">${Number(item.quantity || 1)}</td>
       <td>${item.unit || item.unit_of_measure || 'pcs'}</td>
-      <td align="center">—</td>
-      <td align="center">—</td>
-    </tr>`).join('');
+      <td align="right">${unitPrice == null ? '—' : money(unitPrice)}</td>
+      <td align="right">${lineTotal == null ? '—' : money(lineTotal)}</td>
+    </tr>`;
+  }).join('');
 
   const supplierName = selectedQuot ? (selectedQuot.vendor_name || selectedQuot.vendor_company || 'selected supplier') : '';
   const grandTotalLabel = selectedQuot

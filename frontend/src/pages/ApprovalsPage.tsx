@@ -166,7 +166,7 @@ const ApprovalsPage: React.FC = () => {
   const [filterSearch, setFilterSearch] = usePersistentState('approvals.search', '');
   const [filterDept, setFilterDept] = usePersistentState('approvals.dept', '');
   const [filterProject, setFilterProject] = usePersistentState('approvals.project', '');
-  const [filterPriority, setFilterPriority] = usePersistentState('approvals.priority', '');
+  const [filterPurpose, setFilterPurpose] = usePersistentState('approvals.purpose', '');
   const [filterStatus, setFilterStatus] = usePersistentState('approvals.status', '');
   const [filterDateFrom, setFilterDateFrom] = usePersistentState('approvals.dateFrom', '');
   const [filterDateTo, setFilterDateTo] = usePersistentState('approvals.dateTo', '');
@@ -401,15 +401,14 @@ const ApprovalsPage: React.FC = () => {
     }
   };
 
-  const getPriorityColor = (priority: string): 'default' | 'info' | 'warning' | 'error' => {
-    switch (priority) {
-      case 'LOW': return 'default';
-      case 'MEDIUM': return 'info';
-      case 'HIGH': return 'warning';
-      case 'URGENT': return 'error';
-      default: return 'default';
-    }
-  };
+  /**
+   * The purpose of the float — what the money is for. It is the one thing an
+   * approver always wants to know at a glance, which is why it took the column
+   * Priority used to hold: priority was set on almost every request and read on
+   * none of them.
+   */
+  const purposeOf = (request: any): string =>
+    (request?.justification || '').replace(/\s+/g, ' ').trim();
 
   // Check if a request can be reversed (within 5-hour window)
   const canReverseRequest = (request: any): boolean => {
@@ -451,7 +450,7 @@ const ApprovalsPage: React.FC = () => {
       )) return false;
       if (filterDept && String((r as any).department_id) !== filterDept && String((r as any).routing_department_id) !== filterDept) return false;
       if (filterProject && String((r as any).project_id) !== filterProject) return false;
-      if (filterPriority && r.priority !== filterPriority) return false;
+      if (filterPurpose && !purposeOf(r).toLowerCase().includes(filterPurpose.toLowerCase())) return false;
       if (filterStatus && r.status !== filterStatus) return false;
       if (filterDateFrom && new Date(r.created_at) < new Date(filterDateFrom)) return false;
       if (filterDateTo && new Date(r.created_at) > new Date(filterDateTo + 'T23:59:59')) return false;
@@ -459,11 +458,11 @@ const ApprovalsPage: React.FC = () => {
     });
   };
 
-  const hasFilters = Boolean(filterSearch || filterDept || filterProject || filterPriority || filterStatus || filterDateFrom || filterDateTo);
+  const hasFilters = Boolean(filterSearch || filterDept || filterProject || filterPurpose || filterStatus || filterDateFrom || filterDateTo);
 
   const clearFilters = () => {
     setFilterSearch(''); setFilterDept(''); setFilterProject('');
-    setFilterPriority(''); setFilterStatus(''); setFilterDateFrom(''); setFilterDateTo('');
+    setFilterPurpose(''); setFilterStatus(''); setFilterDateFrom(''); setFilterDateTo('');
   };
 
   // ── Single-record PDF download (per row) ──────────────────────────────
@@ -614,12 +613,12 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
     const exportTabExcel = () => {
       const wb = XLSX.utils.book_new();
       const label = type === 'pending' ? 'Pending Approvals' : type === 'approved' ? 'Approved' : 'Rejected';
-      const headers = ['Reference', 'Requester', 'Department', 'Priority', 'Total Amount ($)', 'Status', 'Submitted Date'];
+      const headers = ['Reference', 'Requester', 'Department', 'Purpose of Float', 'Total Amount ($)', 'Status', 'Submitted Date'];
       const rows = filtered.map(r => [
         r.request_code,
         `${(r as any).requester_first_name || ''} ${(r as any).requester_last_name || ''}`.trim(),
         r.department_name || '',
-        r.priority || '',
+        purposeOf(r),
         Number(r.total_amount || 0).toFixed(2),
         r.status.replace(/_/g, ' '),
         (r as any).submitted_at ? format(new Date((r as any).submitted_at), 'dd MMM yyyy') : r.created_at ? format(new Date(r.created_at), 'dd MMM yyyy') : ''
@@ -712,7 +711,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
               <TableCell sx={{ fontWeight: 'bold' }}>Requester</TableCell>
               <TableCell sx={{ fontWeight: 'bold' }}>Department</TableCell>
               <TableCell sx={{ fontWeight: 'bold' }}>Amount</TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }}>Priority</TableCell>
+              <TableCell sx={{ fontWeight: 'bold' }}>Purpose of Float</TableCell>
               <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
               <TableCell sx={{ fontWeight: 'bold' }}>
                 {type === 'pending' ? 'Submitted' : type === 'approved' ? 'Approved' : 'Rejected'}
@@ -744,12 +743,9 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                   </TableCell>
                   <TableCell>{request.requester_first_name} {request.requester_last_name}</TableCell>
                   <TableCell>
-                    <Chip label={request.department_code} size="small" variant="outlined" />
-                    {request.department_name && (
-                      <Typography variant="caption" color="text.secondary" display="block" noWrap sx={{ maxWidth: 120 }}>
-                        {request.department_name}
-                      </Typography>
-                    )}
+                    <Tooltip title={request.department_name || ''}>
+                      <Chip label={request.department_code} size="small" variant="outlined" />
+                    </Tooltip>
                     {request.routing_department_id && (
                       <Tooltip title={`Cross-department request — routed to ${request.routing_department_name || 'another department'} for approval`}>
                         <Chip
@@ -768,7 +764,21 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                       ${Number(request.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </Typography>
                   </TableCell>
-                  <TableCell><Chip label={request.priority} color={getPriorityColor(request.priority)} size="small" /></TableCell>
+                  <TableCell sx={{ maxWidth: 260 }}>
+                    {purposeOf(request)
+                      ? <Tooltip title={purposeOf(request)} placement="top-start">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            {purposeOf(request)}
+                          </Typography>
+                        </Tooltip>
+                      : <Typography variant="caption" color="text.disabled">Not stated</Typography>}
+                  </TableCell>
                   <TableCell><Chip label={request.status.replace(/_/g, ' ')} color={getStatusColor(request.status)} size="small" /></TableCell>
                   <TableCell>
                     {type === 'pending' && request.submitted_at && format(new Date(request.submitted_at), 'MMM d, yyyy HH:mm')}
@@ -1033,14 +1043,10 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
               ))}
             </TextField>
             <TextField
-              select size="small" label="Priority" sx={{ minWidth: 130, flex: 1 }}
-              value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
-            >
-              <MenuItem value="">All Priorities</MenuItem>
-              {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map(p => (
-                <MenuItem key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</MenuItem>
-              ))}
-            </TextField>
+              size="small" label="Purpose of Float" sx={{ minWidth: 180, flex: 1 }}
+              placeholder="e.g. workshop, fuel"
+              value={filterPurpose} onChange={e => setFilterPurpose(e.target.value)}
+            />
             <TextField
               select size="small" label="Status" sx={{ minWidth: 180, flex: 1 }}
               value={filterStatus} onChange={e => {
@@ -1175,13 +1181,11 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                         size="small"
                       />
                     </Grid>
-                    <Grid item xs={6} sm={4}>
-                      <Typography variant="body2" color="text.secondary">Priority</Typography>
-                      <Chip
-                        label={selectedRequest.priority || 'MEDIUM'}
-                        color={getPriorityColor(selectedRequest.priority || 'MEDIUM')}
-                        size="small"
-                      />
+                    <Grid item xs={12} sm={4}>
+                      <Typography variant="body2" color="text.secondary">Purpose of Float</Typography>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {purposeOf(selectedRequest) || 'Not stated'}
+                      </Typography>
                     </Grid>
                   </Grid>
                 </CardContent>

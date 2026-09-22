@@ -344,9 +344,9 @@ class ProcurementService {
       ? await this.getHighValueApprovals(requestId)
       : [];
 
-    const [items, logs, quotations] = await Promise.all([
+    const [items, logs, rawQuotations] = await Promise.all([
       query(
-        `SELECT pri.*, bl.budget_code, bl.budget_name, 
+        `SELECT pri.*, bl.budget_code, bl.budget_name,
           (bl.allocated_amount - bl.spent_amount) AS budget_balance
          FROM proc_request_items pri
          LEFT JOIN budget_lines bl ON pri.budget_line_id = bl.id
@@ -374,6 +374,10 @@ class ProcurementService {
         [requestId]
       )
     ]);
+
+    // Each quotation carries its own priced breakdown, which is what the
+    // comparison the Committee, Finance and the Super Admin read is built from.
+    const quotations = await this.attachQuotationItems(rawQuotations);
 
     // Fetch committee votes for vote-progress display
     let committeeVotes = [];
@@ -754,32 +758,36 @@ class ProcurementService {
       throw new Error('At least one quotation must be uploaded before submitting to committee');
     }
 
-    // Check if the selected quotation value is below the USD 500 threshold
-    let bypassCommittee = false;
-    let selectedQuotationAmount = null;
-    if (selectedQuotationId) {
-      const quotDetails = await query(
-        'SELECT total_amount, currency FROM proc_quotations WHERE id = ? AND request_id = ?',
-        [selectedQuotationId, requestId]
-      );
-      if (quotDetails.length) {
-        const currency = quotDetails[0].currency || 'USD';
-        selectedQuotationAmount = parseFloat(quotDetails[0].total_amount);
-        if (currency === 'USD' && selectedQuotationAmount < 500) {
-          bypassCommittee = true;
-        }
-      }
+    // The Committee decides on one bid, priced item by item. Without a chosen
+    // quotation there is nothing to turn the estimated figures into actual
+    // ones, so both the choice and its line items are mandatory here.
+    if (!selectedQuotationId) {
+      throw new Error('Choose the recommended quotation before submitting to the Committee');
     }
+    const quotDetails = await query(
+      'SELECT total_amount, currency FROM proc_quotations WHERE id = ? AND request_id = ?',
+      [selectedQuotationId, requestId]
+    );
+    if (!quotDetails.length) {
+      throw new Error('The selected quotation does not belong to this request');
+    }
+    await this.assertQuotationIsPriced(requestId, selectedQuotationId);
+
+    // Check if the selected quotation value is below the USD 500 threshold
+    const currency = quotDetails[0].currency || 'USD';
+    const selectedQuotationAmount = parseFloat(quotDetails[0].total_amount);
+    const bypassCommittee = currency === 'USD' && selectedQuotationAmount < 500;
 
     return transaction(async (conn) => {
       // Mark the selected quotation
-      if (selectedQuotationId) {
-        await conn.execute('UPDATE proc_quotations SET is_selected=FALSE WHERE request_id=?', [requestId]);
-        await conn.execute(
-          'UPDATE proc_quotations SET is_selected=TRUE, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
-          [user.id, selectedQuotationId, requestId]
-        );
-      }
+      await conn.execute('UPDATE proc_quotations SET is_selected=FALSE WHERE request_id=?', [requestId]);
+      await conn.execute(
+        'UPDATE proc_quotations SET is_selected=TRUE, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
+        [user.id, selectedQuotationId, requestId]
+      );
+      // Carry the supplier's prices onto the requested items, so everyone from
+      // the Committee onward reads the actual cost rather than the estimate.
+      await this.applyQuotationActuals(conn, requestId, selectedQuotationId);
 
       if (bypassCommittee) {
         // Quotation is below USD 500 — skip committee and forward directly to Finance
@@ -1276,6 +1284,180 @@ class ProcurementService {
   // QUOTATIONS
   // ============================================================
 
+  // ── Quotation line items ─────────────────────────────────────
+  //
+  // A quotation is a supplier's answer to the requested items, so it is priced
+  // line by line rather than as one lump sum. Each line either maps back to a
+  // proc_request_items row (request_item_id set) or is one the Procurement team
+  // keyed in themselves (is_manual = 1) — a substitute, or something the
+  // supplier proposes in place of a line they cannot fill. A line the supplier
+  // cannot supply at all is kept with is_available = 0 so the gap stays visible
+  // to the Committee instead of silently disappearing.
+
+  /**
+   * Accept the items either as an array or as the JSON string a multipart form
+   * sends, and coerce every field. Returns null when the caller sent nothing at
+   * all, which means "leave the existing lines alone".
+   */
+  parseQuotationItems(raw) {
+    if (raw === undefined || raw === null || raw === '') return null;
+    let items = raw;
+    if (typeof raw === 'string') {
+      try {
+        items = JSON.parse(raw);
+      } catch (_) {
+        throw new Error('Quotation items are not valid JSON');
+      }
+    }
+    if (!Array.isArray(items)) throw new Error('Quotation items must be a list');
+
+    return items.map((it, idx) => {
+      const available = it.is_available === undefined
+        ? true
+        : [true, 1, '1', 'true'].includes(it.is_available);
+      const description = String(it.description || it.item_description || '').trim();
+      if (!description) throw new Error(`Line ${idx + 1}: a description is required`);
+
+      const quantity = it.quantity === undefined || it.quantity === null || it.quantity === ''
+        ? 1 : parseFloat(it.quantity);
+      if (Number.isNaN(quantity) || quantity <= 0) {
+        throw new Error(`Line ${idx + 1} (${description}): quantity must be greater than zero`);
+      }
+
+      let unitPrice = null;
+      if (available) {
+        if (it.unit_price === undefined || it.unit_price === null || it.unit_price === '') {
+          throw new Error(`Line ${idx + 1} (${description}): a unit price is required, or mark the line as not available`);
+        }
+        unitPrice = parseFloat(it.unit_price);
+        if (Number.isNaN(unitPrice) || unitPrice < 0) {
+          throw new Error(`Line ${idx + 1} (${description}): the unit price must be a number of zero or more`);
+        }
+      }
+
+      const requestItemId = it.request_item_id ? Number(it.request_item_id) : null;
+      return {
+        request_item_id: requestItemId,
+        description,
+        quantity,
+        unit_of_measure: it.unit_of_measure || 'unit',
+        unit_price: unitPrice,
+        is_available: available ? 1 : 0,
+        // A line with no requested item behind it is, by definition, one the
+        // team added by hand.
+        is_manual: requestItemId ? 0 : 1,
+        notes: it.notes || null,
+        sort_order: idx,
+      };
+    });
+  }
+
+  /** The quotation total implied by its priced, available lines. */
+  quotationItemsTotal(items) {
+    const total = items.reduce(
+      (sum, it) => sum + (it.is_available ? it.quantity * (it.unit_price || 0) : 0),
+      0
+    );
+    return Math.round(total * 100) / 100;
+  }
+
+  /** Replace a quotation's lines wholesale. Caller supplies the transaction. */
+  async replaceQuotationItems(conn, quotationId, items) {
+    await conn.execute('DELETE FROM proc_quotation_items WHERE quotation_id = ?', [quotationId]);
+    for (const it of items) {
+      await conn.execute(
+        `INSERT INTO proc_quotation_items
+          (quotation_id, request_item_id, description, quantity, unit_of_measure,
+           unit_price, is_available, is_manual, notes, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          quotationId, it.request_item_id, it.description, it.quantity,
+          it.unit_of_measure, it.unit_price, it.is_available, it.is_manual,
+          it.notes, it.sort_order,
+        ]
+      );
+    }
+  }
+
+  /** Attach `items` to each quotation in the list, in one extra round trip. */
+  async attachQuotationItems(quotations) {
+    if (!quotations.length) return quotations;
+    const ids = quotations.map((q) => q.id);
+    const rows = await query(
+      `SELECT qi.*, ri.item_description AS request_item_description,
+              ri.quantity AS requested_quantity,
+              ri.estimated_unit_price AS requested_unit_price
+       FROM proc_quotation_items qi
+       LEFT JOIN proc_request_items ri ON qi.request_item_id = ri.id
+       WHERE qi.quotation_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY qi.is_manual ASC, qi.sort_order ASC, qi.id ASC`,
+      ids
+    );
+    const byQuotation = new Map(ids.map((id) => [id, []]));
+    for (const row of rows) {
+      const bucket = byQuotation.get(row.quotation_id);
+      if (bucket) bucket.push(row);
+    }
+    return quotations.map((q) => ({ ...q, items: byQuotation.get(q.id) || [] }));
+  }
+
+  /**
+   * Guard for "this quotation is complete enough to put in front of the
+   * Committee": every requested item must have been answered, either with a
+   * price or with an explicit "not available". Throws with the offending items
+   * named, so the officer knows exactly what to go back and fill in.
+   */
+  async assertQuotationIsPriced(requestId, quotationId) {
+    const missing = await query(
+      `SELECT ri.id, ri.item_description
+       FROM proc_request_items ri
+       WHERE ri.request_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM proc_quotation_items qi
+           WHERE qi.quotation_id = ? AND qi.request_item_id = ri.id
+         )
+       ORDER BY ri.id`,
+      [requestId, quotationId]
+    );
+    if (missing.length) {
+      const names = missing.map((m) => m.item_description).join(', ');
+      throw new Error(
+        'Every requested item must be priced on the selected quotation before it goes to the '
+        + `Committee. Still outstanding: ${names}`
+      );
+    }
+  }
+
+  /**
+   * Copy the selected quotation's prices onto the requested items as the
+   * actuals. This is what turns "what we asked for" into "what it will cost",
+   * and it is what the Committee, Finance and the Super Admin read afterwards.
+   * Caller supplies the transaction.
+   */
+  async applyQuotationActuals(conn, requestId, quotationId) {
+    const [lines] = await conn.execute(
+      `SELECT request_item_id, quantity, unit_price, is_available
+       FROM proc_quotation_items
+       WHERE quotation_id = ? AND request_item_id IS NOT NULL`,
+      [quotationId]
+    );
+    for (const line of lines) {
+      const available = Number(line.is_available) === 1;
+      await conn.execute(
+        `UPDATE proc_request_items
+            SET actual_unit_price = ?, actual_total = ?, actual_quotation_id = ?, is_available = ?
+          WHERE id = ? AND request_id = ?`,
+        [
+          available ? line.unit_price : null,
+          available ? Number(line.quantity) * Number(line.unit_price || 0) : null,
+          quotationId,
+          available ? 1 : 0,
+          line.request_item_id, requestId,
+        ]
+      );
+    }
+  }
+
   async addQuotation(requestId, data, user) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
@@ -1283,37 +1465,49 @@ class ProcurementService {
       throw new Error('Quotations can only be added when request is in procurement or committee review stage');
     }
 
-    const result = await query(
-      `INSERT INTO proc_quotations 
-        (request_id, vendor_id, vendor_name, vendor_email, vendor_phone, quotation_number,
-         total_amount, currency, validity_date, delivery_timeline, terms_and_conditions,
-         notes, file_path, file_name, file_size, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        requestId,
-        data.vendor_id || null,
-        data.vendor_name,
-        data.vendor_email || null,
-        data.vendor_phone || null,
-        data.quotation_number || null,
-        data.total_amount,
-        data.currency || 'USD',
-        data.validity_date || null,
-        data.delivery_timeline || null,
-        data.terms_and_conditions || null,
-        data.notes || null,
-        data.file_path || null,
-        data.file_name || null,
-        data.file_size || null,
-        user.id
-      ]
-    );
+    const items = this.parseQuotationItems(data.items);
+    // When lines are supplied the total is their sum — a header figure that
+    // disagrees with its own breakdown is worse than no figure at all.
+    const totalAmount = items && items.length
+      ? this.quotationItemsTotal(items)
+      : data.total_amount;
 
-    return { quotationId: result.insertId };
+    return transaction(async (conn) => {
+      const [result] = await conn.execute(
+        `INSERT INTO proc_quotations
+          (request_id, vendor_id, vendor_name, vendor_email, vendor_phone, quotation_number,
+           total_amount, currency, validity_date, delivery_timeline, terms_and_conditions,
+           notes, file_path, file_name, file_size, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          requestId,
+          data.vendor_id || null,
+          data.vendor_name,
+          data.vendor_email || null,
+          data.vendor_phone || null,
+          data.quotation_number || null,
+          totalAmount,
+          data.currency || 'USD',
+          data.validity_date || null,
+          data.delivery_timeline || null,
+          data.terms_and_conditions || null,
+          data.notes || null,
+          data.file_path || null,
+          data.file_name || null,
+          data.file_size || null,
+          user.id
+        ]
+      );
+
+      if (items && items.length) {
+        await this.replaceQuotationItems(conn, result.insertId, items);
+      }
+      return { quotationId: result.insertId, total_amount: totalAmount };
+    });
   }
 
   async getQuotations(requestId) {
-    return query(
+    const quotations = await query(
       `SELECT pq.*,
         v.company_name AS vendor_company, v.is_prequalified, v.rating AS vendor_rating,
         u.first_name AS created_by_first_name, u.last_name AS created_by_last_name
@@ -1324,6 +1518,7 @@ class ProcurementService {
        ORDER BY pq.total_amount ASC`,
       [requestId]
     );
+    return this.attachQuotationItems(quotations);
   }
 
   async deleteQuotation(quotationId, user) {
@@ -1346,6 +1541,14 @@ class ProcurementService {
     if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(quot.request_status)) {
       throw new Error('Quotations can only be edited while the request is in the procurement or committee-review stage');
     }
+    // Amended lines replace the previous ones wholesale, and the header total
+    // follows them. Sending no `items` at all leaves the existing lines alone,
+    // which is what an edit that only touches the vendor details means.
+    const items = this.parseQuotationItems(data.items);
+    const totalAmount = items && items.length
+      ? this.quotationItemsTotal(items)
+      : (data.total_amount ? parseFloat(data.total_amount) : null);
+
     // Build dynamic update — include file fields only when a new file is provided
     const hasNewFile = data.file_path != null;
     const sql = hasNewFile
@@ -1365,15 +1568,26 @@ class ProcurementService {
 
     const params = [
       data.vendor_name || null, data.vendor_email || null, data.vendor_phone || null,
-      data.quotation_number || null, data.total_amount ? parseFloat(data.total_amount) : null,
+      data.quotation_number || null, totalAmount,
       data.currency || null, data.validity_date || null, data.delivery_timeline || null,
       data.notes || null,
       ...(hasNewFile ? [data.file_path, data.file_name || null, data.file_size || null] : []),
       quotationId
     ];
 
-    await query(sql, params);
-    return { success: true };
+    return transaction(async (conn) => {
+      await conn.execute(sql, params);
+      if (items) {
+        await this.replaceQuotationItems(conn, quotationId, items);
+        // If this quotation is already the selected one, the actuals carried on
+        // the requested items were taken from the lines just replaced, so they
+        // are restated here rather than left pointing at superseded prices.
+        if (quot.is_selected) {
+          await this.applyQuotationActuals(conn, quot.request_id, quotationId);
+        }
+      }
+      return { success: true, total_amount: totalAmount };
+    });
   }
 
   async resubmitToCommittee(requestId, selectedQuotationId, user, comments = '') {
@@ -1392,18 +1606,37 @@ class ProcurementService {
       throw new Error('At least one quotation must exist before resubmitting');
     }
 
+    // Leaving the choice out means "keep the one already selected" — an
+    // amendment usually corrects a price, not the supplier. Either way the
+    // Committee must be given a fully priced bid, exactly as on first
+    // submission.
+    const [alreadySelected] = await query(
+      'SELECT id FROM proc_quotations WHERE request_id = ? AND is_selected = TRUE LIMIT 1',
+      [requestId]
+    );
+    const quotationId = selectedQuotationId || alreadySelected?.id || null;
+    if (!quotationId) {
+      throw new Error('Choose the recommended quotation before resubmitting to the Committee');
+    }
+    const belongs = await query(
+      'SELECT id FROM proc_quotations WHERE id = ? AND request_id = ?',
+      [quotationId, requestId]
+    );
+    if (!belongs.length) {
+      throw new Error('The selected quotation does not belong to this request');
+    }
+    await this.assertQuotationIsPriced(requestId, quotationId);
+
     return transaction(async (conn) => {
       // Reset existing committee votes so members can vote afresh on the revised quotations
       await conn.execute('DELETE FROM proc_committee_votes WHERE request_id = ?', [requestId]);
 
-      // Update selected quotation if specified
-      if (selectedQuotationId) {
-        await conn.execute('UPDATE proc_quotations SET is_selected=FALSE WHERE request_id=?', [requestId]);
-        await conn.execute(
-          'UPDATE proc_quotations SET is_selected=TRUE, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
-          [user.id, selectedQuotationId, requestId]
-        );
-      }
+      await conn.execute('UPDATE proc_quotations SET is_selected=FALSE WHERE request_id=?', [requestId]);
+      await conn.execute(
+        'UPDATE proc_quotations SET is_selected=TRUE, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
+        [user.id, quotationId, requestId]
+      );
+      await this.applyQuotationActuals(conn, requestId, quotationId);
 
       // Keep status as PENDING_COMMITTEE but log the amendment
       await conn.execute(

@@ -2891,6 +2891,15 @@ ${buildDigitalStamp('')}
                     {!reviewRequest.submission_timeliness && <Typography variant="body2" color="text.secondary">—</Typography>}
                   </Box>
                 </Grid>
+                {/* What the float was for. A reviewer judging whether the
+                    spending matches the request needs it on the same screen,
+                    and full width so it wraps rather than widening the modal. */}
+                <Grid item xs={12}>
+                  <Typography variant="caption" color="text.secondary">Purpose of Float</Typography>
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                    {reviewRequest.justification || 'Not stated'}
+                  </Typography>
+                </Grid>
               </Grid>
               <Divider sx={{ my: 2 }} />
               {reviewReconciliation?.items && reviewReconciliation.items.length > 0 && (() => {
@@ -3077,6 +3086,14 @@ ${buildDigitalStamp('')}
                   <Typography variant="caption" color="text.secondary">Submitted</Typography>
                   <Typography fontWeight={500}>{viewReconciliation.created_at ? format(new Date(viewReconciliation.created_at), 'MMM d, yyyy') : '-'}</Typography>
                 </Grid>
+                {viewReconciliation.justification && (
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="text.secondary">Purpose of Float</Typography>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {viewReconciliation.justification}
+                    </Typography>
+                  </Grid>
+                )}
               </Grid>
               {/* Rejections are attributed to the desk that made them. The
                   finance_comments column stores whichever reviewer wrote the
