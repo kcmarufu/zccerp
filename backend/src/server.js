@@ -140,7 +140,14 @@ const startServer = async () => {
     // Test database connection
     await testConnection();
     
-    app.listen(PORT, () => {
+    // Bind to loopback only: nginx is the sole client (it proxies to
+    // 127.0.0.1:5000), so the API has no reason to answer on the public
+    // interface. It was listening on 0.0.0.0, which meant the only thing
+    // standing between the unencrypted API and the internet was the ufw rule
+    // set — one accidental `ufw allow 5000` or a firewall reset away from
+    // exposing every endpoint directly, bypassing Cloudflare and TLS.
+    const HOST = process.env.BIND_HOST || '127.0.0.1';
+    app.listen(PORT, HOST, () => {
       logger.info(`Server running on port ${PORT}`);
       console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
