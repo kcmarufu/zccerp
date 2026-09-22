@@ -5,7 +5,7 @@
 
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/database');
-const { hasPermission, isFinanceManager, ROLES } = require('../config/roles');
+const { hasPermission, isFinanceManager, isAdminHrManager, ROLES, REQUEST_STATUS } = require('../config/roles');
 
 /**
  * Verify JWT token and attach user to request
@@ -147,7 +147,7 @@ const requireSameDepartment = async (req, res, next) => {
     // requests that have been explicitly routed to the lead's department.
     if ([ROLES.PROGRAM_LEAD].includes(req.user.role)) {
       const requests = await query(
-        'SELECT requester_id, department_id, routing_department_id FROM requests WHERE id = ?',
+        'SELECT requester_id, department_id, routing_department_id, status FROM requests WHERE id = ?',
         [requestId]
       );
 
@@ -162,6 +162,14 @@ const requireSameDepartment = async (req, res, next) => {
       const userDept = Number(req.user.department_id);
       // Allow if: own dept request (no cross-dept routing), OR explicitly routed to this dept
       if (Number(r.department_id) === userDept || Number(r.routing_department_id) === userDept) {
+        return next();
+      }
+
+      // The Admin desk is department-independent: PENDING_ADMIN_APPROVAL may only
+      // be actioned by Admin & HR, so an AHR Lead reaches it whatever department
+      // the request was raised in. Their approval queue already lists these, and
+      // without this they were shown a request that 403'd when they acted on it.
+      if (isAdminHrManager(req.user) && r.status === REQUEST_STATUS.PENDING_ADMIN_APPROVAL) {
         return next();
       }
 

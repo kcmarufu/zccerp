@@ -7,6 +7,7 @@ const { validationResult } = require('express-validator');
 const { query, transaction } = require('../config/database');
 const { REQUEST_STATUS, REQUESTER_EDITABLE_STATUSES, ROLES, isFinanceManager } = require('../config/roles');
 const approvalService = require('../services/approval.service');
+const requestRouting = require('../services/requestRouting.service');
 const notificationService = require('../services/notification.service');
 
 /** Strip a code down to the characters that are safe inside a reference number. */
@@ -617,48 +618,51 @@ class RequestController {
           }
         }
 
-        // Re-derive cross-department routing from the project now on the
-        // request, mirroring createRequest. Without this a reassigned request
-        // would keep being routed to the department that owned the old project.
-        let routingDepartmentId = null;
-        if (validProjectId) {
-          let isAdminDonor = false;
-          if (validDonorId) {
-            const [donorTypeRows] = await connection.execute(
-              'SELECT donor_type FROM donors WHERE id = ?', [validDonorId]
-            );
-            isAdminDonor = donorTypeRows.length > 0 && donorTypeRows[0].donor_type === 'ADMIN';
-          }
+        // ── Desk and routing after a reassignment ───────────────────────────
+        // Changing the partner can change which desk owns the request, not just
+        // which department handles it. Both are re-derived here, through the
+        // same rules submission uses, because this edit may be happening while
+        // the request already sits on a desk.
+        //
+        // The bug this replaces: routing was re-derived from the project but the
+        // status was left untouched, so a request moved off an Administration
+        // partner kept the status PENDING_ADMIN_APPROVAL while losing the AHR
+        // routing pin that was the only thing still connecting it to the Admin
+        // desk. It then appeared on no queue that could act on it.
+        const adminDonor = await requestRouting.isAdminDonor(connection, validDonorId);
 
-          if (!isAdminDonor) {
-            // Same fallback as on create: the project's own department, or the
-            // department of this request's first budget line for older projects
-            // that have no department_id.
-            let firstBudgetLineId = 0;
-            if (items && items.length > 0) {
-              firstBudgetLineId = items[0].budgetLineId || 0;
-            } else {
-              const [existingItems] = await connection.execute(
-                'SELECT budget_line_id FROM request_items WHERE request_id = ? ORDER BY id LIMIT 1',
-                [requestId]
-              );
-              firstBudgetLineId = existingItems[0]?.budget_line_id || 0;
-            }
+        let firstBudgetLineId = 0;
+        if (items && items.length > 0) {
+          firstBudgetLineId = items[0].budgetLineId || 0;
+        } else {
+          const [existingItems] = await connection.execute(
+            'SELECT budget_line_id FROM request_items WHERE request_id = ? ORDER BY id LIMIT 1',
+            [requestId]
+          );
+          firstBudgetLineId = existingItems[0]?.budget_line_id || 0;
+        }
 
-            const [projRows] = await connection.execute(
-              `SELECT COALESCE(
-                 p.department_id,
-                 (SELECT bl.department_id FROM budget_lines bl
-                  WHERE bl.id = ? AND bl.department_id IS NOT NULL LIMIT 1)
-               ) AS effective_dept_id
-               FROM projects p WHERE p.id = ?`,
-              [firstBudgetLineId, validProjectId]
-            );
-            const effectiveDeptId = projRows[0]?.effective_dept_id;
-            if (effectiveDeptId && effectiveDeptId !== requests[0].department_id) {
-              routingDepartmentId = effectiveDeptId;
-            }
-          }
+        const routingDepartmentId = await requestRouting.resolveRoutingDepartmentId(connection, {
+          adminDonor,
+          requesterDeptId: requests[0].department_id,
+          projectId: validProjectId,
+          firstBudgetLineId
+        });
+
+        // Re-point the desk if the partner no longer supports the one the
+        // request is parked at. DRAFT and REJECTED carry no desk, so they are
+        // left alone — submission decides for them.
+        let alignedStatus = previousStatus;
+        if (previousStatus !== REQUEST_STATUS.DRAFT && previousStatus !== REQUEST_STATUS.REJECTED) {
+          const [requesterRoleRows] = await connection.execute(
+            'SELECT r.role_name AS role FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?',
+            [requests[0].requester_id]
+          );
+          alignedStatus = await requestRouting.alignDeskToDonor(connection, {
+            status: previousStatus,
+            donorId: validDonorId,
+            requesterRole: requesterRoleRows[0]?.role
+          });
         }
 
         // Same budget check as on create, against the project the request is
@@ -697,13 +701,13 @@ class RequestController {
         // Update request
         await connection.execute(
           `UPDATE requests SET justification = ?, priority = ?,
-            donor_id = ?, project_id = ?, routing_department_id = ?,
+            donor_id = ?, project_id = ?, routing_department_id = ?, status = ?,
             is_activity_request = ?,
             activity_start_date = ?,
             activity_end_date   = ?,
             updated_at = NOW() WHERE id = ?`,
           [justification || requests[0].justification, priority || requests[0].priority,
-           validDonorId, validProjectId, routingDepartmentId,
+           validDonorId, validProjectId, routingDepartmentId, alignedStatus,
            is_activity_request !== undefined ? (is_activity_request ? 1 : 0) : requests[0].is_activity_request,
            (is_activity_request && activity_start_date) ? activity_start_date : (is_activity_request === 0 ? null : requests[0].activity_start_date),
            (is_activity_request && activity_end_date)   ? activity_end_date   : (is_activity_request === 0 ? null : requests[0].activity_end_date),
@@ -751,6 +755,20 @@ class RequestController {
           );
         }
 
+        // A desk move is an approval-pipeline event, not a content edit, so it
+        // gets its own trail entry: the desk that loses the request and the one
+        // that gains it both need to be able to see why.
+        if (alignedStatus !== previousStatus) {
+          await connection.execute(
+            `INSERT INTO approval_logs
+             (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
+             VALUES (?, ?, ?, 'REROUTED', ?, ?, ?, ?)`,
+            [requestId, userId, req.user.role || ROLES.GENERAL_USER, previousStatus, alignedStatus,
+             `Partner reassignment moved this request from ${previousStatus} to ${alignedStatus}`,
+             req.ip]
+          );
+        }
+
         if (previousStatus === REQUEST_STATUS.REJECTED) {
           await connection.execute(
             `INSERT INTO approval_logs
@@ -772,7 +790,10 @@ class RequestController {
           amendedWhilePending = {
             requestCode: reissuedCode || requests[0].request_code,
             deptId: requests[0].department_id,
-            routingDeptId: routingDepartmentId || requests[0].routing_department_id || null,
+            // The freshly derived pin, not the old one: a reassignment that
+            // clears the pin must notify the department that now owns the
+            // request, never the one it just left.
+            routingDeptId: routingDepartmentId,
             gsOnly: previousStatus === REQUEST_STATUS.PENDING_GS_APPROVAL
           };
         }

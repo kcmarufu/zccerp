@@ -9,6 +9,7 @@
 const { query, transaction, pool } = require('../config/database');
 const notificationService = require('./notification.service');
 const reconciliationService = require('./reconciliation.service');
+const requestRouting = require('./requestRouting.service');
 const {
   REQUEST_STATUS,
   ROLES,
@@ -130,6 +131,20 @@ class ApprovalService {
           // Unrecognised origin — fall back to the requester's first desk.
           targetStatus = resumeAt[rejectedFromStatus] || firstDesk;
         }
+
+        // The trail says where this request was rejected; it does not say where
+        // it belongs *now*. A requester who is acting on the rejection by
+        // reassigning the partner (the commonest reason a request comes back)
+        // changes which desk owns it, so the resumed desk has to be re-checked
+        // against the partner the request currently carries. Without this a
+        // request rejected at the Admin desk and then moved to an external
+        // partner returned to the Admin desk, where the partner type no longer
+        // matched — invisible to Admin & HR, and refused to everyone else.
+        targetStatus = await requestRouting.alignDeskToDonor(connection, {
+          status: targetStatus,
+          donorId: request.donor_id,
+          requesterRole
+        });
         // A departmental stage never applies to a Head of Department's request,
         // whatever the trail says (e.g. one rejected before this routing existed).
         if (isGsTrack && targetStatus !== REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
@@ -164,56 +179,30 @@ class ApprovalService {
       // For Admin-donor requests from non-AHR departments, route to AHR so only
       // the Admin/HR Lead or HOP handles them (not the requester's own dept Lead).
       let routingDepartmentId = null;
-      const isAdminDonorSubmit = (targetStatus === REQUEST_STATUS.PENDING_ADMIN_APPROVAL);
-      if (isGsTrack) {
-        // No departmental desk is involved, so there is nothing to route.
-      } else if (isAdminDonorSubmit) {
-        // Look up AHR department and route there if requester is not already AHR.
-        const [ahrDeptRows] = await connection.execute(
-          "SELECT id FROM departments WHERE department_code = 'AHR' LIMIT 1"
+      if (!isGsTrack) {
+        const [firstLineRows] = await connection.execute(
+          'SELECT budget_line_id FROM request_items WHERE request_id = ? ORDER BY id LIMIT 1',
+          [requestId]
         );
-        const ahrDeptId = ahrDeptRows[0]?.id;
-        if (ahrDeptId && Number(request.requester_dept) !== Number(ahrDeptId)) {
-          routingDepartmentId = ahrDeptId;
-        }
-      } else if (request.project_id) {
-        // Use project's own department_id; if NULL (old projects), fall back to the
-        // department set on the budget lines used by this request's items.
-        const [projRows] = await connection.execute(
-          `SELECT COALESCE(
-             p.department_id,
-             (SELECT bl.department_id
-              FROM request_items ri
-              JOIN budget_lines bl ON bl.id = ri.budget_line_id
-              WHERE ri.request_id = ? AND bl.department_id IS NOT NULL
-              LIMIT 1)
-           ) AS effective_dept_id
-           FROM projects p WHERE p.id = ?`,
-          [requestId, request.project_id]
-        );
-        const effectiveDeptId = projRows[0]?.effective_dept_id;
-        if (effectiveDeptId && effectiveDeptId !== request.requester_dept) {
-          routingDepartmentId = effectiveDeptId;
-        }
+        routingDepartmentId = await requestRouting.resolveRoutingDepartmentId(connection, {
+          adminDonor: targetStatus === REQUEST_STATUS.PENDING_ADMIN_APPROVAL,
+          requesterDeptId: request.requester_dept,
+          projectId: request.project_id,
+          firstBudgetLineId: firstLineRows[0]?.budget_line_id || 0
+        });
       }
 
-      // Update status to the correct target level
-      if (routingDepartmentId) {
-        await connection.execute(
-          `UPDATE requests
-           SET status = ?, submitted_at = CURRENT_TIMESTAMP, updated_at = NOW(),
-               version = version + 1, routing_department_id = ?
-           WHERE id = ?`,
-          [targetStatus, routingDepartmentId, requestId]
-        );
-      } else {
-        await connection.execute(
-          `UPDATE requests
-           SET status = ?, submitted_at = CURRENT_TIMESTAMP, updated_at = NOW(), version = version + 1
-           WHERE id = ?`,
-          [targetStatus, requestId]
-        );
-      }
+      // Update status to the correct target level. The routing pin is written
+      // unconditionally, NULL included: on a resubmission the request may have
+      // moved off the department it was previously pinned to, and leaving a
+      // stale pin in place sends it to a desk that no longer owns it.
+      await connection.execute(
+        `UPDATE requests
+         SET status = ?, submitted_at = CURRENT_TIMESTAMP, updated_at = NOW(),
+             version = version + 1, routing_department_id = ?
+         WHERE id = ?`,
+        [targetStatus, routingDepartmentId, requestId]
+      );
 
       // Log the submission/resubmission for a complete audit trail.
       await connection.execute(
@@ -689,12 +678,18 @@ class ApprovalService {
         } else if (deptCode === 'AHR') {
           // Admin/HR Lead: own dept + ALL Admin-type donor requests (any pending status)
           statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
+          // The last clause is a safety net, not a convenience: PENDING_ADMIN_APPROVAL
+          // is a desk only AHR may act at, so AHR must see every request parked
+          // there whatever its partner or routing pin currently says. Matching on
+          // donor_type alone once hid a reassigned request from the only people
+          // allowed to approve it.
           departmentFilter = `AND (
             (r.routing_department_id IS NULL AND r.department_id = ?)
             OR r.routing_department_id = ?
             OR EXISTS (
               SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'
             )
+            OR r.status = 'PENDING_ADMIN_APPROVAL'
           )`;
         } else {
           // CPJS/HSD Lead: own dept requests only
@@ -716,12 +711,18 @@ class ApprovalService {
         } else if (deptCode === 'AHR') {
           // Admin/HR HOP: own dept + ALL Admin-type donor requests (any pending status)
           statusFilter = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
+          // The last clause is a safety net, not a convenience: PENDING_ADMIN_APPROVAL
+          // is a desk only AHR may act at, so AHR must see every request parked
+          // there whatever its partner or routing pin currently says. Matching on
+          // donor_type alone once hid a reassigned request from the only people
+          // allowed to approve it.
           departmentFilter = `AND (
             (r.routing_department_id IS NULL AND r.department_id = ?)
             OR r.routing_department_id = ?
             OR EXISTS (
               SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'
             )
+            OR r.status = 'PENDING_ADMIN_APPROVAL'
           )`;
         } else {
           // CPJS/HSD HOP: own dept only, no Finance stage
@@ -1347,7 +1348,7 @@ class ApprovalService {
         } else if (departmentCode === 'AHR') {
           // Admin/HR Lead: own dept + ALL Admin donor requests (any pending status)
           pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL];
-          departmentFilter = `AND ((r.routing_department_id IS NULL AND r.department_id = ?) OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
+          departmentFilter = `AND ((r.routing_department_id IS NULL AND r.department_id = ?) OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN') OR r.status = 'PENDING_ADMIN_APPROVAL')`;
           baseParams.push(departmentId, departmentId);
         } else {
           // CPJS/HSD Lead: own dept only (routing_department_id must be NULL for dept match)
@@ -1367,7 +1368,7 @@ class ApprovalService {
         } else if (departmentCode === 'AHR') {
           // Admin/HR HOP: own dept + ALL Admin donor requests (any pending status)
           pendingStatus = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
-          departmentFilter = `AND ((r.routing_department_id IS NULL AND r.department_id = ?) OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN'))`;
+          departmentFilter = `AND ((r.routing_department_id IS NULL AND r.department_id = ?) OR r.routing_department_id = ? OR EXISTS (SELECT 1 FROM donors don WHERE don.id = r.donor_id AND don.donor_type = 'ADMIN') OR r.status = 'PENDING_ADMIN_APPROVAL')`;
           baseParams.push(departmentId, departmentId);
         } else {
           // CPJS/HSD HOP: own dept only (routing_department_id must be NULL for dept match)
