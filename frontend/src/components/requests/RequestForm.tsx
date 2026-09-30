@@ -465,6 +465,16 @@ const RequestForm: React.FC = () => {
   // exactly fills a line as a fraction of a cent over it.
   const toCents = (n: number) => Math.round((Number(n) || 0) * 100);
 
+  //
+  // Keyed on the values, not on `watchedItems` itself: react-hook-form updates
+  // the items array in place, so its reference does not change when a row is
+  // moved to another budget line. Memoising on the array kept the previous
+  // answer — a request moved off an exhausted line stayed "over budget" and
+  // Save Changes stayed greyed out.
+  const itemsBudgetSignature = (watchedItems || [])
+    .map(item => `${Number(item?.budgetLineId) || 0}:${item?.quantity || 1}:${item?.unitPrice || 0}`)
+    .join('|');
+
   const budgetUsageByLine = useMemo(() => {
     const usage = new Map<number, number>();
     (watchedItems || []).forEach(item => {
@@ -473,7 +483,8 @@ const RequestForm: React.FC = () => {
       usage.set(lineId, (usage.get(lineId) || 0) + toCents((item?.quantity || 1) * (item?.unitPrice || 0)));
     });
     return usage;
-  }, [watchedItems]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsBudgetSignature]);
 
   // Every budget line this request overdraws, with the amounts needed to explain it.
   const overBudgetLines = useMemo(() => {

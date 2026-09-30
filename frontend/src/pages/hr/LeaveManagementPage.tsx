@@ -1078,10 +1078,13 @@ const LeaveManagementPage: React.FC = () => {
         <Alert severity="info" icon={<InfoIcon />} sx={{ mb: 2 }}>
           <strong>Your approval queue</strong> — only requests you are the designated
           approver for appear here.{' '}
-          {isHrOffice
-            ? 'As Super Admin you approve Heads of Department, other Super Admins, and any department without a Head. '
-              + 'My Department therefore lists your Head of Department’s requests — their staff’s leave sits on their desk, not yours.'
-            : 'You approve staff in your own department; your own leave goes to a Super Admin.'}
+          {isHrOffice && user?.role === 'ADMIN'
+            ? 'As Super Admin you approve the Heads of Department. '
+              + 'My Department therefore lists only leave applied for by the Heads of Department, from every department — their staff’s leave sits on their desk, not yours. '
+              + 'Use All Departments to act on anything else.'
+            : isHrOffice
+              ? 'My Department lists your own department’s staff; use All Departments to approve on another department’s behalf. Your own leave goes to a Super Admin.'
+              : 'You approve staff in your own department; your own leave goes to a Super Admin.'}
         </Alert>
       )}
       {tab === TAB_ALL && (

@@ -6,6 +6,7 @@
 const { validationResult } = require('express-validator');
 const { query, transaction } = require('../config/database');
 const { ROLES, isFinanceManager, isAdminHrManager } = require('../config/roles');
+const requestAgeingService = require('../services/requestAgeing.service');
 
 // Finance managers (FOS HOP/Lead or Admin), Finance Clerks, and Admin/HR managers
 // see every budget line across all departments. All other roles are scoped to their own department.
@@ -873,6 +874,34 @@ class BudgetController {
         success: false,
         error: 'Failed to fetch budget line details'
       });
+    }
+  }
+
+  /**
+   * Request ageing: time spent at each stage from raising a request to closing
+   * its reconciliation, plus how long open requests have sat where they are.
+   * GET /api/budgets/reports/ageing
+   *
+   * Scoped like the financial reports: Finance and the HR Office see every
+   * department, other managers their own (including requests routed to them).
+   * General staff never see the report tabs, so they are refused outright
+   * rather than shown their colleagues' request timelines.
+   */
+  async getRequestAgeing(req, res) {
+    try {
+      if (req.user.role === ROLES.GENERAL_USER) {
+        return res.status(403).json({ success: false, error: 'Not authorised to view the ageing report' });
+      }
+      const { fiscalYear, dateFrom, dateTo, donorId, projectId, departmentId } = req.query;
+      const scope = canViewAllBudgetLines(req.user) ? null : { departmentId: req.user.department_id };
+      const data = await requestAgeingService.getRequestAgeing(
+        { fiscalYear, dateFrom, dateTo, donorId, projectId, departmentId },
+        scope
+      );
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Error building request ageing report:', error);
+      res.status(500).json({ success: false, error: 'Failed to build the ageing report' });
     }
   }
 

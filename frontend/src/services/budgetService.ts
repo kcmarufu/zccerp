@@ -131,5 +131,16 @@ export const budgetService = {
     if (dateTo) params.dateTo = dateTo;
     const response = await api.get('/budgets/reports', { params });
     return response.data;
+  },
+
+  // Request ageing: time spent at each stage, from raising to reconciliation
+  getAgeingReport: async (params: {
+    fiscalYear?: number; donorId?: number; projectId?: number;
+    departmentId?: number; dateFrom?: string; dateTo?: string;
+  }): Promise<ApiResponse<any>> => {
+    const clean: any = {};
+    Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) clean[k] = v; });
+    const response = await api.get('/budgets/reports/ageing', { params: clean });
+    return response.data;
   }
 };

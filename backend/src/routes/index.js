@@ -92,6 +92,7 @@ router.get('/approvals/stats', authenticateToken, requireRole(ROLES.PROGRAM_LEAD
 router.get('/budgets', authenticateToken, requirePermission(PERMISSIONS.VIEW_BUDGET_LINES), budgetController.getBudgetLines.bind(budgetController));
 router.get('/budgets/summary', authenticateToken, requireRole(ROLES.ADMIN, ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD, ROLES.FINANCE_CLERK), budgetController.getBudgetSummary.bind(budgetController));
 router.get('/budgets/reports', authenticateToken, requirePermission(PERMISSIONS.VIEW_REPORTS), budgetController.getFinancialReports.bind(budgetController));
+router.get('/budgets/reports/ageing', authenticateToken, requirePermission(PERMISSIONS.VIEW_REPORTS), budgetController.getRequestAgeing.bind(budgetController));
 router.get('/budgets/:budgetLineId', authenticateToken, requirePermission(PERMISSIONS.VIEW_BUDGET_LINES), budgetController.getBudgetLineById.bind(budgetController));
 router.get('/budgets/:budgetLineId/details', authenticateToken, requirePermission(PERMISSIONS.VIEW_BUDGET_LINES), budgetController.getBudgetLineDetails.bind(budgetController));
 router.get('/budgets/:budgetLineId/requests', authenticateToken, requirePermission(PERMISSIONS.VIEW_BUDGET_LINES), budgetController.getBudgetLineRequests.bind(budgetController));

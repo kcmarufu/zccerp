@@ -1,6 +1,6 @@
 /**
  * Financial Reports Page
- * Tabs: Overview, Budget Variance, Donor Summary, Department Analysis, Spending Trends
+ * Tabs: Overview, Budget Variance, Donor Summary, Department Analysis, Spending Trends, Request Ageing
  */
 import React, { useState, useEffect } from 'react';
 import {
@@ -24,7 +24,8 @@ import {
   ReceiptLong as ReceiptIcon,
   Search as SearchIcon,
   GetApp as DownloadIcon,
-  PictureAsPdf as PdfIcon
+  PictureAsPdf as PdfIcon,
+  HourglassBottom as AgeingIcon
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import { format } from '../utils/datetime';
@@ -38,6 +39,7 @@ import { categoryLabel } from '../utils/requestCategories';
 import { budgetService } from '../services/budgetService';
 import { toast } from 'react-toastify';
 import { useAuthStore } from '../store/authStore';
+import RequestAgeingReport from '../components/reports/RequestAgeingReport';
 
 const COLORS = ['#1976d2', '#388e3c', '#f57c00', '#d32f2f', '#7b1fa2', '#0097a7', '#5d4037', '#455a64', '#c2185b', '#00796b'];
 const VARIANCE_COLORS: Record<string, string> = {
@@ -599,6 +601,7 @@ const FinancialReportsPage: React.FC = () => {
           <Tab icon={<PieChartIcon />} iconPosition="start" label="Project Summary" />
           <Tab icon={<PieChartIcon />} iconPosition="start" label="Department Analysis" />
           <Tab icon={<TrendingUpIcon />} iconPosition="start" label="Spending Trends" />
+          <Tab icon={<AgeingIcon />} iconPosition="start" label="Request Ageing" />
         </Tabs>}
 
         <Box sx={{ p: 3 }}>
@@ -1440,6 +1443,17 @@ const FinancialReportsPage: React.FC = () => {
                 </TableContainer>
             </>
           </TabPanel>
+
+          {/* TAB 5: Request Ageing */}
+          {!isGeneralUser && (
+            <TabPanel value={tabIndex} index={5}>
+              <RequestAgeingReport
+                fiscalYear={fiscalYear}
+                donorId={filterDonorId ? Number(filterDonorId) : undefined}
+                projectId={filterProjectId ? Number(filterProjectId) : undefined}
+              />
+            </TabPanel>
+          )}
         </Box>
       </Paper>
     </Box>
