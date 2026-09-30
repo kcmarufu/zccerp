@@ -87,6 +87,28 @@ import * as XLSX from 'xlsx';
 // substitutes or extras the supplier proposes.
 
 /** One editable row in the quotation dialogs. Strings, because they are inputs. */
+/**
+ * The currencies a quotation may be captured in. This was a free-text box until
+ * a stray keystroke left "USD150" on a $150 quote and the Purchase Order printed
+ * it as "USD150 150.00" — the amount appearing twice. A fixed list removes the
+ * only way that value could be entered.
+ */
+const QUOTATION_CURRENCIES = ['USD', 'ZWG', 'ZAR', 'GBP', 'EUR'];
+
+/**
+ * Trail entries that changed the request's content rather than deciding it —
+ * edits, quotation amendments, documents added or removed. They are shown in
+ * amber so an amendment made mid-approval cannot be mistaken for a sign-off.
+ */
+const isAmendmentAction = (action: string) =>
+  /^(EDITED|QUOTATION_|ATTACHMENT_|POP_)/.test(action);
+
+/** Keeps a legacy free-text value from landing outside the select's options. */
+const safeCurrency = (value?: string | null) => {
+  const code = String(value ?? '').trim().toUpperCase();
+  return QUOTATION_CURRENCIES.includes(code) ? code : 'USD';
+};
+
 interface QuotLine {
   /** Stable key for React — rows have no id until they are saved. */
   key: string;
@@ -638,7 +660,7 @@ const PurchaseRequestDetail: React.FC = () => {
       vendor_phone: quot.vendor_phone || '',
       quotation_number: quot.quotation_number || '',
       total_amount: String(quot.total_amount || ''),
-      currency: quot.currency || 'USD',
+      currency: safeCurrency(quot.currency),
       validity_date: quot.validity_date ? quot.validity_date.split('T')[0] : '',
       delivery_timeline: quot.delivery_timeline || '',
       notes: quot.notes || ''
@@ -1791,9 +1813,11 @@ ${allCommitteeApproved ? `
                   }}
                 >
                   {request.approvalTrail.map((log, idx) => {
-                    const tone = log.action.includes('APPROVED')
-                      ? theme.palette.success.main
-                      : log.action.includes('REJECT') ? theme.palette.error.main : theme.palette.primary.main;
+                    const tone = isAmendmentAction(log.action)
+                      ? theme.palette.warning.main
+                      : log.action.includes('APPROVED')
+                        ? theme.palette.success.main
+                        : log.action.includes('REJECT') ? theme.palette.error.main : theme.palette.primary.main;
                     return (
                       <React.Fragment key={log.id}>
                         <ListItem
@@ -1812,7 +1836,7 @@ ${allCommitteeApproved ? `
                                 <Typography variant="body2" fontWeight={600}>{log.actor_first_name} {log.actor_last_name}</Typography>
                                 <Chip
                                   label={log.action.replace(/_/g, ' ')} size="small"
-                                  color={log.action.includes('APPROVED') ? 'success' : log.action.includes('REJECT') ? 'error' : 'info'}
+                                  color={isAmendmentAction(log.action) ? 'warning' : log.action.includes('APPROVED') ? 'success' : log.action.includes('REJECT') ? 'error' : 'info'}
                                   sx={{ height: 20, fontSize: '0.65rem' }}
                                 />
                               </Box>
@@ -2021,7 +2045,10 @@ ${allCommitteeApproved ? `
               <TextField fullWidth label="Quotation Reference #" value={quotForm.quotation_number} onChange={e => setQuotForm(f => ({ ...f, quotation_number: e.target.value }))} />
             </Grid>
             <Grid item xs={12} md={3}>
-              <TextField fullWidth label="Currency" value={quotForm.currency} onChange={e => setQuotForm(f => ({ ...f, currency: e.target.value }))} />
+              <TextField select fullWidth label="Currency" value={quotForm.currency}
+                onChange={e => setQuotForm(f => ({ ...f, currency: e.target.value }))}>
+                {QUOTATION_CURRENCIES.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+              </TextField>
             </Grid>
             <Grid item xs={12} md={3}>
               <TextField fullWidth label="Vendor Email" value={quotForm.vendor_email} onChange={e => setQuotForm(f => ({ ...f, vendor_email: e.target.value }))} />
@@ -2075,8 +2102,10 @@ ${allCommitteeApproved ? `
                 onChange={e => setEditQuotForm(f => ({ ...f, quotation_number: e.target.value }))} />
             </Grid>
             <Grid item xs={12} md={3}>
-              <TextField fullWidth label="Currency" value={editQuotForm.currency}
-                onChange={e => setEditQuotForm(f => ({ ...f, currency: e.target.value }))} />
+              <TextField select fullWidth label="Currency" value={editQuotForm.currency}
+                onChange={e => setEditQuotForm(f => ({ ...f, currency: e.target.value }))}>
+                {QUOTATION_CURRENCIES.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+              </TextField>
             </Grid>
             <Grid item xs={12} md={3}>
               <TextField fullWidth label="Vendor Email" value={editQuotForm.vendor_email}

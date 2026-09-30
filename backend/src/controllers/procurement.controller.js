@@ -527,6 +527,16 @@ class ProcurementController {
           req.user.id
         ]
       );
+      // Supporting documents are evidence: when one appears on a request, and who
+      // put it there, belongs on the approval trail alongside the decisions.
+      const [parent] = await query('SELECT status FROM proc_requests WHERE id = ?', [req.params.id]);
+      await procurementService._logEvent(
+        null, req.params.id, req.user, 'ATTACHMENT_ADDED',
+        parent?.status || null, parent?.status || null,
+        `Document "${req.file.originalname}" attached (${attachment_type}`
+        + `${description ? `: ${description}` : ''}, `
+        + `${req.file.size < 1024 ? `${req.file.size} bytes` : `${Math.round(req.file.size / 1024)} KB`})`
+      );
       res.status(201).json({ success: true, data: { id: result.insertId, file_name: req.file.filename, original_name: req.file.originalname, attachment_type }, message: 'File uploaded successfully' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -551,6 +561,12 @@ class ProcurementController {
         fs.unlinkSync(storedFile);
       }
       await query('DELETE FROM proc_request_attachments WHERE id = ?', [req.params.attachmentId]);
+      const [parent] = await query('SELECT status FROM proc_requests WHERE id = ?', [req.params.id]);
+      await procurementService._logEvent(
+        null, req.params.id, req.user, 'ATTACHMENT_DELETED',
+        parent?.status || null, parent?.status || null,
+        `Document "${attachment.original_name || attachment.file_name}" removed`
+      );
       res.json({ success: true, message: 'Attachment deleted' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });

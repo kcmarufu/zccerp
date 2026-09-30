@@ -133,6 +133,123 @@ class ProcurementService {
     }
   }
 
+  // ============================================================
+  // AUDIT TRAIL
+  // ------------------------------------------------------------
+  // Every request-level event goes through _logEvent, so nothing that changes a
+  // request can be added without also showing up in its approval trail. Status
+  // transitions were always logged; content changes — edits, quotations,
+  // attachments — were not, which left an amended request looking untouched.
+  // ============================================================
+
+  /**
+   * Writes one row to the approval trail. `conn` is the enclosing transaction
+   * where there is one, so the log cannot survive a rolled-back change; pass
+   * null for the handful of single-statement paths that have no transaction.
+   *
+   * An event that does not move the request carries the same status on both
+   * sides, which is what marks it as a content change rather than a decision.
+   */
+  async _logEvent(conn, requestId, user, action, previousStatus, newStatus, comments) {
+    const sql = `INSERT INTO proc_approval_logs
+        (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`;
+    const params = [
+      requestId, user.id, user.role, action,
+      previousStatus || null, newStatus || null, comments || null
+    ];
+    if (conn) await conn.execute(sql, params);
+    else await query(sql, params);
+  }
+
+  /** Collapses whitespace and caps length, so one long justification cannot bury the trail. */
+  _short(value, max = 140) {
+    const s = value == null || value === '' ? '—' : String(value).replace(/\s+/g, ' ').trim();
+    return s.length > max ? `${s.slice(0, max)}…` : s;
+  }
+
+  /**
+   * Currency is a free-text field on the quotation form, and a stray keystroke
+   * once left "USD150" on a $150 quote — which the Purchase Order then printed
+   * as a prefix, giving "USD150 150.00". Only a bare ISO-style code is accepted;
+   * anything else falls back to USD rather than reaching a printed document.
+   */
+  _normalizeCurrency(value, fallback = 'USD') {
+    const code = String(value ?? '').trim().toUpperCase();
+    return /^[A-Z]{3}$/.test(code) ? code : fallback;
+  }
+
+  async _nameOf(conn, table, column, id) {
+    if (!id) return '—';
+    const [rows] = await conn.execute(`SELECT ${column} AS name FROM ${table} WHERE id = ?`, [id]);
+    return rows[0]?.name || `#${id}`;
+  }
+
+  /**
+   * Field-by-field account of what an edit changed. updatePurchaseRequest
+   * rewrites the row and deletes and re-inserts its items, so this string is
+   * the ONLY record of the pre-edit values — it has to read on its own years
+   * later, which is why partners and projects are named rather than numbered.
+   */
+  async _describeRequestEdit(conn, before, after, beforeItems, afterItems) {
+    const parts = [];
+    const money = (v) => `$${Number(v || 0).toFixed(2)}`;
+    const qty = (v) => String(Number(v || 0));
+    const day = (v) => (v ? String(v instanceof Date ? v.toISOString() : v).slice(0, 10) : '—');
+
+    for (const [label, key, fmt] of [
+      ['Title', 'title', (v) => this._short(v)],
+      ['Justification', 'justification', (v) => this._short(v)],
+      ['Priority', 'priority', (v) => this._short(v)],
+      ['Expected delivery', 'expected_delivery_date', day],
+      ['Estimated total', 'total_estimated_amount', money]
+    ]) {
+      const was = fmt(before[key]);
+      const now = fmt(after[key]);
+      if (was !== now) parts.push(`${label}: "${was}" → "${now}"`);
+    }
+
+    if (Number(before.donor_id || 0) !== Number(after.donor_id || 0)) {
+      parts.push(`Partner: ${await this._nameOf(conn, 'donors', 'donor_name', before.donor_id)}`
+        + ` → ${await this._nameOf(conn, 'donors', 'donor_name', after.donor_id)}`);
+    }
+    if (Number(before.project_id || 0) !== Number(after.project_id || 0)) {
+      parts.push(`Project: ${await this._nameOf(conn, 'projects', 'project_name', before.project_id)}`
+        + ` → ${await this._nameOf(conn, 'projects', 'project_name', after.project_id)}`);
+    }
+
+    // Items arrive as a whole replacement set, so they are matched on
+    // description to tell an actual change from the delete-and-reinsert.
+    if (afterItems) {
+      const keyOf = (it) => String(it.item_description || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const line = (it) => `${qty(it.quantity)} × ${money(it.estimated_unit_price)}`;
+      const beforeMap = new Map((beforeItems || []).map((it) => [keyOf(it), it]));
+      const afterMap = new Map((afterItems || []).map((it) => [keyOf(it), it]));
+
+      for (const [k, it] of beforeMap) {
+        if (!afterMap.has(k)) parts.push(`Item removed: "${this._short(it.item_description, 60)}" (${line(it)})`);
+      }
+      for (const [k, it] of afterMap) {
+        const was = beforeMap.get(k);
+        if (!was) {
+          parts.push(`Item added: "${this._short(it.item_description, 60)}" (${line(it)})`);
+          continue;
+        }
+        if (line(was) !== line(it)) {
+          parts.push(`Item repriced: "${this._short(it.item_description, 60)}" ${line(was)} → ${line(it)}`);
+        }
+        if (Number(was.budget_line_id || 0) !== Number(it.budget_line_id || 0)) {
+          parts.push(`Budget line changed on "${this._short(it.item_description, 60)}"`);
+        }
+        if (String(was.specifications || '') !== String(it.specifications || '')) {
+          parts.push(`Specifications changed on "${this._short(it.item_description, 60)}"`);
+        }
+      }
+    }
+
+    return parts;
+  }
+
   async createPurchaseRequest(data, user) {
     return transaction(async (conn) => {
       await this._validateDonorAndProject(conn, data.donor_id, data.project_id);
@@ -210,11 +327,13 @@ class ProcurementService {
         );
       }
 
-      // Log creation
-      await conn.execute(
-        `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-         VALUES (?, ?, ?, 'SUBMITTED', NULL, 'DRAFT', 'Purchase request created')`,
-        [requestId, user.id, user.role]
+      // Logged as CREATED, not SUBMITTED: the draft has not been sent anywhere
+      // yet, and calling it a submission made every request look as though it
+      // had been submitted twice. Rows written before this keep the old label.
+      await this._logEvent(
+        conn, requestId, user, 'CREATED', null, 'DRAFT',
+        `Purchase request created with ${(data.items || []).length} item(s), `
+        + `estimated $${Number(totalEstimated || 0).toFixed(2)}`
       );
 
       return { requestId, requestCode };
@@ -454,6 +573,41 @@ class ProcurementService {
         'UPDATE proc_requests SET routing_department_id = ? WHERE id = ?',
         [routingDepartmentId, requestId]
       );
+
+      // The edit itself goes on the trail. Nothing else records it: the header is
+      // updated in place and the items above are deleted and re-inserted, so
+      // without this the pre-edit request is gone without trace.
+      const changes = await this._describeRequestEdit(
+        conn,
+        existing,
+        {
+          title: data.title || existing.title,
+          justification: data.justification || existing.justification,
+          priority: data.priority || existing.priority,
+          expected_delivery_date: data.expected_delivery_date || existing.expected_delivery_date,
+          total_estimated_amount: totalEstimated || existing.total_estimated_amount,
+          donor_id: donorId,
+          project_id: projectId
+        },
+        existing.items || [],
+        data.items || null
+      );
+
+      if (changes.length) {
+        // An amendment made after the request left the requester's desk is the
+        // case an auditor actually looks for — reviewers further down the line
+        // may have signed off on the earlier version, so it is called out.
+        const inFlight = ![PROC_STATUS.DRAFT, PROC_STATUS.REJECTED].includes(existing.status);
+        const prefix = existing.status === PROC_STATUS.PENDING_COMMITTEE
+          ? 'Edited while under Committee review — '
+          : inFlight
+            ? `Edited after submission (at ${existing.status.replace(/_/g, ' ').toLowerCase()}) — `
+            : 'Edited — ';
+        await this._logEvent(
+          conn, requestId, user, 'EDITED', existing.status, existing.status,
+          prefix + changes.join('; ')
+        );
+      }
 
       return { success: true };
     });
@@ -725,14 +879,16 @@ class ProcurementService {
 
     return transaction(async (conn) => {
       const prev = req.status;
+      // rejected_from_status is what a resubmission uses to return the request to
+      // the desk that rejected it. Only the high-value path used to set it, so an
+      // ordinary rejection had to be reconstructed from the trail.
       await conn.execute(
-        `UPDATE proc_requests SET status='REJECTED', rejection_reason=?, updated_at=NOW() WHERE id=?`,
-        [comments, requestId]
+        `UPDATE proc_requests SET status='REJECTED', rejection_reason=?, rejected_from_status=?, updated_at=NOW() WHERE id=?`,
+        [comments, prev, requestId]
       );
-      await conn.execute(
-        `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-         VALUES (?, ?, ?, 'REJECTED', ?, 'REJECTED', ?)`,
-        [requestId, user.id, user.role, prev, comments || 'Rejected']
+      await this._logEvent(
+        conn, requestId, user, 'REJECTED', prev, 'REJECTED',
+        comments || 'Rejected (no reason given)'
       );
       return { success: true };
     });
@@ -1253,6 +1409,10 @@ class ProcurementService {
        WHERE id=? AND pop_file_path=?`,
       [next?.file_path ?? null, next?.file_name ?? null, next?.file_size ?? null, requestId, rows[0].file_path]
     );
+    await this._logEvent(
+      null, requestId, user, 'POP_REMOVED', req?.status || null, req?.status || null,
+      `Proof of payment "${this._short(rows[0].file_name, 80)}" removed`
+    );
     return { success: true };
   }
 
@@ -1487,7 +1647,7 @@ class ProcurementService {
           data.vendor_phone || null,
           data.quotation_number || null,
           totalAmount,
-          data.currency || 'USD',
+          this._normalizeCurrency(data.currency),
           data.validity_date || null,
           data.delivery_timeline || null,
           data.terms_and_conditions || null,
@@ -1502,6 +1662,13 @@ class ProcurementService {
       if (items && items.length) {
         await this.replaceQuotationItems(conn, result.insertId, items);
       }
+      await this._logEvent(
+        conn, requestId, user, 'QUOTATION_ADDED', req.status, req.status,
+        `Quotation from ${this._short(data.vendor_name, 80)} added at `
+        + `${this._normalizeCurrency(data.currency)} ${Number(totalAmount || 0).toFixed(2)}`
+        + `${data.quotation_number ? ` (Ref ${this._short(data.quotation_number, 40)})` : ''}`
+        + `${items && items.length ? ` — ${items.length} priced line(s)` : ''}`
+      );
       return { quotationId: result.insertId, total_amount: totalAmount };
     });
   }
@@ -1527,7 +1694,17 @@ class ProcurementService {
     if (![ROLES.PROCUREMENT_OFFICER, ROLES.ADMIN].includes(user.role)) {
       throw new Error('Only Procurement Officers can delete quotations');
     }
+    const quot = rows[0];
+    const [parent] = await query('SELECT status FROM proc_requests WHERE id = ?', [quot.request_id]);
     await query('DELETE FROM proc_quotations WHERE id = ?', [quotationId]);
+    // No transaction on this path, so the log is written after the delete — a
+    // failed delete must not leave a phantom entry on the trail.
+    await this._logEvent(
+      null, quot.request_id, user, 'QUOTATION_DELETED', parent?.status || null, parent?.status || null,
+      `Quotation from ${this._short(quot.vendor_name, 80)} `
+      + `(${this._normalizeCurrency(quot.currency)} ${Number(quot.total_amount || 0).toFixed(2)})`
+      + `${Number(quot.is_selected) === 1 ? ' — this was the SELECTED bid' : ''} removed`
+    );
     return { success: true };
   }
 
@@ -1569,7 +1746,8 @@ class ProcurementService {
     const params = [
       data.vendor_name || null, data.vendor_email || null, data.vendor_phone || null,
       data.quotation_number || null, totalAmount,
-      data.currency || null, data.validity_date || null, data.delivery_timeline || null,
+      data.currency ? this._normalizeCurrency(data.currency, quot.currency) : null,
+      data.validity_date || null, data.delivery_timeline || null,
       data.notes || null,
       ...(hasNewFile ? [data.file_path, data.file_name || null, data.file_size || null] : []),
       quotationId
@@ -1586,6 +1764,32 @@ class ProcurementService {
           await this.applyQuotationActuals(conn, quot.request_id, quotationId);
         }
       }
+
+      // A bid amended after the comparison was drawn up is the change a reviewer
+      // most needs to see, so the old figures are spelled out, not just replaced.
+      const changed = [];
+      if (data.vendor_name && data.vendor_name !== quot.vendor_name) {
+        changed.push(`supplier "${this._short(quot.vendor_name, 60)}" → "${this._short(data.vendor_name, 60)}"`);
+      }
+      if (totalAmount != null && Number(totalAmount).toFixed(2) !== Number(quot.total_amount || 0).toFixed(2)) {
+        changed.push(`amount ${Number(quot.total_amount || 0).toFixed(2)} → ${Number(totalAmount).toFixed(2)}`);
+      }
+      if (data.currency && this._normalizeCurrency(data.currency, quot.currency) !== quot.currency) {
+        changed.push(`currency ${quot.currency} → ${this._normalizeCurrency(data.currency, quot.currency)}`);
+      }
+      if (data.quotation_number && data.quotation_number !== quot.quotation_number) {
+        changed.push(`reference ${this._short(quot.quotation_number, 40)} → ${this._short(data.quotation_number, 40)}`);
+      }
+      if (items) changed.push(`${items.length} priced line(s) replaced`);
+
+      if (changed.length) {
+        await this._logEvent(
+          conn, quot.request_id, user, 'QUOTATION_UPDATED', quot.request_status, quot.request_status,
+          `Quotation from ${this._short(quot.vendor_name, 60)}`
+          + `${Number(quot.is_selected) === 1 ? ' (the SELECTED bid)' : ''} amended: ${changed.join('; ')}`
+        );
+      }
+
       return { success: true, total_amount: totalAmount };
     });
   }

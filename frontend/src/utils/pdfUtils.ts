@@ -222,7 +222,12 @@ export const buildPurchaseOrderHTML = (request: any): string => {
   // line. Where an item has no actual — an older request, priced before the
   // breakdown existed — the line shows a dash rather than the requester's
   // estimate, which was never a price the supplier agreed to.
-  const currency = selectedQuot?.currency || 'USD';
+  // The currency was a free-text field, and a quotation once reached a printed
+  // Purchase Order carrying "USD150" — which rendered as "USD150 150.00", so the
+  // order appeared to state the amount twice. Anything that is not a bare
+  // three-letter code is not a currency and is not printed as one.
+  const rawCurrency = String(selectedQuot?.currency ?? '').trim().toUpperCase();
+  const currency = /^[A-Z]{3}$/.test(rawCurrency) ? rawCurrency : 'USD';
   const money = (n: number) => `${currency === 'USD' ? '$' : `${currency} `}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const itemRows = items.map((item: any, i: number) => {
