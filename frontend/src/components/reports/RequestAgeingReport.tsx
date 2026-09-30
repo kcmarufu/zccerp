@@ -141,7 +141,6 @@ const RequestAgeingReport: React.FC<Props> = ({ fiscalYear, donorId, projectId }
       openOver14: deptRequests.filter(r => r.current_stage && r.days_in_current_stage > 14).length,
     };
     return { stageStats, pipeline, totals };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, deptRequests]);
 
   const tableRows = useMemo(() => {
@@ -166,7 +165,6 @@ const RequestAgeingReport: React.FC<Props> = ({ fiscalYear, donorId, projectId }
       if (stageFilter?.mode === 'done') return (b.stage_days[stageFilter.stage] || 0) - (a.stage_days[stageFilter.stage] || 0);
       return 0;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deptRequests, search, stageFilter]);
 
   useEffect(() => { setPage(0); }, [search, stageFilter, department, data]);

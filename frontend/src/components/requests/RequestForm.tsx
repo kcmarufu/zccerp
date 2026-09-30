@@ -483,7 +483,6 @@ const RequestForm: React.FC = () => {
       usage.set(lineId, (usage.get(lineId) || 0) + toCents((item?.quantity || 1) * (item?.unitPrice || 0)));
     });
     return usage;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemsBudgetSignature]);
 
   // Every budget line this request overdraws, with the amounts needed to explain it.
