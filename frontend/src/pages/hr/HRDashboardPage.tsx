@@ -43,7 +43,7 @@ const PersonalHRDashboard: React.FC<{ data: any; navigate: (p: string) => void }
   const theme = useTheme();
   const { employee, balances = [], requestCounts, recentRequests = [] } = data;
 
-  const num = (n: any) => (n === null || n === undefined ? '—' : Number(n).toFixed(1));
+  const num = (n: any) => (n === null || n === undefined ? '—' : (Math.round(Number(n) * 100) / 100).toFixed(2).replace(/0$/, ''));
 
   const STATUS_META: Record<string, { label: string; color: 'warning' | 'success' | 'error' | 'default'; icon: React.ReactNode }> = {
     PENDING:   { label: 'Awaiting approval', color: 'warning', icon: <PendingIcon fontSize="small" /> },

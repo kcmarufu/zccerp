@@ -77,9 +77,10 @@ import AccrualStatement from '../../components/hr/AccrualStatement';
 const fmt   = (d?: string | null) => (d ? formatDate(d) : '—');
 const fmtDt = (d?: string | null) => (d ? formatDateTime(d) : '—');
 
-/** Render a day count, tolerating the API's string decimals and nulls. */
+/** Render a day count, tolerating the API's string decimals and nulls. Keeps
+ *  two decimals (4.95 stays 4.95) but drops a trailing zero (2.50 -> 2.5). */
 const days = (n: number | string | null | undefined) =>
-  n === null || n === undefined || n === '' ? '—' : Number(n).toFixed(1);
+  n === null || n === undefined || n === '' ? '—' : (Math.round(Number(n) * 100) / 100).toFixed(2).replace(/0$/, '');
 
 const truthy = (v: boolean | number | undefined | null) => v === true || v === 1;
 

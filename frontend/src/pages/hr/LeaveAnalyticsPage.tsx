@@ -61,8 +61,9 @@ import { formatDate, formatDateTime } from '../../utils/datetime';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/** Render a day count to two decimals (4.95 stays 4.95), dropping a trailing zero (2.50 -> 2.5). */
 const days = (n: number | string | null | undefined) =>
-  n === null || n === undefined || n === '' ? '—' : Number(n).toFixed(1);
+  n === null || n === undefined || n === '' ? '—' : (Math.round(Number(n) * 100) / 100).toFixed(2).replace(/0$/, '');
 
 /** The API returns MySQL tinyints, so 1/0 must count as true/false. */
 const truthy = (v: boolean | number | undefined | null) => v === true || v === 1;
@@ -262,7 +263,7 @@ const LeaveAnalyticsPage: React.FC = () => {
       });
       toast.success(
         `${magnitude} day(s) ${adjMode === 'ADD' ? 'credited to' : 'deducted from'} ${row.employee_name}. `
-        + `Balance ${Number(result.balance_before).toFixed(1)} → ${Number(result.balance_after).toFixed(1)} day(s).`
+        + `Balance ${days(result.balance_before)} → ${days(result.balance_after)} day(s).`
       );
       setAdjDialog({ open: false, row: null });
       // Refresh every view the number appears in, so the change is visible
@@ -1136,7 +1137,7 @@ const LeaveAnalyticsPage: React.FC = () => {
               label="Number of days"
               value={adjDays}
               onChange={(e) => setAdjDays(e.target.value)}
-              inputProps={{ min: 0.5, step: 0.5 }}
+              inputProps={{ min: 0.01, step: 0.01 }}
             />
 
             {adjDialog.row && adjDays && Number(adjDays) > 0 && (
