@@ -54,7 +54,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { toast } from 'react-toastify';
 import {
   getLeaveRequests, createLeaveRequest, approveLeaveRequest, getLeaveTypes,
-  getLeaveBalances, getLeaveAuditTrail, downloadLeaveRequestPDF,
+  getMyLeaveBalances, getLeaveAuditTrail, downloadLeaveRequestPDF,
   downloadLeaveRegisterPDF, downloadLeaveExcel,
   getLeaveAttachments, uploadLeaveAttachment, deleteLeaveAttachment,
   viewLeaveAttachment, downloadLeaveAttachment, updateLeaveRequest,
@@ -369,8 +369,10 @@ const fileSize = (bytes: number) => {
 const AttachmentList: React.FC<{
   leaveId: number;
   canEdit?: boolean;
+  /** Removal is for the requester only; everyone else views and downloads. */
+  canDelete?: boolean;
   refreshKey?: number;
-}> = ({ leaveId, canEdit, refreshKey }) => {
+}> = ({ leaveId, canEdit, canDelete, refreshKey }) => {
   const [items, setItems]     = useState<HRLeaveAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy]       = useState<number | null>(null);
@@ -461,7 +463,7 @@ const AttachmentList: React.FC<{
                       <FileDownloadIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
-                  {canEdit && (
+                  {canDelete && (
                     <Tooltip title="Remove">
                       <IconButton size="small" color="error" onClick={() => remove(att)}>
                         <DeleteIcon fontSize="small" />
@@ -500,7 +502,9 @@ const DetailDialog: React.FC<{
   canEditDocs?: boolean;
   /** Approvers also see the requester's accrual statement. */
   showAccruals?: boolean;
-}> = ({ request, onClose, canEditDocs, showAccruals }) => {
+  /** Signed-in user, to tell the requester from an approver. */
+  currentUserId?: number;
+}> = ({ request, onClose, canEditDocs, showAccruals, currentUserId }) => {
   const [exporting, setExporting] = useState(false);
   if (!request) return null;
 
@@ -598,7 +602,8 @@ const DetailDialog: React.FC<{
           display="flex" alignItems="center" gap={0.75}>
           <AttachIcon fontSize="small" /> Supporting Documents
         </Typography>
-        <AttachmentList leaveId={request.id} canEdit={canEditDocs} />
+        <AttachmentList leaveId={request.id} canEdit={canEditDocs}
+          canDelete={request.status === 'PENDING' && Number(request.employee_user_id) === Number(currentUserId)} />
 
         <Typography variant="subtitle2" fontWeight={700} mt={2.5} mb={1}
           display="flex" alignItems="center" gap={0.75}>
@@ -756,12 +761,9 @@ const LeaveManagementPage: React.FC = () => {
 
       // Own balances, for the cards on the My Leave tab.
       if (tab === TAB_MY) {
-        const mine = reqResult.data[0];
-        if (mine?.employee_id) {
-          try {
-            setBalances(await getLeaveBalances(mine.employee_id, yearFilter));
-          } catch { /* balances are supplementary */ }
-        }
+        try {
+          setBalances(await getMyLeaveBalances(yearFilter));
+        } catch { /* balances are supplementary */ }
       }
     } catch (err) {
       toast.error('Failed to load leave data');
@@ -1753,7 +1755,7 @@ const LeaveManagementPage: React.FC = () => {
                   DOCUMENTS ALREADY ATTACHED
                 </Typography>
                 <Box mt={0.5}>
-                  <AttachmentList leaveId={editReq.id} canEdit refreshKey={editFiles.length} />
+                  <AttachmentList leaveId={editReq.id} canEdit canDelete={editReq.status === 'PENDING' && Number(editReq.employee_user_id) === Number(user?.id)} refreshKey={editFiles.length} />
                 </Box>
               </Grid>
             )}
@@ -1821,6 +1823,7 @@ const LeaveManagementPage: React.FC = () => {
 
       <DetailDialog
         request={detailReq}
+        currentUserId={user?.id}
         onClose={() => setDetailReq(null)}
         canEditDocs={
           // Filing evidence is not editing the request: the HR Office keeps the

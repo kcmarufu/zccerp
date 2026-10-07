@@ -390,6 +390,23 @@ class HRController {
     }
   }
 
+  /**
+   * The caller's OWN leave balances, whatever their role. The page used to
+   * infer the employee from the caller's first leave request, so anyone with
+   * no request this year (HODs, leads, admins) saw no balance at all.
+   */
+  async getMyLeaveBalances(req, res) {
+    try {
+      const employeeId = await this.getEmployeeIdForUser(req.user.id);
+      if (!employeeId) return res.json({ success: true, data: [], employee_id: null });
+      const balances = await hrService.getLeaveBalances(employeeId, req.query.year);
+      res.json({ success: true, data: balances, employee_id: employeeId });
+    } catch (error) {
+      console.error('Error fetching own leave balances:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch leave balances' });
+    }
+  }
+
   async getLeaveBalances(req, res) {
     try {
       const employee = await hrService.getEmployeeById(req.params.employeeId);
@@ -639,12 +656,14 @@ class HRController {
       if (!att) return res.status(404).json({ success: false, error: 'Attachment not found' });
 
       const request = await hrService.getLeaveRequestById(att.leave_request_id);
+      // Only the person who raised the request may remove its documents, and
+      // only until it is decided. Approvers, HR and Admin can view and
+      // download but never delete — the evidence must survive for the decision.
       const isOwner = Number(request.employee_user_id) === Number(req.user.id);
-      const isOversight = req.user.role === ROLES.ADMIN || isAdminHrManager(req.user);
-      if (!isOwner && !isOversight) {
-        return res.status(403).json({ success: false, error: 'You cannot remove this document' });
+      if (!isOwner) {
+        return res.status(403).json({ success: false, error: 'Only the requester can remove their own documents' });
       }
-      if (isOwner && !isOversight && request.status !== 'PENDING') {
+      if (request.status !== 'PENDING') {
         return res.status(400).json({ success: false, error: 'This request has already been decided' });
       }
 

@@ -23,10 +23,10 @@ import { HRAccrualHistory } from '../../types';
 import { formatDate } from '../../utils/datetime';
 
 const num = (n: number | string | null | undefined) =>
-  n === null || n === undefined || n === '' ? '—' : Number(n).toFixed(1);
+  n === null || n === undefined || n === '' ? '—' : Number(n).toFixed(2);
 
 /** Signed day count, with an explicit sign so credits and debits read clearly. */
-const signed = (n: number) => `${n > 0 ? '+' : ''}${Number(n).toFixed(1)}`;
+const signed = (n: number) => `${n > 0 ? '+' : ''}${Number(n).toFixed(2)}`;
 
 const EVENT_META: Record<string, { icon: React.ReactNode; color: 'success' | 'error' | 'info' | 'default'; }> = {
   ACCRUAL:     { icon: <AccrualIcon fontSize="small" />, color: 'success' },

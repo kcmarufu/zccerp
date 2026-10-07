@@ -30,7 +30,7 @@ const fmtDateTime = (d) =>
   d ? new Date(d).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 
 const fmtDays = (n) =>
-  n === null || n === undefined || n === '' ? '—' : `${Number(n).toFixed(1)}`;
+  n === null || n === undefined || n === '' ? '—' : `${Number(n).toFixed(2)}`;
 
 const titleise = (s) => String(s || '').replace(/_/g, ' ');
 
@@ -432,7 +432,7 @@ class HRExportController {
       y += 8;
       if (y > doc.page.height - 60) { doc.addPage(); y = 40; }
       doc.fontSize(9).font('Helvetica-Bold').fillColor(BRAND)
-         .text(`Total approved days in period: ${totalDays.toFixed(1)}`, 40, y);
+         .text(`Total approved days in period: ${totalDays.toFixed(2)}`, 40, y);
 
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
          .text(`Generated ${fmtDateTime(new Date())} — ERP Connect HR Module`,

@@ -339,6 +339,13 @@ export const approveLeaveRequest = async (
   return response.data.data;
 };
 
+/** The signed-in user's own balances — works even with no leave requests. */
+export const getMyLeaveBalances = async (year?: number): Promise<HRLeaveBalance[]> => {
+  const params = year ? { year } : {};
+  const response = await api.get('/hr/my-leave-balances', { params });
+  return response.data.data;
+};
+
 export const getLeaveBalances = async (employeeId: number, year?: number): Promise<HRLeaveBalance[]> => {
   const params = year ? { year } : {};
   const response = await api.get(`/hr/employees/${employeeId}/leave-balances`, { params });

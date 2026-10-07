@@ -859,7 +859,7 @@ class HRService {
     return {
       ...row,
       balance_before: before,
-      balance_after: Math.round((before - charged) * 10) / 10,
+      balance_after: Math.round((before - charged) * 100) / 100,
       // Lets the UI say "recomputed just now" rather than implying the figure
       // was fixed at submission.
       balance_is_live: true,
@@ -1723,7 +1723,7 @@ class HRService {
     let running = 0;
     for (const e of events) {
       running += e.days;
-      e.balance_after = Math.round(running * 10) / 10;
+      e.balance_after = Math.round(running * 100) / 100;
     }
 
     const totalAccrued = accruals.reduce((n, a) => n + Number(a.days_added), 0);
@@ -1734,10 +1734,10 @@ class HRService {
       fiscal_year: fiscalYear,
       months_covered: accruals.length,
       totals: {
-        accrued: Math.round(totalAccrued * 10) / 10,
-        adjusted: Math.round(totalAdjusted * 10) / 10,
-        taken: Math.round(totalTaken * 10) / 10,
-        net: Math.round((totalAccrued + totalAdjusted - totalTaken) * 10) / 10,
+        accrued: Math.round(totalAccrued * 100) / 100,
+        adjusted: Math.round(totalAdjusted * 100) / 100,
+        taken: Math.round(totalTaken * 100) / 100,
+        net: Math.round((totalAccrued + totalAdjusted - totalTaken) * 100) / 100,
       },
       accruals,
       adjustments,
@@ -1793,10 +1793,10 @@ class HRService {
       balances,
       requests,
       request_totals: {
-        approved: Math.round(sumBy('APPROVED') * 10) / 10,
-        pending: Math.round(sumBy('PENDING') * 10) / 10,
-        rejected: Math.round(sumBy('REJECTED') * 10) / 10,
-        cancelled: Math.round(sumBy('CANCELLED') * 10) / 10,
+        approved: Math.round(sumBy('APPROVED') * 100) / 100,
+        pending: Math.round(sumBy('PENDING') * 100) / 100,
+        rejected: Math.round(sumBy('REJECTED') * 100) / 100,
+        cancelled: Math.round(sumBy('CANCELLED') * 100) / 100,
         count: requests.length,
       },
     };

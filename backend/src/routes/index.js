@@ -378,6 +378,7 @@ router.put('/hr/leave-requests/:leaveId', authenticateToken, uploadMultiple, han
 router.put('/hr/leave-requests/:leaveId/approve', authenticateToken, requireRole(ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD, ROLES.ADMIN), hrController.approveLeaveRequest.bind(hrController));
 
 // --- Leave balances & accrual ----------------------------------------------
+router.get('/hr/my-leave-balances', authenticateToken, hrController.getMyLeaveBalances.bind(hrController));
 router.get('/hr/employees/:employeeId/leave-balances', authenticateToken, hrController.getLeaveBalances.bind(hrController));
 router.post('/hr/leave-accrual/run', authenticateToken, requireRole(ROLES.ADMIN), hrController.runLeaveAccrual.bind(hrController));
 
