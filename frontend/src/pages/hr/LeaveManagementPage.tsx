@@ -1035,6 +1035,22 @@ const LeaveManagementPage: React.FC = () => {
         </Box>
       )}
 
+      {tab === TAB_MY && !loading && balances.length === 0 && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          No leave balance has been set up for you for {yearFilter}. Please contact HR.
+        </Alert>
+      )}
+
+      {/* ── Accrual statement (own leave) — same for every role ── */}
+      {tab === TAB_MY && (
+        <Box mb={3}>
+          <Typography variant="subtitle2" color="text.secondary" fontWeight={600} mb={1.5}>
+            MY LEAVE ACCRUALS — {yearFilter}
+          </Typography>
+          <AccrualStatement year={yearFilter} />
+        </Box>
+      )}
+
       {/* ── Tabs ── */}
       <Tabs
         value={tab}
