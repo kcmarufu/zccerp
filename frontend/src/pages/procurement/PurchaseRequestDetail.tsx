@@ -671,7 +671,9 @@ const PurchaseRequestDetail: React.FC = () => {
   const canRecall = hasPermission('manage_quotations') &&
     ['PENDING_COMMITTEE', 'PENDING_HIGH_VALUE_APPROVAL', 'PENDING_FINAL_FINANCE'].includes(request?.status || '') &&
     pops.length === 0;
-  const canEdit = ['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
+  // Only the requester edits the request, and only as a draft or once it has
+  // been sent back. Procurement amends quotations, never the request itself.
+  const canEdit = ['DRAFT', 'REJECTED'].includes(request?.status || '') && Number(request?.requester_id) === Number(user?.id);
   const canSubmit = ['DRAFT', 'REJECTED'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
 
   const doAction = async () => {

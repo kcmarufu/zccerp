@@ -543,13 +543,16 @@ class ProcurementService {
   async updatePurchaseRequest(requestId, data, user) {
     const existing = await this.getPurchaseRequestById(requestId);
     if (!existing) throw new Error('Request not found');
-    // Editable until the Procurement Committee unanimously approves (which moves status
-    // to PENDING_FINAL_FINANCE). Everything before that stage is still open to amendment.
-    if (!['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(existing.status)) {
-      throw new Error('Requests can only be edited before the Procurement Committee has approved');
+    // Only the person who raised the request edits it, and only while it is
+    // theirs: a draft, or one sent back to them. Once submitted it belongs to
+    // the approvers and Procurement — and an edit replaces the item list, which
+    // would cut the link between the items and the prices on the quotations
+    // Procurement has already captured. Procurement changes quotations only.
+    if (![PROC_STATUS.DRAFT, PROC_STATUS.REJECTED].includes(existing.status)) {
+      throw new Error('A purchase request can only be edited while it is a draft or after it has been rejected');
     }
-    if (existing.requester_id !== user.id && user.role !== ROLES.ADMIN) {
-      throw new Error('You can only edit your own requests');
+    if (Number(existing.requester_id) !== Number(user.id)) {
+      throw new Error('Only the person who raised this purchase request can edit it');
     }
 
     const donorId = data.donor_id || existing.donor_id;
