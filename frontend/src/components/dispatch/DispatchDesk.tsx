@@ -1192,7 +1192,8 @@ ${buildDigitalStamp('')}
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {detailApprovalTrail.map((log: any, i: number) => (
+                        {/* Latest action first */}
+                        {[...detailApprovalTrail].reverse().map((log: any, i: number) => (
                           <TableRow key={i}>
                             <TableCell>
                               <Chip

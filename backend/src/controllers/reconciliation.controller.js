@@ -391,6 +391,17 @@ class ReconciliationController {
    * UI needs to warn the reviewer and to explain why the approve buttons are off.
    * Users who hold no lead-review desk (and Super Admin) come back clear.
    */
+  /** The Finance desk's overdue reconciliations, and whether they block this user. */
+  async getFinanceDeskBacklog(req, res) {
+    try {
+      const backlog = await reconciliationService.getFinanceDeskBacklogFor(req.user);
+      res.json({ success: true, data: backlog });
+    } catch (error) {
+      console.error('Get finance desk backlog error:', error);
+      res.status(500).json({ success: false, error: 'Failed to load the Finance desk backlog' });
+    }
+  }
+
   async getLeadDeskBacklog(req, res) {
     try {
       const backlog = await reconciliationService.getLeadDeskBacklog(req.user);

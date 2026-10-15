@@ -66,7 +66,7 @@ import {
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
 import { ROLE_TITLES, formatRoleLabel } from '../../utils/roleUtils';
-import { formatDate, formatDateTime } from '../../utils/datetime';
+import { formatDate, formatDateTime, formatTime } from '../../utils/datetime';
 import {
   hasFullHrAccess, hasDepartmentHrAccess, hasHrOversight,
 } from '../../utils/hrAccess';
@@ -273,6 +273,8 @@ const AuditTrail: React.FC<{ leaveId: number }> = ({ leaveId }) => {
   }
 
   const manualCount = trail.filter((e) => e.source === 'ADJUSTMENT').length;
+  // The API returns the trail oldest first; the latest action reads first here.
+  const newestFirst = [...trail].reverse();
 
   return (
     <TableContainer>
@@ -280,7 +282,7 @@ const AuditTrail: React.FC<{ leaveId: number }> = ({ leaveId }) => {
         <Alert severity="info" sx={{ mb: 1, py: 0.25 }}>
           This balance was also changed by hand{' '}
           <strong>{manualCount} time{manualCount === 1 ? '' : 's'}</strong> this year.
-          Those top-ups and deductions are listed below alongside the request itself.
+          Those top-ups and deductions are listed below alongside the request itself, latest first.
         </Alert>
       )}
       <Table size="small">
@@ -296,7 +298,7 @@ const AuditTrail: React.FC<{ leaveId: number }> = ({ leaveId }) => {
           </TableRow>
         </TableHead>
         <TableBody>
-          {trail.map((e) => {
+          {newestFirst.map((e) => {
             const manual = e.source === 'ADJUSTMENT';
             const credit = manual && Number(e.adjustment_days ?? 0) >= 0;
             return (
@@ -1267,6 +1269,7 @@ const LeaveManagementPage: React.FC = () => {
                 <TableHead>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
                     <TableCell sx={{ fontWeight: 700, py: 1.5 }}>Employee</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Date Applied</TableCell>
                     {showDept && <TableCell sx={{ fontWeight: 700 }}>Department</TableCell>}
                     <TableCell sx={{ fontWeight: 700 }}>Leave Type</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Period</TableCell>
@@ -1288,6 +1291,12 @@ const LeaveManagementPage: React.FC = () => {
                           <Typography variant="body2" fontWeight={600}>{req.employee_name}</Typography>
                           <Typography variant="caption" color="text.secondary">
                             LV-{String(req.id).padStart(5, '0')}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2">{fmt(req.created_at)}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {req.created_at ? formatTime(req.created_at) : ''}
                           </Typography>
                         </TableCell>
                         {showDept && (

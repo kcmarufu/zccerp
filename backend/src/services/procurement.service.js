@@ -5,7 +5,7 @@
  */
 
 const { query, transaction } = require('../config/database');
-const { ROLES, isAdminHrManager, FINANCE_DEPT_CODE, isGsTrackRole } = require('../config/roles');
+const { ROLES, isAdminHrManager, isFinanceManager, FINANCE_DEPT_CODE, isGsTrackRole } = require('../config/roles');
 const notificationService = require('./notification.service');
 
 const PROC_STATUS = {
@@ -49,25 +49,46 @@ const COMMITTEE_APPROVALS_REQUIRED = 3;
 
 const HV_SEAT = { SUPER_ADMIN: 'SUPER_ADMIN', FINANCE: 'FINANCE' };
 
+// Below this USD value a request skips the Committee and goes straight to Finance.
+const COMMITTEE_BYPASS_THRESHOLD_USD = 500;
+
+// What a selected quotation is worth on its request. A request may be split
+// across several suppliers, each awarded only some items — awarded_amount is
+// then the sum of those lines. NULL means the whole quotation was selected.
+const AWARDED_VALUE_SQL = (alias = 'q') => `COALESCE(${alias}.awarded_amount, ${alias}.total_amount)`;
+
+// The stages Procurement may recall a request from, to amend the quotations or
+// the award and send it through again.
+const RECALLABLE_STATUSES = [
+  'PENDING_COMMITTEE',
+  'PENDING_HIGH_VALUE_APPROVAL',
+  'PENDING_FINAL_FINANCE'
+];
+
+/** Finance Clerk, or the Finance Lead / Head of Department, or a Super Admin. */
+const canActAsProcFinance = (user) =>
+  user.role === ROLES.FINANCE_CLERK || isFinanceManager(user);
+
 class ProcurementService {
 
   /**
-   * Returns the selected quotation's value and whether it crosses the
-   * high-value threshold. Only USD quotations are evaluated; anything else
-   * falls back to the normal committee flow.
+   * Returns the awarded value — every selected quotation together, since a
+   * request may be split across suppliers — and whether it crosses the
+   * high-value threshold. Only USD awards are evaluated; anything else falls
+   * back to the normal committee flow.
    */
   async isHighValueRequest(requestId) {
     const rows = await query(
-      `SELECT total_amount, currency FROM proc_quotations
-        WHERE request_id = ? AND is_selected = TRUE LIMIT 1`,
+      `SELECT ${AWARDED_VALUE_SQL()} AS amount, q.currency FROM proc_quotations q
+        WHERE q.request_id = ? AND q.is_selected = TRUE`,
       [requestId]
     );
     if (!rows.length) return { isHighValue: false, amount: 0, currency: null };
-    const amount = parseFloat(rows[0].total_amount) || 0;
+    const amount = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
     const currency = rows[0].currency || 'USD';
     return {
       isHighValue: currency === 'USD' && amount >= HIGH_VALUE_THRESHOLD_USD,
-      amount,
+      amount: Math.round(amount * 100) / 100,
       currency
     };
   }
@@ -369,8 +390,10 @@ class ProcurementService {
         //      they hold one of the two seats, so it has to reach their desk
         //   5. Finance's Lead/HOD also sees Heads of Department's requests
         //      awaiting the General Secretary — view only; the GS decides them
+        //   6. Finance's Lead/HOD sees every request at the Finance desk, and
+        //      the completed ones, with the Finance Clerk's powers over them
         const financeSeat = user.department_code === FINANCE_DEPT_CODE
-          ? `OR pr.status IN ('PENDING_HIGH_VALUE_APPROVAL', 'PENDING_GS_APPROVAL')`
+          ? `OR pr.status IN ('PENDING_HIGH_VALUE_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_FINAL_FINANCE', 'COMPLETED')`
           : '';
         where = `WHERE (
           (pr.status = 'PENDING_DEPT_APPROVAL' AND COALESCE(pr.routing_department_id, pr.department_id) = ?) OR
@@ -411,11 +434,13 @@ class ProcurementService {
         d.department_name, d.department_code,
         dn.donor_name, dn.donor_code,
         (SELECT COUNT(*) FROM proc_quotations q WHERE q.request_id = pr.id) AS quotation_count,
-        (SELECT q.total_amount FROM proc_quotations q
-          WHERE q.request_id = pr.id AND q.is_selected = TRUE LIMIT 1) AS selected_quotation_amount,
-        (SELECT CASE WHEN q.currency = 'USD' AND q.total_amount >= ${HIGH_VALUE_THRESHOLD_USD} THEN 1 ELSE 0 END
+        (SELECT SUM(${AWARDED_VALUE_SQL()}) FROM proc_quotations q
+          WHERE q.request_id = pr.id AND q.is_selected = TRUE) AS selected_quotation_amount,
+        (SELECT COUNT(*) FROM proc_quotations q
+          WHERE q.request_id = pr.id AND q.is_selected = TRUE) AS selected_supplier_count,
+        (SELECT CASE WHEN MIN(q.currency) = 'USD' AND SUM(${AWARDED_VALUE_SQL()}) >= ${HIGH_VALUE_THRESHOLD_USD} THEN 1 ELSE 0 END
            FROM proc_quotations q
-          WHERE q.request_id = pr.id AND q.is_selected = TRUE LIMIT 1) AS is_high_value
+          WHERE q.request_id = pr.id AND q.is_selected = TRUE) AS is_high_value
       FROM proc_requests pr
       JOIN users u ON pr.requester_id = u.id
       LEFT JOIN departments d ON pr.department_id = d.id
@@ -478,7 +503,7 @@ class ProcurementService {
          FROM proc_approval_logs pal
          JOIN users u ON pal.actor_id = u.id
          WHERE pal.request_id = ?
-         ORDER BY pal.created_at ASC`,
+         ORDER BY pal.created_at ASC, pal.id ASC`,
         [requestId]
       ),
       query(
@@ -828,8 +853,8 @@ class ProcurementService {
     if (req.status !== 'PENDING_FINANCE_APPROVAL') {
       throw new Error('Request is not pending finance approval');
     }
-    if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
-      throw new Error('Only Finance Clerk can approve at this stage');
+    if (!canActAsProcFinance(user)) {
+      throw new Error('Only Finance (the Finance Clerk or the Finance Lead / Head of Department) can approve at this stage');
     }
 
     return transaction(async (conn) => {
@@ -865,6 +890,10 @@ class ProcurementService {
       throw new Error("A Head of Department's purchase request is actioned by the General Secretary");
     }
 
+    if (req.status === PROC_STATUS.PENDING_FINAL_FINANCE && !canActAsProcFinance(user)) {
+      throw new Error('Only Finance (the Finance Clerk or the Finance Lead / Head of Department) can reject at this stage');
+    }
+
     // The dept-approval decision — approve or reject — belongs to the Lead/HOD of the
     // department that owns the selected project.
     if (
@@ -898,7 +927,11 @@ class ProcurementService {
   // PROCUREMENT TEAM ACTIONS
   // ============================================================
 
-  async submitToCommittee(requestId, selectedQuotationId, user, comments = '') {
+  /**
+   * @param awards optional split award — [{ request_item_id, quotation_id }]
+   *   for every requested item. When given it replaces selectedQuotationId.
+   */
+  async submitToCommittee(requestId, selectedQuotationId, user, comments = '', awards = null) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
     if (req.status !== 'PENDING_PROCUREMENT') {
@@ -914,39 +947,25 @@ class ProcurementService {
       throw new Error('At least one quotation must be uploaded before submitting to committee');
     }
 
-    // The Committee decides on one bid, priced item by item. Without a chosen
-    // quotation there is nothing to turn the estimated figures into actual
-    // ones, so both the choice and its line items are mandatory here.
-    if (!selectedQuotationId) {
-      throw new Error('Choose the recommended quotation before submitting to the Committee');
-    }
-    const quotDetails = await query(
-      'SELECT total_amount, currency FROM proc_quotations WHERE id = ? AND request_id = ?',
-      [selectedQuotationId, requestId]
+    // The Committee decides on fully priced bids. Without a chosen quotation —
+    // or, for a split award, a supplier for every item — there is nothing to
+    // turn the estimated figures into actual ones, so the choice is mandatory.
+    const award = await this._resolveAward(
+      requestId, selectedQuotationId, awards,
+      'Choose the recommended quotation before submitting to the Committee'
     );
-    if (!quotDetails.length) {
-      throw new Error('The selected quotation does not belong to this request');
-    }
-    await this.assertQuotationIsPriced(requestId, selectedQuotationId);
 
-    // Check if the selected quotation value is below the USD 500 threshold
-    const currency = quotDetails[0].currency || 'USD';
-    const selectedQuotationAmount = parseFloat(quotDetails[0].total_amount);
-    const bypassCommittee = currency === 'USD' && selectedQuotationAmount < 500;
+    // Below the USD 500 threshold the Committee is skipped. A split award is
+    // judged on everything awarded, not on any one supplier's share.
+    const bypassCommittee = award.currency === 'USD' && award.amount < COMMITTEE_BYPASS_THRESHOLD_USD;
 
     return transaction(async (conn) => {
-      // Mark the selected quotation
-      await conn.execute('UPDATE proc_quotations SET is_selected=FALSE WHERE request_id=?', [requestId]);
-      await conn.execute(
-        'UPDATE proc_quotations SET is_selected=TRUE, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
-        [user.id, selectedQuotationId, requestId]
-      );
-      // Carry the supplier's prices onto the requested items, so everyone from
-      // the Committee onward reads the actual cost rather than the estimate.
-      await this.applyQuotationActuals(conn, requestId, selectedQuotationId);
+      // Mark the selected quotation(s) and carry the suppliers' prices onto the
+      // requested items, so everyone from the Committee onward reads the
+      // actual cost rather than the estimate.
+      await this._applyAward(conn, requestId, award, user);
 
       if (bypassCommittee) {
-        // Quotation is below USD 500 — skip committee and forward directly to Finance
         await conn.execute(
           `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', procurement_assigned_at=NOW(), committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
           [requestId]
@@ -955,7 +974,8 @@ class ProcurementService {
           `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
            VALUES (?, ?, ?, 'COMMITTEE_BYPASSED', 'PENDING_PROCUREMENT', 'PENDING_FINAL_FINANCE', ?)`,
           [requestId, user.id, user.role,
-           `Quotation total (USD ${selectedQuotationAmount.toFixed(2)}) is below the USD 500 threshold — Committee review bypassed, forwarded directly to Finance`]
+           `${award.split ? 'Awarded total' : 'Quotation total'} (USD ${award.amount.toFixed(2)}) is below the USD ${COMMITTEE_BYPASS_THRESHOLD_USD} threshold — Committee review bypassed, forwarded directly to Finance`
+           + (award.split ? `. ${award.summary}` : '')]
         );
         return { success: true, bypassed: true, status: 'PENDING_FINAL_FINANCE' };
       }
@@ -968,9 +988,54 @@ class ProcurementService {
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
          VALUES (?, ?, ?, 'SUBMITTED_TO_COMMITTEE', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE', ?)`,
-        [requestId, user.id, user.role, comments || 'Submitted to procurement committee']
+        [requestId, user.id, user.role,
+         (comments || 'Submitted to procurement committee') + (award.split ? `. ${award.summary}` : '')]
       );
       return { success: true, bypassed: false };
+    });
+  }
+
+  /**
+   * Take a request back from the Committee, the high-value approvers or the
+   * Finance desk so Procurement can amend the quotations or the award. It
+   * returns to Pending Procurement; votes and high-value approvals given on the
+   * old version are cleared, since they say nothing about the new one, and the
+   * next submission decides afresh whether it needs the Committee.
+   *
+   * A request that already carries proof of payment is not recalled — money
+   * has moved against the current award.
+   */
+  async recallToProcurement(requestId, user, reason = '') {
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req) throw new Error('Request not found');
+    if (![ROLES.PROCUREMENT_OFFICER, ROLES.ADMIN].includes(user.role)) {
+      throw new Error('Only Procurement Officers can recall a request to procurement');
+    }
+    if (!RECALLABLE_STATUSES.includes(req.status)) {
+      throw new Error('Only a request with the Committee, the high-value approvers or Finance can be recalled');
+    }
+    if (!String(reason || '').trim()) {
+      throw new Error('Give a reason for recalling the request');
+    }
+    const [pops] = await query(
+      'SELECT COUNT(*) AS cnt FROM proc_request_pops WHERE request_id = ?', [requestId]
+    );
+    if (Number(pops.cnt) > 0) {
+      throw new Error('Proof of payment has already been attached to this request, so it can no longer be recalled');
+    }
+
+    return transaction(async (conn) => {
+      await conn.execute('DELETE FROM proc_committee_votes WHERE request_id = ?', [requestId]);
+      await conn.execute('DELETE FROM proc_high_value_approvals WHERE request_id = ?', [requestId]);
+      await conn.execute(
+        `UPDATE proc_requests SET status='PENDING_PROCUREMENT', committee_reviewed_at=NULL, updated_at=NOW() WHERE id=?`,
+        [requestId]
+      );
+      await this._logEvent(
+        conn, requestId, user, 'RECALLED_TO_PROCUREMENT', req.status, PROC_STATUS.PENDING_PROCUREMENT,
+        `Recalled to Procurement from ${req.status.replace(/_/g, ' ').toLowerCase()}: ${String(reason).trim()}`
+      );
+      return { success: true, status: PROC_STATUS.PENDING_PROCUREMENT };
     });
   }
 
@@ -1281,8 +1346,8 @@ class ProcurementService {
     if (req.status !== 'PENDING_FINAL_FINANCE') {
       throw new Error('Request is not pending final finance approval');
     }
-    if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
-      throw new Error('Only Finance Clerk can give final approval');
+    if (!canActAsProcFinance(user)) {
+      throw new Error('Only Finance (the Finance Clerk or the Finance Lead / Head of Department) can give final approval');
     }
     if (!popFiles.length) {
       throw new Error('At least one Proof of Payment (POP) document must be uploaded before final approval');
@@ -1310,13 +1375,13 @@ class ProcurementService {
         [requestId, user.id, user.role, comments || 'Final finance approval granted. Payment authorised.']
       );
 
-      // Auto-update vendor rating: increment by 1 (max 5) for the selected quotation's vendor
-      const selectedQuotations = await conn.execute(
-        `SELECT vendor_id FROM proc_quotations WHERE request_id = ? AND is_selected = TRUE AND vendor_id IS NOT NULL LIMIT 1`,
+      // Auto-update vendor rating: increment by 1 (max 5) for every awarded
+      // vendor — a split award has more than one.
+      const [selectedVendors] = await conn.execute(
+        `SELECT DISTINCT vendor_id FROM proc_quotations WHERE request_id = ? AND is_selected = TRUE AND vendor_id IS NOT NULL`,
         [requestId]
       );
-      if (selectedQuotations[0] && selectedQuotations[0].length > 0) {
-        const vendorId = selectedQuotations[0][0].vendor_id;
+      for (const { vendor_id: vendorId } of selectedVendors) {
         await conn.execute(
           `UPDATE proc_vendors SET rating = LEAST(5.0, COALESCE(rating, 0) + 1.0), updated_at=NOW() WHERE id=?`,
           [vendorId]
@@ -1347,8 +1412,8 @@ class ProcurementService {
    * settled in batches and the later instalments are paid separately.
    */
   async addProofOfPayment(requestId, user, files = [], note = null) {
-    if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
-      throw new Error('Only Finance Clerk or Admin can attach proof of payment');
+    if (!canActAsProcFinance(user)) {
+      throw new Error('Only Finance or Admin can attach proof of payment');
     }
     if (!files.length) throw new Error('No files were uploaded');
 
@@ -1384,8 +1449,8 @@ class ProcurementService {
   }
 
   async deleteProofOfPayment(requestId, popId, user) {
-    if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
-      throw new Error('Only Finance Clerk or Admin can remove proof of payment');
+    if (!canActAsProcFinance(user)) {
+      throw new Error('Only Finance or Admin can remove proof of payment');
     }
     const rows = await query(
       'SELECT * FROM proc_request_pops WHERE id = ? AND request_id = ?', [popId, requestId]
@@ -1422,8 +1487,8 @@ class ProcurementService {
     if (req.status !== 'COMPLETED') {
       throw new Error('Only COMPLETED requests can have their final approval reversed');
     }
-    if (![ROLES.FINANCE_CLERK, ROLES.ADMIN].includes(user.role)) {
-      throw new Error('Only Finance Clerk or Admin can reverse final approval');
+    if (!canActAsProcFinance(user)) {
+      throw new Error('Only Finance or Admin can reverse final approval');
     }
     await query(
       `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', final_finance_approved_at=NULL, completed_at=NULL,
@@ -1618,6 +1683,252 @@ class ProcurementService {
     }
   }
 
+  // ── Awards: one supplier, or a different supplier per item ───────────────
+  //
+  // A request is normally awarded to one quotation in full. When suppliers are
+  // each best on different items, Procurement makes a split award instead:
+  // every requested item names the quotation it goes to. Each quotation that
+  // wins anything is marked selected, with awarded_amount holding the value of
+  // its winning lines, and each item's actuals come from its own supplier.
+
+  /**
+   * Validate what is being awarded and price it. Throws `missingMessage` when
+   * nothing was chosen.
+   *
+   * Returns { split, amount, currency, summary, ... } — `amount` is the total
+   * awarded across every supplier, which is what the Committee bypass and the
+   * high-value rule are judged on.
+   */
+  async _resolveAward(requestId, quotationId, awards, missingMessage) {
+    if (Array.isArray(awards) && awards.length) {
+      return this._resolveSplitAward(requestId, awards);
+    }
+    if (!quotationId) throw new Error(missingMessage);
+
+    const rows = await query(
+      'SELECT id, vendor_name, total_amount, currency FROM proc_quotations WHERE id = ? AND request_id = ?',
+      [quotationId, requestId]
+    );
+    if (!rows.length) {
+      throw new Error('The selected quotation does not belong to this request');
+    }
+    await this.assertQuotationIsPriced(requestId, quotationId);
+    return {
+      split: false,
+      quotationId: rows[0].id,
+      amount: parseFloat(rows[0].total_amount) || 0,
+      currency: rows[0].currency || 'USD',
+      summary: `Awarded to ${this._short(rows[0].vendor_name, 80)}`
+    };
+  }
+
+  /**
+   * A split award must place every requested item: with a supplier whose
+   * quotation prices it as available, or with nobody (quotation_id null) when
+   * no supplier can provide it. All suppliers must quote in one currency, or
+   * the total — and with it every threshold — would be meaningless.
+   */
+  async _resolveSplitAward(requestId, awards) {
+    const items = await query(
+      'SELECT id, item_description FROM proc_request_items WHERE request_id = ? ORDER BY id',
+      [requestId]
+    );
+    const itemIds = new Set(items.map((i) => i.id));
+    const choice = new Map();
+    for (const a of awards) {
+      const itemId = Number(a.request_item_id);
+      if (!itemIds.has(itemId)) {
+        throw new Error('The award names an item that is not on this request');
+      }
+      if (choice.has(itemId)) {
+        throw new Error('Each item can be awarded to only one supplier');
+      }
+      choice.set(itemId, a.quotation_id ? Number(a.quotation_id) : null);
+    }
+    const unplaced = items.filter((i) => !choice.has(i.id));
+    if (unplaced.length) {
+      throw new Error(
+        `Choose a supplier for every item. Still to place: ${unplaced.map((i) => i.item_description).join(', ')}`
+      );
+    }
+
+    const quotationIds = [...new Set([...choice.values()].filter(Boolean))];
+    if (!quotationIds.length) {
+      throw new Error('At least one item must be awarded to a supplier');
+    }
+    const marks = quotationIds.map(() => '?').join(',');
+    const quots = await query(
+      `SELECT id, vendor_name, currency FROM proc_quotations WHERE request_id = ? AND id IN (${marks})`,
+      [requestId, ...quotationIds]
+    );
+    if (quots.length !== quotationIds.length) {
+      throw new Error('A chosen quotation does not belong to this request');
+    }
+    const currencies = new Set(quots.map((q) => q.currency || 'USD'));
+    if (currencies.size > 1) {
+      throw new Error(
+        `Every supplier in a split award must be quoted in the same currency (found ${[...currencies].join(', ')})`
+      );
+    }
+    const vendorOf = new Map(quots.map((q) => [q.id, this._short(q.vendor_name, 60)]));
+
+    const lines = await query(
+      `SELECT quotation_id, request_item_id, quantity, unit_price, is_available
+       FROM proc_quotation_items
+       WHERE quotation_id IN (${marks}) AND request_item_id IS NOT NULL`,
+      quotationIds
+    );
+
+    const perItem = [];
+    const amountByQuotation = new Map(quotationIds.map((id) => [id, 0]));
+    const itemsByVendor = new Map();
+    const notAwarded = [];
+    for (const item of items) {
+      const qid = choice.get(item.id);
+      if (!qid) {
+        perItem.push({ itemId: item.id, quotationId: null });
+        notAwarded.push(item.item_description);
+        continue;
+      }
+      const line = lines.find((l) => l.quotation_id === qid && l.request_item_id === item.id);
+      if (!line) {
+        throw new Error(
+          `${vendorOf.get(qid)} has not priced "${item.item_description}". Price it on that quotation or choose another supplier`
+        );
+      }
+      if (Number(line.is_available) !== 1) {
+        throw new Error(
+          `${vendorOf.get(qid)} marked "${item.item_description}" as not available. Choose another supplier for it`
+        );
+      }
+      const unitPrice = Number(line.unit_price || 0);
+      const lineTotal = Math.round(Number(line.quantity) * unitPrice * 100) / 100;
+      amountByQuotation.set(qid, amountByQuotation.get(qid) + lineTotal);
+      perItem.push({ itemId: item.id, quotationId: qid, unitPrice, lineTotal });
+      if (!itemsByVendor.has(qid)) itemsByVendor.set(qid, []);
+      itemsByVendor.get(qid).push(item.item_description);
+    }
+    for (const [qid, amt] of amountByQuotation) {
+      amountByQuotation.set(qid, Math.round(amt * 100) / 100);
+    }
+    const amount = Math.round([...amountByQuotation.values()].reduce((s, v) => s + v, 0) * 100) / 100;
+    const currency = [...currencies][0];
+
+    const parts = [...itemsByVendor].map(([qid, names]) =>
+      `${vendorOf.get(qid)} (${currency} ${amountByQuotation.get(qid).toFixed(2)}): ${names.map((n) => this._short(n, 60)).join(', ')}`
+    );
+    if (notAwarded.length) {
+      parts.push(`not awarded: ${notAwarded.map((n) => this._short(n, 60)).join(', ')}`);
+    }
+
+    return {
+      split: true,
+      quotationIds,
+      perItem,
+      amountByQuotation,
+      amount,
+      currency,
+      summary: `Split award — ${parts.join('; ')}`
+    };
+  }
+
+  /** Record an award resolved by _resolveAward. Caller supplies the transaction. */
+  async _applyAward(conn, requestId, award, user) {
+    await conn.execute(
+      'UPDATE proc_quotations SET is_selected=FALSE, awarded_amount=NULL WHERE request_id=?',
+      [requestId]
+    );
+
+    if (!award.split) {
+      await conn.execute(
+        'UPDATE proc_quotations SET is_selected=TRUE, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
+        [user.id, award.quotationId, requestId]
+      );
+      await this.applyQuotationActuals(conn, requestId, award.quotationId);
+      return;
+    }
+
+    for (const [qid, amt] of award.amountByQuotation) {
+      await conn.execute(
+        'UPDATE proc_quotations SET is_selected=TRUE, awarded_amount=?, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
+        [amt, user.id, qid, requestId]
+      );
+    }
+    for (const p of award.perItem) {
+      await conn.execute(
+        `UPDATE proc_request_items
+            SET actual_unit_price = ?, actual_total = ?, actual_quotation_id = ?, is_available = ?
+          WHERE id = ? AND request_id = ?`,
+        p.quotationId
+          ? [p.unitPrice, p.lineTotal, p.quotationId, 1, p.itemId, requestId]
+          : [null, null, null, 0, p.itemId, requestId]
+      );
+    }
+  }
+
+  /**
+   * The award as it stands, in the shape _resolveAward takes — used when a
+   * resubmission keeps the existing choice. Returns null when there is none,
+   * or when an item points at a quotation that is no longer selected (it was
+   * deleted), so the officer is made to choose again.
+   */
+  async _currentAward(requestId) {
+    const selected = await query(
+      'SELECT id, awarded_amount FROM proc_quotations WHERE request_id = ? AND is_selected = TRUE',
+      [requestId]
+    );
+    if (!selected.length) return null;
+    if (selected.length === 1 && selected[0].awarded_amount == null) {
+      return { quotationId: selected[0].id };
+    }
+    const selectedIds = new Set(selected.map((q) => q.id));
+    const items = await query(
+      'SELECT id, actual_quotation_id FROM proc_request_items WHERE request_id = ?',
+      [requestId]
+    );
+    if (items.some((i) => i.actual_quotation_id != null && !selectedIds.has(i.actual_quotation_id))) {
+      return null;
+    }
+    return {
+      awards: items.map((i) => ({ request_item_id: i.id, quotation_id: i.actual_quotation_id }))
+    };
+  }
+
+  /**
+   * After a quotation in a split award is amended, restate the items it won
+   * from its new lines and re-total its share. A line it no longer offers
+   * leaves the item unpriced rather than carrying a superseded figure.
+   */
+  async _refreshSplitAwardLines(conn, requestId, quotationId) {
+    const [items] = await conn.execute(
+      'SELECT id FROM proc_request_items WHERE request_id = ? AND actual_quotation_id = ?',
+      [requestId, quotationId]
+    );
+    const [lines] = await conn.execute(
+      `SELECT request_item_id, quantity, unit_price, is_available
+       FROM proc_quotation_items WHERE quotation_id = ? AND request_item_id IS NOT NULL`,
+      [quotationId]
+    );
+    let total = 0;
+    for (const item of items) {
+      const line = lines.find((l) => l.request_item_id === item.id);
+      const available = line && Number(line.is_available) === 1;
+      const lineTotal = available
+        ? Math.round(Number(line.quantity) * Number(line.unit_price || 0) * 100) / 100
+        : null;
+      if (available) total += lineTotal;
+      await conn.execute(
+        `UPDATE proc_request_items SET actual_unit_price = ?, actual_total = ?, is_available = ?
+          WHERE id = ? AND request_id = ?`,
+        [available ? line.unit_price : null, lineTotal, available ? 1 : 0, item.id, requestId]
+      );
+    }
+    await conn.execute(
+      'UPDATE proc_quotations SET awarded_amount = ? WHERE id = ?',
+      [Math.round(total * 100) / 100, quotationId]
+    );
+  }
+
   async addQuotation(requestId, data, user) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
@@ -1696,6 +2007,12 @@ class ProcurementService {
     }
     const quot = rows[0];
     const [parent] = await query('SELECT status FROM proc_requests WHERE id = ?', [quot.request_id]);
+    // Same window as editing: once a request has left Procurement and the
+    // Committee, its bids are the record of what was decided. Recall it to
+    // Procurement first to change them.
+    if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(parent?.status)) {
+      throw new Error('Quotations can only be deleted while the request is in the procurement or committee-review stage');
+    }
     await query('DELETE FROM proc_quotations WHERE id = ?', [quotationId]);
     // No transaction on this path, so the log is written after the delete — a
     // failed delete must not leave a phantom entry on the trail.
@@ -1716,7 +2033,7 @@ class ProcurementService {
       throw new Error('Only Procurement Officers can edit quotations');
     }
     if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(quot.request_status)) {
-      throw new Error('Quotations can only be edited while the request is in the procurement or committee-review stage');
+      throw new Error('Quotations can only be edited while the request is in the procurement or committee-review stage. Recall it to Procurement first to amend it');
     }
     // Amended lines replace the previous ones wholesale, and the header total
     // follows them. Sending no `items` at all leaves the existing lines alone,
@@ -1757,10 +2074,13 @@ class ProcurementService {
       await conn.execute(sql, params);
       if (items) {
         await this.replaceQuotationItems(conn, quotationId, items);
-        // If this quotation is already the selected one, the actuals carried on
-        // the requested items were taken from the lines just replaced, so they
-        // are restated here rather than left pointing at superseded prices.
-        if (quot.is_selected) {
+        // If this quotation is already selected, the actuals carried on the
+        // requested items were taken from the lines just replaced, so they are
+        // restated here rather than left pointing at superseded prices. In a
+        // split award only the items this supplier won are touched.
+        if (quot.is_selected && quot.awarded_amount != null) {
+          await this._refreshSplitAwardLines(conn, quot.request_id, quotationId);
+        } else if (quot.is_selected) {
           await this.applyQuotationActuals(conn, quot.request_id, quotationId);
         }
       }
@@ -1794,7 +2114,7 @@ class ProcurementService {
     });
   }
 
-  async resubmitToCommittee(requestId, selectedQuotationId, user, comments = '') {
+  async resubmitToCommittee(requestId, selectedQuotationId, user, comments = '', awards = null) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
     if (req.status !== 'PENDING_COMMITTEE') {
@@ -1810,37 +2130,27 @@ class ProcurementService {
       throw new Error('At least one quotation must exist before resubmitting');
     }
 
-    // Leaving the choice out means "keep the one already selected" — an
+    // Leaving the choice out means "keep the award already made" — an
     // amendment usually corrects a price, not the supplier. Either way the
-    // Committee must be given a fully priced bid, exactly as on first
+    // Committee must be given fully priced bids, exactly as on first
     // submission.
-    const [alreadySelected] = await query(
-      'SELECT id FROM proc_quotations WHERE request_id = ? AND is_selected = TRUE LIMIT 1',
-      [requestId]
-    );
-    const quotationId = selectedQuotationId || alreadySelected?.id || null;
-    if (!quotationId) {
-      throw new Error('Choose the recommended quotation before resubmitting to the Committee');
+    let quotationId = selectedQuotationId;
+    let itemAwards = Array.isArray(awards) && awards.length ? awards : null;
+    if (!quotationId && !itemAwards) {
+      const existing = await this._currentAward(requestId);
+      quotationId = existing?.quotationId || null;
+      itemAwards = existing?.awards || null;
     }
-    const belongs = await query(
-      'SELECT id FROM proc_quotations WHERE id = ? AND request_id = ?',
-      [quotationId, requestId]
+    const award = await this._resolveAward(
+      requestId, quotationId, itemAwards,
+      'Choose the recommended quotation before resubmitting to the Committee'
     );
-    if (!belongs.length) {
-      throw new Error('The selected quotation does not belong to this request');
-    }
-    await this.assertQuotationIsPriced(requestId, quotationId);
 
     return transaction(async (conn) => {
       // Reset existing committee votes so members can vote afresh on the revised quotations
       await conn.execute('DELETE FROM proc_committee_votes WHERE request_id = ?', [requestId]);
 
-      await conn.execute('UPDATE proc_quotations SET is_selected=FALSE WHERE request_id=?', [requestId]);
-      await conn.execute(
-        'UPDATE proc_quotations SET is_selected=TRUE, selected_at=NOW(), selected_by=? WHERE id=? AND request_id=?',
-        [user.id, quotationId, requestId]
-      );
-      await this.applyQuotationActuals(conn, requestId, quotationId);
+      await this._applyAward(conn, requestId, award, user);
 
       // Keep status as PENDING_COMMITTEE but log the amendment
       await conn.execute(
@@ -1850,7 +2160,8 @@ class ProcurementService {
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
          VALUES (?, ?, ?, 'RESUBMITTED_TO_COMMITTEE', 'PENDING_COMMITTEE', 'PENDING_COMMITTEE', ?)`,
-        [requestId, user.id, user.role, comments || 'Quotations amended and resubmitted to committee for review']
+        [requestId, user.id, user.role,
+         (comments || 'Quotations amended and resubmitted to committee for review') + (award.split ? `. ${award.summary}` : '')]
       );
       return { success: true };
     });
@@ -1962,7 +2273,7 @@ class ProcurementService {
       `SELECT v.*,
         u.first_name AS created_by_first_name, u.last_name AS created_by_last_name,
         (SELECT COUNT(*) FROM proc_quotations pq WHERE pq.vendor_id = v.id) AS quotation_count,
-        (SELECT SUM(pq.total_amount) FROM proc_quotations pq 
+        (SELECT SUM(${AWARDED_VALUE_SQL('pq')}) FROM proc_quotations pq
          JOIN proc_requests pr ON pq.request_id = pr.id
          WHERE pq.vendor_id = v.id AND pq.is_selected = TRUE AND pr.status = 'COMPLETED') AS total_awarded
        FROM proc_vendors v
@@ -2033,7 +2344,7 @@ class ProcurementService {
     statusCounts.forEach(r => { statusMap[r.status] = parseInt(r.count); });
 
     const [totalSpend] = await query(
-      `SELECT COALESCE(SUM(pq.total_amount),0) AS total
+      `SELECT COALESCE(SUM(${AWARDED_VALUE_SQL('pq')}),0) AS total
        FROM proc_quotations pq
        JOIN proc_requests pr ON pq.request_id = pr.id
        WHERE pq.is_selected = TRUE AND pr.status = 'COMPLETED'
@@ -2262,7 +2573,7 @@ class ProcurementService {
               COUNT(*)                                        AS quotations_submitted,
               SUM(q.is_selected = 1)                          AS quotations_won,
               ROUND(COALESCE(SUM(q.is_selected = 1) / NULLIF(COUNT(*), 0) * 100, 0), 1) AS win_rate,
-              COALESCE(SUM(CASE WHEN q.is_selected = 1 THEN q.total_amount END), 0) AS awarded_value,
+              COALESCE(SUM(CASE WHEN q.is_selected = 1 THEN ${AWARDED_VALUE_SQL()} END), 0) AS awarded_value,
               ROUND(AVG(q.total_amount), 2)                   AS avg_quotation_value
          FROM proc_quotations q
          JOIN proc_requests pr  ON pr.id = q.request_id
@@ -2297,17 +2608,23 @@ class ProcurementService {
     );
 
     // ── 9. Savings against estimate ──────────────────────────────────────────
-    // Selected quotation vs. the requester's estimate, per request.
+    // Awarded value vs. the requester's estimate, per request. A split award
+    // is one row: its suppliers' shares added together.
     const savings = await query(
       `SELECT pr.id, pr.request_code, pr.title,
               pr.total_estimated_amount AS estimated,
-              q.total_amount            AS awarded,
-              q.vendor_name,
-              (pr.total_estimated_amount - q.total_amount) AS variance
+              aw.awarded,
+              aw.vendor_name,
+              (pr.total_estimated_amount - aw.awarded) AS variance
          FROM proc_requests pr
-         JOIN proc_quotations q ON q.request_id = pr.id AND q.is_selected = 1
+         JOIN (SELECT q.request_id,
+                      SUM(${AWARDED_VALUE_SQL()}) AS awarded,
+                      GROUP_CONCAT(q.vendor_name ORDER BY q.vendor_name SEPARATOR ', ') AS vendor_name
+                 FROM proc_quotations q
+                WHERE q.is_selected = 1
+                GROUP BY q.request_id) aw ON aw.request_id = pr.id
          ${where}
-        ORDER BY ABS(pr.total_estimated_amount - q.total_amount) DESC
+        ORDER BY ABS(pr.total_estimated_amount - aw.awarded) DESC
         LIMIT 25`,
       P()
     );
@@ -2385,16 +2702,21 @@ class ProcurementService {
     const highValueRequests = await query(
       `SELECT pr.id, pr.request_code, pr.title, pr.status,
               pr.total_estimated_amount,
-              q.total_amount AS selected_quotation_amount,
-              q.vendor_name,
+              aw.awarded AS selected_quotation_amount,
+              aw.vendor_name,
               d.department_code, don.donor_code
          FROM proc_requests pr
-         LEFT JOIN proc_quotations q ON q.request_id = pr.id AND q.is_selected = 1
+         LEFT JOIN (SELECT q.request_id,
+                           SUM(${AWARDED_VALUE_SQL()}) AS awarded,
+                           GROUP_CONCAT(q.vendor_name ORDER BY q.vendor_name SEPARATOR ', ') AS vendor_name
+                      FROM proc_quotations q
+                     WHERE q.is_selected = 1
+                     GROUP BY q.request_id) aw ON aw.request_id = pr.id
          JOIN departments d ON d.id = pr.department_id
          LEFT JOIN donors don ON don.id = pr.donor_id
          ${where}
-         ${where ? 'AND' : 'WHERE'} COALESCE(q.total_amount, pr.total_estimated_amount) >= 5000
-        ORDER BY COALESCE(q.total_amount, pr.total_estimated_amount) DESC
+         ${where ? 'AND' : 'WHERE'} COALESCE(aw.awarded, pr.total_estimated_amount) >= 5000
+        ORDER BY COALESCE(aw.awarded, pr.total_estimated_amount) DESC
         LIMIT 50`,
       P()
     );

@@ -200,20 +200,39 @@ export const downloadHTMLAsPDF = (htmlString: string, filename: string): void =>
 };
 
 /**
+ * The Purchase Orders a request produces: one, or — when the items were split
+ * between suppliers — one per supplier, each listing only what that supplier
+ * was awarded. `suffix` distinguishes them in the PO number and file name.
+ */
+export const buildPurchaseOrders = (request: any): { html: string; suffix: string }[] => {
+  const selected: any[] = (request.quotations || []).filter((q: any) => q.is_selected);
+  if (selected.length <= 1) return [{ html: buildPurchaseOrderHTML(request), suffix: '' }];
+  return selected.map((q: any, i: number) => ({
+    html: buildPurchaseOrderHTML(request, q, `-${i + 1}`),
+    suffix: `-${i + 1}`,
+  }));
+};
+
+/**
  * Single source of truth for the Purchase Order PDF.
  * Every PO in the system renders through this so the layout cannot drift
  * between the list, the detail page and the approvals desk.
+ *
+ * `supplierQuotation` narrows the order to one supplier of a split award.
  */
-export const buildPurchaseOrderHTML = (request: any): string => {
-  const items: any[] = request.items || [];
+export const buildPurchaseOrderHTML = (request: any, supplierQuotation?: any, poSuffix = ''): string => {
   const quotations: any[] = request.quotations || [];
-  const selectedQuot: any = quotations.find((q: any) => q.is_selected);
-  const reqCode = request.request_code;
+  const selectedQuot: any = supplierQuotation || quotations.find((q: any) => q.is_selected);
+  const items: any[] = supplierQuotation
+    ? (request.items || []).filter((it: any) => Number(it.actual_quotation_id) === Number(supplierQuotation.id))
+    : (request.items || []);
+  const reqCode = `${request.request_code}${poSuffix}`;
 
   const poDate = formatDate(request.final_finance_approved_at || new Date(), { long: true });
 
+  // A supplier in a split award is paid only for the lines they won.
   const totalAmount = selectedQuot
-    ? Number(selectedQuot.total_amount || 0)
+    ? Number(selectedQuot.awarded_amount ?? selectedQuot.total_amount ?? 0)
     : items.reduce((s: number, it: any) => s + Number(it.quantity || 1) * Number(it.estimated_unit_price || 0), 0);
 
   // The order is placed at the selected supplier's quoted price. Those prices

@@ -28,6 +28,30 @@ export interface LeadDeskBacklog {
   isBlocked: boolean;
 }
 
+/** A reconciliation that has sat on the Finance desk past the limit. */
+export interface OverdueFinanceReconciliation {
+  request_id: number;
+  request_code: string;
+  total_amount: number;
+  department_code: string;
+  requester_name: string;
+  /** When it reached the Finance desk. */
+  finance_desk_since: string;
+  days_on_desk: number;
+}
+
+/** Shape of GET /reconciliations/finance-desk-backlog. */
+export interface FinanceDeskBacklog {
+  items: OverdueFinanceReconciliation[];
+  staleCount: number;
+  /** Days on the Finance desk after which a reconciliation is overdue. */
+  thresholdDays: number;
+  /** The rule binds Finance Clerks only. */
+  appliesToUser: boolean;
+  /** True when this user's float approvals are on hold. */
+  isBlocked: boolean;
+}
+
 export const reconciliationService = {
   /**
    * Get dispatched requests for current user (to reconcile)
@@ -198,6 +222,16 @@ export const reconciliationService = {
    */
   async getLeadDeskBacklog(): Promise<LeadDeskBacklog> {
     const response = await api.get('/reconciliations/lead-desk-backlog');
+    return response.data.data;
+  },
+
+  /**
+   * Reconciliations overdue on the Finance desk. While there are any, Finance
+   * Clerks cannot approve floats (they can still reject and dispatch); only the
+   * Finance Lead / Head of Department can.
+   */
+  async getFinanceDeskBacklog(): Promise<FinanceDeskBacklog> {
+    const response = await api.get('/reconciliations/finance-desk-backlog');
     return response.data.data;
   },
 

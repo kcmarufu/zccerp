@@ -259,6 +259,24 @@ const isAdminHrManager = (user) => {
 };
 
 /**
+ * The programme departments' Leads and Heads of Department do not see the
+ * vendor database — supplier records are for Procurement, Finance and Admin/HR.
+ */
+const VENDOR_DB_EXCLUDED_DEPT_CODES = ['CPJS', 'HSD'];
+
+const canViewVendorDatabase = (user) => {
+  if (!user) return false;
+  if ([ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role)) {
+    return !VENDOR_DB_EXCLUDED_DEPT_CODES.includes(user.department_code);
+  }
+  return [ROLES.ADMIN, ROLES.PROCUREMENT_OFFICER, ROLES.FINANCE_CLERK].includes(user.role);
+};
+
+/** Adding, editing and deactivating vendors. Finance Clerks only read. */
+const canManageVendors = (user) =>
+  canViewVendorDatabase(user) && user.role !== ROLES.FINANCE_CLERK;
+
+/**
  * HR module access levels.
  *
  *   FULL       — Super Admin, and the HOP/Lead of Admin & HR (the HR Office).
@@ -444,6 +462,8 @@ module.exports = {
   hasPermission,
   isFinanceManager,
   isAdminHrManager,
+  canViewVendorDatabase,
+  canManageVendors,
   isGsTrackRole,
   gsTrackRequesterSql,
   HR_ACCESS,

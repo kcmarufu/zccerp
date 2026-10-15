@@ -1257,7 +1257,8 @@ ${buildClaimPage()}
               </Typography>
             ) : (
               <Box>
-                {(showAllApprovalLogs ? approvalLogs : approvalLogs.slice(0, 2)).map((log, index) => {
+                {/* Latest action first, so the collapsed view shows the two most recent. */}
+                {(showAllApprovalLogs ? [...approvalLogs].reverse() : [...approvalLogs].reverse().slice(0, 2)).map((log, index) => {
                   const getActionColor = (action: string): 'success' | 'error' | 'warning' | 'info' | 'default' => {
                     if (action === 'APPROVED' || action === 'APPROVE') return 'success';
                     if (action === 'REJECTED' || action === 'REJECT') return 'error';

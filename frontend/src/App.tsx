@@ -17,6 +17,8 @@ import ProtectedRoute from './components/common/ProtectedRoute';
 import { HrOfficeRoute, HrOversightRoute } from './components/common/HrRoutes';
 import { TimesheetOfficeRoute, TimesheetOversightRoute } from './components/common/TimesheetRoutes';
 import { TIMESHEETS_ENABLED } from './utils/timesheetAccess';
+import { canViewVendorDatabase } from './utils/vendorAccess';
+import { useAuthStore } from './store/authStore';
 import InactivityTimer from './components/common/InactivityTimer';
 
 // Pages
@@ -151,6 +153,12 @@ const HR_APPROVERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS'];
  * key the form would carry the previous request's state — including its travel
  * claim — into the next one. Keying on the id guarantees a fresh form.
  */
+/** The vendor database is closed to the HOP/Lead of CPJS and HSD. */
+const VendorRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const user = useAuthStore((state) => state.user);
+  return canViewVendorDatabase(user) ? <>{children}</> : <Navigate to="/unauthorized" replace />;
+};
+
 const KeyedRequestForm: React.FC = () => {
   const { requestId } = useParams<{ requestId: string }>();
   return <RequestForm key={requestId || 'new'} />;
@@ -254,7 +262,7 @@ const App: React.FC = () => {
                           reports; the server narrows the figures per role. */}
                       <Route path="/procurement/reports" element={<ProcurementReportsPage />} />
                       <Route path="/reports/procurement" element={<ProcurementReportsPage />} />
-                      <Route path="/procurement/vendors" element={<ProtectedRoute allowedRoles={['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'] as UserRole[]}><VendorDatabase /></ProtectedRoute>} />
+                      <Route path="/procurement/vendors" element={<ProtectedRoute allowedRoles={['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'] as UserRole[]}><VendorRoute><VendorDatabase /></VendorRoute></ProtectedRoute>} />
 
                       <Route path="/grants" element={<ComingSoonPage module="Grants & Partners" />} />
                       <Route path="/grants/*" element={<ComingSoonPage module="Grants & Partners" />} />

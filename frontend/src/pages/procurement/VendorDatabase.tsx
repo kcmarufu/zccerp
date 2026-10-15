@@ -30,6 +30,7 @@ import * as XLSX from 'xlsx';
 import { downloadHTMLAsPDF } from '../../utils/pdfUtils';
 import { useAuthStore } from '../../store/authStore';
 import { getVendors, createVendor, updateVendor, deleteVendor } from '../../services/procurementService';
+import { canManageVendors } from '../../utils/vendorAccess';
 import { ProcVendor } from '../../types';
 import { formatDate } from '../../utils/datetime';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
@@ -44,7 +45,7 @@ const emptyVendor = (): Partial<ProcVendor> => ({
 
 const VendorDatabase: React.FC = () => {
   const theme = useTheme();
-  const { hasPermission, hasRole } = useAuthStore();
+  const { user } = useAuthStore();
   const qc = useQueryClient();
 
   const [search, setSearch] = useState('');
@@ -60,7 +61,8 @@ const VendorDatabase: React.FC = () => {
   const [rowsPerPage, setRowsPerPage] = useState(15);
 
   // HOP, LEAD, Procurement Officer, and Admin can manage vendors
-  const canManage = hasPermission('manage_vendors') || hasRole('HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'PROCUREMENT_OFFICER', 'ADMIN');
+  // Same rule the API enforces on create / update / deactivate.
+  const canManage = canManageVendors(user);
 
   const { data: vendors = [], isLoading, error, refetch } = useQuery({
     queryKey: ['proc-vendors', search, categoryFilter, prequalFilter],

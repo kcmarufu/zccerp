@@ -4,6 +4,7 @@
  *
  * PROGRAM_LEAD / HEAD_OF_PROGRAMS  → PENDING_DEPT_APPROVAL
  * FINANCE_CLERK                     → PENDING_FINANCE_APPROVAL + PENDING_FINAL_FINANCE
+ * Finance's own LEAD / HOD           → as a Finance Clerk, plus the high-value seat
  * PROCUREMENT_OFFICER               → PENDING_PROCUREMENT  (upload quotations, submit to committee)
  * PROCUREMENT_COMMITTEE             → PENDING_COMMITTEE
  * ADMIN                             → all pending statuses
@@ -59,7 +60,7 @@ import {
 } from '../../services/procurementService';
 import { ProcRequest } from '../../types';
 import api from '../../services/api';
-import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
+import { downloadHTMLAsPDF, buildPurchaseOrders } from '../../utils/pdfUtils';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
 import { formatRoleLabel } from '../../utils/roleUtils';
 import { usePersistentState } from '../../utils/navigationState';
@@ -99,11 +100,13 @@ const getRoleTabs = (role: string, isAdminHr: boolean = false, isFinanceLead: bo
         ];
       }
       // Only Finance's Lead / Head of Department holds the second high-value
-      // seat, so only they get the queue for it.
+      // seat, so only they get the queue for it. They also hold every power
+      // the Finance Clerk has at the Finance desk.
       return [
         { label: 'Awaiting My Approval', status: 'PENDING_DEPT_APPROVAL', actedOn: false },
         ...(isFinanceLead
           ? [
+              { label: 'Final Finance Approval', status: 'PENDING_FINAL_FINANCE', actedOn: false },
               { label: 'High-Value Approval', status: 'PENDING_HIGH_VALUE_APPROVAL', actedOn: false },
               // Heads of Department's requests with the General Secretary — view only.
               { label: 'Awaiting GS (view only)', status: 'PENDING_GS_APPROVAL', actedOn: false }
@@ -262,8 +265,9 @@ const ProcurementApprovalsPage: React.FC = () => {
     try {
       const request = await getPurchaseRequestById(String(requestId)) as any;
       if (!request) { toast.error('Could not load request details'); return; }
-      const html = buildPurchaseOrderHTML(request);
-      downloadHTMLAsPDF(html, `PO-${request.request_code}-${format(new Date(), 'yyyy-MM-dd')}`);
+      // A split award produces one order per supplier.
+      buildPurchaseOrders(request).forEach(({ html, suffix }) =>
+        downloadHTMLAsPDF(html, `PO-${request.request_code}${suffix}-${format(new Date(), 'yyyy-MM-dd')}`));
     } catch {
       toast.error('Failed to generate Purchase Order PDF');
     } finally {
@@ -400,7 +404,7 @@ const ProcurementApprovalsPage: React.FC = () => {
       }
     }
 
-    if (role === 'FINANCE_CLERK') {
+    if (role === 'FINANCE_CLERK' || isFinanceLead) {
       if (req.status === 'PENDING_FINAL_FINANCE') {
         btns.push(
           <Button key="finalapprove" size="small" variant="contained" color="success" startIcon={<ApproveIcon />}

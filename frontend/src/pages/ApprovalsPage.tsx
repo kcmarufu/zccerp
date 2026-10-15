@@ -83,7 +83,7 @@ import attachmentService from '../services/attachmentService';
 import perDiemService from '../services/perDiemService';
 import { useAuthStore } from '../store/authStore';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
-import { reconciliationService, LeadDeskBacklog } from '../services/reconciliationService';
+import { reconciliationService, LeadDeskBacklog, FinanceDeskBacklog } from '../services/reconciliationService';
 import { formatRoleLabel } from '../utils/roleUtils';
 import { usePersistentState } from '../utils/navigationState';
 
@@ -182,7 +182,15 @@ const ApprovalsPage: React.FC = () => {
   // their review desk loses the right to approve floats until they clear them —
   // the server enforces this, the UI here explains it before they try.
   const [reconBacklog, setReconBacklog] = useState<LeadDeskBacklog | null>(null);
-  const approvalsBlocked = Boolean(reconBacklog?.isBlocked);
+  // The Finance desk rule: any reconciliation overdue with Finance puts Finance
+  // Clerks' float approvals on hold; the Finance Lead / HOD approves meanwhile.
+  const [financeBacklog, setFinanceBacklog] = useState<FinanceDeskBacklog | null>(null);
+  const leadDeskBlocked = Boolean(reconBacklog?.isBlocked);
+  const financeDeskBlocked = Boolean(financeBacklog?.isBlocked);
+  const approvalsBlocked = leadDeskBlocked || financeDeskBlocked;
+  const approvalsBlockedReason = financeDeskBlocked
+    ? `Approvals on hold — ${financeBacklog?.staleCount} reconciliation(s) have been on the Finance desk for more than ${financeBacklog?.thresholdDays} days. You can still reject and dispatch; only the Finance Lead / Head of Department can approve until they are cleared.`
+    : `Approvals on hold — ${reconBacklog?.staleCount} reconciliations have been awaiting your review for ${reconBacklog?.workingDays}+ working days. Clear them in the Reconciliation module.`;
 
   useEffect(() => {
     fetchAllData();
@@ -217,7 +225,12 @@ const ApprovalsPage: React.FC = () => {
 
   const fetchReconBacklog = async () => {
     try {
-      setReconBacklog(await reconciliationService.getLeadDeskBacklog());
+      const [lead, finance] = await Promise.all([
+        reconciliationService.getLeadDeskBacklog(),
+        reconciliationService.getFinanceDeskBacklog(),
+      ]);
+      setReconBacklog(lead);
+      setFinanceBacklog(finance);
     } catch (error) {
       // Never let this fail the page — a missing backlog reads as "not blocked",
       // and the server refuses the approval anyway if it is wrong.
@@ -832,7 +845,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                           </Tooltip>
                         )}
                         {approvalsBlocked && (
-                          <Tooltip title={`Approvals on hold — ${reconBacklog?.staleCount} reconciliations have been awaiting your review for ${reconBacklog?.workingDays}+ working days. Clear them in the Reconciliation module.`}>
+                          <Tooltip title={approvalsBlockedReason}>
                             <span>
                               <IconButton size="small" disabled>
                                 <ApproveIcon />
@@ -957,6 +970,46 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 color={reconBacklog.isBlocked ? 'error' : 'warning'}
                 variant="outlined"
                 label={`${item.request_code} · ${item.requester_name} · ${item.working_days_on_desk} working days`}
+              />
+            ))}
+          </Box>
+        </Alert>
+      )}
+
+      {/* Finance desk rule — overdue reconciliations with Finance. Clerks are
+          blocked from approving; the Finance Lead / HOD is told they are the
+          only ones who can approve until the desk is cleared. */}
+      {financeBacklog && financeBacklog.staleCount > 0 && (financeBacklog.appliesToUser || isFinanceManager) && (
+        <Alert
+          severity={financeBacklog.isBlocked ? 'error' : 'warning'}
+          icon={<ScheduleIcon />}
+          sx={{ mb: 3 }}
+          action={
+            <Button size="small" color="inherit" variant="outlined" onClick={() => navigate('/finance/reconciliation')}>
+              Review Now
+            </Button>
+          }
+        >
+          <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+            {financeBacklog.isBlocked
+              ? 'Float approvals are on hold for Finance Clerks'
+              : `Finance Clerks' float approvals are on hold — you are the approver until the desk is cleared`}
+          </Typography>
+          <Typography variant="body2">
+            <strong>{financeBacklog.staleCount}</strong> reconciliation{financeBacklog.staleCount === 1 ? ' has' : 's have'} been
+            sitting on the Finance desk for more than <strong>{financeBacklog.thresholdDays} days</strong>.
+            {financeBacklog.isBlocked
+              ? ' You can still reject and dispatch requests, but only the Finance Lead / Head of Department can approve floats until every one of these is approved or rejected.'
+              : ' Clearing them restores the Finance Clerks\' approvals.'}
+          </Typography>
+          <Box mt={1} display="flex" flexWrap="wrap" gap={0.5}>
+            {financeBacklog.items.map(item => (
+              <Chip
+                key={item.request_id}
+                size="small"
+                color={financeBacklog.isBlocked ? 'error' : 'warning'}
+                variant="outlined"
+                label={`${item.request_code} · ${item.requester_name} · ${item.days_on_desk} days`}
               />
             ))}
           </Box>
@@ -1462,7 +1515,8 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {(fullRequestDetails as any).approvalTrail.map((log: any, idx: number) => (
+                        {/* Latest action first */}
+                        {[...(fullRequestDetails as any).approvalTrail].reverse().map((log: any, idx: number) => (
                           <TableRow key={log.id || idx} hover>
                             <TableCell sx={{ fontSize: '0.75rem' }}>
                               {format(new Date(log.created_at), 'dd MMM yyyy HH:mm')}
@@ -1503,9 +1557,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
 
               {dialogAction === 'approve' && approvalsBlocked && (
                 <Alert severity="error" sx={{ mb: 2 }}>
-                  <strong>Approvals on hold.</strong> {reconBacklog?.staleCount} reconciliations have been
-                  waiting on your review desk for {reconBacklog?.workingDays} working days or more. Approve or
-                  reject them in the Reconciliation module and your approval rights are restored immediately.
+                  {approvalsBlockedReason}
                 </Alert>
               )}
               {dialogAction === 'reverse' && (

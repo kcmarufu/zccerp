@@ -103,20 +103,36 @@ export const rejectProcurementRequest = async (id: number | string, comments: st
   await api.post(`${BASE}/requests/${id}/reject`, { comments });
 };
 
+/**
+ * One requested item and the quotation it is awarded to — a split award sends
+ * one of these per item. quotation_id null: no supplier can provide it.
+ */
+export interface ItemAward {
+  request_item_id: number;
+  quotation_id: number | null;
+}
+
 export const submitToCommittee = async (
   id: number | string,
   selected_quotation_id?: number | null,
-  comments?: string
+  comments?: string,
+  awards?: ItemAward[] | null
 ): Promise<void> => {
-  await api.post(`${BASE}/requests/${id}/submit-committee`, { selected_quotation_id, comments });
+  await api.post(`${BASE}/requests/${id}/submit-committee`, { selected_quotation_id, comments, awards });
 };
 
 export const resubmitToCommittee = async (
   id: number | string,
   selected_quotation_id?: number | null,
-  comments?: string
+  comments?: string,
+  awards?: ItemAward[] | null
 ): Promise<void> => {
-  await api.post(`${BASE}/requests/${id}/resubmit-committee`, { selected_quotation_id, comments });
+  await api.post(`${BASE}/requests/${id}/resubmit-committee`, { selected_quotation_id, comments, awards });
+};
+
+/** Take a request back from the Committee / Finance to amend the quotations or award. */
+export const recallToProcurement = async (id: number | string, reason: string): Promise<void> => {
+  await api.post(`${BASE}/requests/${id}/recall`, { reason });
 };
 
 export const committeeDecision = async (

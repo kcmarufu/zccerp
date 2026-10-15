@@ -1260,6 +1260,11 @@ export interface ProcQuotation {
   validity_date?: string | null; // used in some pages
   delivery_timeline?: string | null; // used in some pages
   is_selected: boolean;
+  /**
+   * Set when only some of this quotation's lines were awarded (a split award):
+   * the value of those lines. Null when the whole quotation was selected.
+   */
+  awarded_amount?: number | string | null;
   is_prequalified?: boolean;    // used in some pages
   notes?: string | null;
   uploaded_by: number;

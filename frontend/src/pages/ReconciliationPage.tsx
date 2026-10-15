@@ -45,7 +45,7 @@ import { stickyActionCell, stickyActionHeadCell, fitTable, numericCell } from '.
 import * as XLSX from 'xlsx';
 
 import { useAuthStore } from '../store/authStore';
-import { reconciliationService, LeadDeskBacklog } from '../services/reconciliationService';
+import { reconciliationService, LeadDeskBacklog, FinanceDeskBacklog } from '../services/reconciliationService';
 import { requestService } from '../services/requestService';
 import attachmentService from '../services/attachmentService';
 import { Request, RequestItem } from '../types';
@@ -255,6 +255,27 @@ const DeskAge: React.FC<{ days?: number | null; staleAfter: number }> = ({ days,
       color={isStale ? 'error' : days >= staleAfter - 1 ? 'warning' : 'default'}
       icon={isStale ? <WarningIcon /> : undefined}
       label={`${days} working day${days !== 1 ? 's' : ''}`}
+    />
+  );
+};
+
+/**
+ * How long a reconciliation has been waiting on the Finance desk, from the
+ * moment it reached Finance. Past `thresholdDays` it is overdue, and while any
+ * reconciliation is overdue Finance Clerks cannot approve floats.
+ */
+const FinanceDeskAge: React.FC<{ hours?: number | string | null; thresholdDays: number }> = ({ hours, thresholdDays }) => {
+  if (hours == null) return <Typography variant="caption" color="text.secondary">—</Typography>;
+  const h = Number(hours);
+  const days = Math.floor(h / 24);
+  const overdue = h >= thresholdDays * 24;
+  return (
+    <Chip
+      size="small"
+      variant={overdue ? 'filled' : 'outlined'}
+      color={overdue ? 'error' : h >= (thresholdDays - 1) * 24 ? 'warning' : 'default'}
+      icon={overdue ? <WarningIcon /> : undefined}
+      label={days >= 1 ? `${days} day${days !== 1 ? 's' : ''}` : `${h} hour${h !== 1 ? 's' : ''}`}
     />
   );
 };
@@ -579,6 +600,10 @@ ${buildDigitalStamp('')}
   const staleAfter = leadBacklog?.workingDays ?? 4;
   const [leadHistory, setLeadHistory] = useState<any[]>([]);
   const [pendingReviews, setPendingReviews] = useState<any[]>([]);
+  // Overdue reconciliations on the Finance desk — the server's figures, so the
+  // queue and the approval block agree on the threshold.
+  const [financeBacklog, setFinanceBacklog] = useState<FinanceDeskBacklog | null>(null);
+  const financeThresholdDays = financeBacklog?.thresholdDays ?? 2;
   const [history, setHistory] = useState<any[]>([]);
   const [financeReviewHistory, setFinanceReviewHistory] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -703,6 +728,9 @@ ${buildDigitalStamp('')}
             const res = await reconciliationService.getPendingReconciliations();
             if (res.success && res.data) setPendingReviews(res.data);
           }
+        }, {
+          label: 'finance desk backlog',
+          run: async () => { setFinanceBacklog(await reconciliationService.getFinanceDeskBacklog()); }
         });
       }
 
@@ -2056,6 +2084,20 @@ ${buildDigitalStamp('')}
             )
           ) : (
           <>
+          {/* Finance desk rule — the same figures the approval gate enforces. */}
+          {financeBacklog && financeBacklog.staleCount > 0 && (
+            <Alert severity={financeBacklog.isBlocked ? 'error' : 'warning'} icon={<WarningIcon />} sx={{ m: 2, mb: 0 }}>
+              <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+                {financeBacklog.staleCount} reconciliation{financeBacklog.staleCount === 1 ? ' has' : 's have'} been
+                waiting on the Finance desk for more than {financeBacklog.thresholdDays} days
+              </Typography>
+              <Typography variant="body2">
+                {financeBacklog.isBlocked
+                  ? 'Your float approvals are on hold until these are approved or rejected. You can still reject and dispatch requests; meanwhile only the Finance Lead / Head of Department can approve floats.'
+                  : 'Finance Clerks cannot approve float requests until these are cleared — only the Finance Lead / Head of Department can approve in the meantime.'}
+              </Typography>
+            </Alert>
+          )}
           {/* Filters */}
           <Box p={2} borderBottom={`1px solid ${theme.palette.divider}`}>
             <Grid container spacing={2} alignItems="center">
@@ -2131,6 +2173,7 @@ ${buildDigitalStamp('')}
                     <TableCell sx={{ fontWeight: 600 }}>Spent</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Returned</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Submitted</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Waiting On You</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Timeliness</TableCell>
                     <TableCell sx={{ fontWeight: 600, ...stickyActionHeadCell('grey.50') }} align="center">Actions</TableCell>
                   </TableRow>
@@ -2148,7 +2191,13 @@ ${buildDigitalStamp('')}
                       return true;
                     })
                     .map((req) => (
-                    <TableRow key={req.id} hover>
+                    <TableRow
+                      key={req.id}
+                      hover
+                      sx={Number(req.hours_on_finance_desk) >= financeThresholdDays * 24
+                        ? { backgroundColor: alpha(theme.palette.error.main, 0.06) }
+                        : undefined}
+                    >
                       <TableCell><Typography fontWeight={500}>{req.request_code}</Typography></TableCell>
                       <TableCell>{req.requester_first_name} {req.requester_last_name}</TableCell>
                       <TableCell><Chip label={req.department_code} size="small" variant="outlined" /></TableCell>
@@ -2156,6 +2205,11 @@ ${buildDigitalStamp('')}
                       <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>${Number(req.total_spent || 0).toLocaleString()}</TableCell>
                       <TableCell><ReturnedAmount row={req} /></TableCell>
                       <TableCell>{req.reconciliation_submitted_at ? format(new Date(req.reconciliation_submitted_at), 'MMM d, yyyy') : '-'}</TableCell>
+                      <TableCell>
+                        <Tooltip title={req.finance_desk_since ? `On the Finance desk since ${format(new Date(req.finance_desk_since), 'dd MMM yyyy HH:mm')}` : ''}>
+                          <span><FinanceDeskAge hours={req.hours_on_finance_desk} thresholdDays={financeThresholdDays} /></span>
+                        </Tooltip>
+                      </TableCell>
                       <TableCell><SubmissionTimeliness timeliness={req.submission_timeliness} days={req.working_days_taken} /></TableCell>
                       <TableCell align="center" sx={{ ...stickyActionCell() }}>
                         {req.status === 'RECON_PENDING_FINANCE' ? (

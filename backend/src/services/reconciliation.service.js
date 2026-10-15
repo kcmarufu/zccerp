@@ -271,6 +271,26 @@ const STALE_LEAD_RECON_LIMIT = 2;
 const LEAD_DESK_ROLES = [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
 
 /**
+ * The Finance desk rule. Once ANY reconciliation has sat with Finance for more
+ * than two days, Finance Clerks may no longer approve float requests — they can
+ * still reject and dispatch — until every overdue reconciliation is cleared.
+ * Meanwhile only the Finance Lead / Head of Department (and the Super Admin)
+ * can approve floats at the Finance stage.
+ *
+ * The desk is shared, so the backlog is the whole desk's, not one clerk's. The
+ * clock starts when the reconciliation reached Finance — the last time the
+ * request moved to RECON_PENDING_FINANCE — not when the requester submitted
+ * it, so time spent with the Lead/HOD is not charged to Finance.
+ */
+const FINANCE_DESK_STALE_HOURS = 48;
+
+/** When the reconciliation on request `r` / reconciliation `rec` reached Finance. */
+const FINANCE_DESK_SINCE_SQL = `COALESCE(
+  (SELECT MAX(fal.created_at) FROM approval_logs fal
+    WHERE fal.request_id = r.id AND fal.new_status = 'RECON_PENDING_FINANCE'),
+  rec.created_at)`;
+
+/**
  * The department scoping for a Lead/HOP's reconciliation review desk.
  *
  * Extracted so the queue (getPendingLeadReconciliations), the ageing figures it
@@ -1317,6 +1337,81 @@ class ReconciliationService {
   }
 
   /**
+   * Reconciliations that have sat on the Finance desk for more than
+   * FINANCE_DESK_STALE_HOURS. One is enough to put Finance Clerks' float
+   * approvals on hold — see FINANCE_DESK_STALE_HOURS.
+   */
+  async getFinanceDeskBacklog(connection = null) {
+    const run = connection
+      ? async (sql, params) => (await connection.execute(sql, params))[0]
+      : query;
+
+    const items = await run(
+      `SELECT t.* FROM (
+         SELECT r.id AS request_id,
+                r.request_code,
+                r.total_amount,
+                d.department_code,
+                CONCAT(u.first_name, ' ', u.last_name) AS requester_name,
+                ${FINANCE_DESK_SINCE_SQL} AS finance_desk_since
+         FROM requests r
+         JOIN users u ON r.requester_id = u.id
+         JOIN departments d ON r.department_id = d.id
+         JOIN reconciliations rec ON rec.request_id = r.id AND rec.status = 'SUBMITTED'
+         WHERE r.status = ?
+       ) t
+       WHERE TIMESTAMPDIFF(HOUR, t.finance_desk_since, NOW()) >= ?
+       ORDER BY t.finance_desk_since ASC`,
+      [REQUEST_STATUS.RECON_PENDING_FINANCE, FINANCE_DESK_STALE_HOURS]
+    );
+    const now = Date.now();
+    for (const item of items) {
+      item.days_on_desk = Math.floor((now - new Date(item.finance_desk_since).getTime()) / 86400000);
+    }
+    return {
+      items,
+      staleCount: items.length,
+      thresholdDays: FINANCE_DESK_STALE_HOURS / 24,
+      isBlocked: items.length > 0
+    };
+  }
+
+  /**
+   * The backlog as it applies to `user`: only a Finance Clerk is ever blocked by
+   * it. The Finance Lead / Head of Department and the Super Admin are the ones
+   * who keep approving while it lasts, so they always come back clear.
+   */
+  async getFinanceDeskBacklogFor(user, connection = null) {
+    const backlog = await this.getFinanceDeskBacklog(connection);
+    const appliesToUser = user?.role === ROLES.FINANCE_CLERK;
+    return { ...backlog, appliesToUser, isBlocked: appliesToUser && backlog.isBlocked };
+  }
+
+  /**
+   * Throws when this user may not approve a float at the Finance stage because a
+   * reconciliation has been waiting on the Finance desk too long. Rejecting and
+   * dispatching are deliberately not gated.
+   */
+  async assertFinanceDeskClear(user, connection = null) {
+    const backlog = await this.getFinanceDeskBacklogFor(user, connection);
+    if (!backlog.isBlocked) return backlog;
+
+    const shown = backlog.items.slice(0, 3).map(i => i.request_code).join(', ');
+    const rest = backlog.items.length - 3;
+    const err = new Error(
+      `Float approvals are on hold for Finance Clerks: ${backlog.staleCount} reconciliation` +
+      `${backlog.staleCount === 1 ? ' has' : 's have'} been on the Finance desk for more than ` +
+      `${backlog.thresholdDays} days (${shown}${rest > 0 ? ` and ${rest} more` : ''}). ` +
+      `You can still reject and dispatch. Approve or reject those reconciliations to restore approvals — ` +
+      `until then only the Finance Lead / Head of Department can approve floats.`
+    );
+    err.status = 403;
+    err.code = 'FINANCE_RECON_BACKLOG_BLOCKED';
+    err.backlog = backlog;
+    throw err;
+  }
+
+  /**
    * Get reconciliations already approved at lead level (forwarded to finance / completed)
    * Provides audit trail for Lead/HOP of what they have already approved
    */
@@ -1549,7 +1644,10 @@ class ReconciliationService {
               rec.notes as reconciliation_notes,
               rec.created_at as reconciliation_submitted_at,
               rec.submission_timeliness,
-              rec.working_days_taken
+              rec.working_days_taken,
+              -- "Waiting on you": when it reached the Finance desk, and for how long
+              ${FINANCE_DESK_SINCE_SQL} AS finance_desk_since,
+              TIMESTAMPDIFF(HOUR, ${FINANCE_DESK_SINCE_SQL}, NOW()) AS hours_on_finance_desk
        FROM requests r
        JOIN users u ON r.requester_id = u.id
        JOIN departments d ON r.department_id = d.id

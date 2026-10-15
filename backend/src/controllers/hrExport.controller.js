@@ -484,6 +484,7 @@ class HRExportController {
       const reqSheet = workbook.addWorksheet('Leave Requests');
       reqSheet.columns = [
         { header: 'Ref',              key: 'ref',        width: 10 },
+        { header: 'Date Applied',     key: 'createdAt',  width: 18 },
         { header: 'Employee No.',     key: 'empNo',      width: 14 },
         { header: 'Employee',         key: 'employee',   width: 26 },
         { header: 'Department',       key: 'department', width: 22 },
@@ -498,11 +499,11 @@ class HRExportController {
         { header: 'Status',           key: 'status',     width: 13 },
         { header: 'Approved By',      key: 'approver',   width: 24 },
         { header: 'Approved At',      key: 'approvedAt', width: 20 },
-        { header: 'Submitted At',     key: 'createdAt',  width: 20 },
         { header: 'Reason',           key: 'reason',     width: 40 },
         { header: 'Rejection Reason', key: 'rejection',  width: 34 },
       ];
 
+      // Newest application first — getLeaveExportRows already orders them so.
       rows.forEach((r) => {
         reqSheet.addRow({
           ref:        `LV-${String(r.id).padStart(5, '0')}`,

@@ -818,7 +818,7 @@ class ApprovalService {
        JOIN users u ON al.approver_id = u.id
        LEFT JOIN departments d ON u.department_id = d.id
        WHERE al.request_id = ?
-       ORDER BY al.created_at ASC`,
+       ORDER BY al.created_at ASC, al.id ASC`,
       [requestId]
     );
   }

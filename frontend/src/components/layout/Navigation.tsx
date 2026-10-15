@@ -80,6 +80,7 @@ import {
 } from '@mui/icons-material';
 import { useAuthStore } from '../../store/authStore';
 import { hasFullHrAccess, hasHrOversight } from '../../utils/hrAccess';
+import { canViewVendorDatabase } from '../../utils/vendorAccess';
 import {
   hasOrgTimesheetAccess, hasTeamTimesheetAccess, requiresTimesheet, TIMESHEETS_ENABLED,
 } from '../../utils/timesheetAccess';
@@ -282,11 +283,13 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   'PROCUREMENT_OFFICER', 'PROCUREMENT_COMMITTEE', 'ADMIN'] as UserRole[]
         },
         {
-          // Vendor management: Procurement Officer, Admin, and HOP/Lead Admin-HR
+          // Vendor management: Procurement Officer, Admin, and the HOP/Lead of
+          // Admin-HR and Finance — not those of CPJS or HSD.
           path: '/procurement/vendors',
           label: 'Vendor Database',
           icon: <StakeholdersIcon />,
-          roles: ['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'] as UserRole[]
+          roles: ['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'] as UserRole[],
+          condition: () => canViewVendorDatabase(user)
         },
         {
           // Same permission gate as the financial reports; the server narrows the

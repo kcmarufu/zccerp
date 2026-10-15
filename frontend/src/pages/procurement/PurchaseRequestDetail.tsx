@@ -46,6 +46,7 @@ import {
   rejectProcurementRequest,
   submitToCommittee,
   resubmitToCommittee,
+  recallToProcurement,
   committeeDecision,
   finalFinanceApproval,
   uploadQuotation,
@@ -73,7 +74,7 @@ import {
   viewProofOfPayment
 } from '../../services/procurementService';
 import { ProcQuotation, ProcQuotationItem, ProcRequestItem, ProcVendor } from '../../types';
-import { downloadHTMLAsPDF, buildPurchaseOrderHTML } from '../../utils/pdfUtils';
+import { downloadHTMLAsPDF, buildPurchaseOrders } from '../../utils/pdfUtils';
 import { formatRoleLabel } from '../../utils/roleUtils';
 import { useGoBack } from '../../utils/navigationState';
 import * as XLSX from 'xlsx';
@@ -101,7 +102,7 @@ const QUOTATION_CURRENCIES = ['USD', 'ZWG', 'ZAR', 'GBP', 'EUR'];
  * amber so an amendment made mid-approval cannot be mistaken for a sign-off.
  */
 const isAmendmentAction = (action: string) =>
-  /^(EDITED|QUOTATION_|ATTACHMENT_|POP_)/.test(action);
+  /^(EDITED|QUOTATION_|ATTACHMENT_|POP_|RECALLED_)/.test(action);
 
 /** Keeps a legacy free-text value from landing outside the select's options. */
 const safeCurrency = (value?: string | null) => {
@@ -373,6 +374,144 @@ const QuotationLinesEditor: React.FC<{
   );
 };
 
+// ─── Split award ──────────────────────────────────────────────────────────────
+//
+// When suppliers are each best on different items, Procurement awards item by
+// item instead of picking one quotation for everything. Each requested item is
+// placed with one quotation that prices it as available — or marked not
+// awarded when nobody can supply it.
+
+/** Requested item id → quotation id; 0 = not awarded. Missing = not yet chosen. */
+type AwardChoice = Record<number, number>;
+
+/** The quotations that can supply an item, with the line each one prices it at. */
+const offersFor = (itemId: number, quotations: ProcQuotation[]) =>
+  quotations.flatMap(q => {
+    const line = (q.items || []).find(l => Number(l.request_item_id) === itemId && Number(l.is_available) === 1);
+    return line ? [{ quotation: q, line }] : [];
+  });
+
+/** True when the request's current award is split between suppliers. */
+const isSplitAward = (quotations: ProcQuotation[] = []) => {
+  const selected = quotations.filter(q => q.is_selected);
+  return selected.length > 1 || selected.some(q => q.awarded_amount != null);
+};
+
+/**
+ * Starting point for the picker: the existing split award where there is one,
+ * otherwise the cheapest available offer for each item.
+ */
+const defaultAwardChoice = (items: ProcRequestItem[], quotations: ProcQuotation[]): AwardChoice => {
+  const split = isSplitAward(quotations);
+  const choice: AwardChoice = {};
+  for (const item of items) {
+    if (!item.id) continue;
+    const offers = offersFor(item.id, quotations);
+    if (split && item.actual_quotation_id != null && offers.some(o => o.quotation.id === Number(item.actual_quotation_id))) {
+      choice[item.id] = Number(item.actual_quotation_id);
+      continue;
+    }
+    if (!offers.length) continue;
+    const cheapest = [...offers].sort((a, b) => Number(a.line.unit_price || 0) - Number(b.line.unit_price || 0))[0];
+    choice[item.id] = cheapest.quotation.id;
+  }
+  return choice;
+};
+
+/** Why the choice cannot be submitted yet, or null when it can. */
+const awardChoiceError = (items: ProcRequestItem[], quotations: ProcQuotation[], choice: AwardChoice): string | null => {
+  const unplaced = items.filter(i => i.id && choice[i.id] === undefined);
+  if (unplaced.length) return `Choose a supplier (or "Not awarded") for: ${unplaced.map(i => i.item_description).join(', ')}`;
+  const chosen = Object.values(choice).filter(Boolean);
+  if (!chosen.length) return 'At least one item must be awarded to a supplier';
+  const currencies = new Set(quotations.filter(q => chosen.includes(q.id)).map(q => q.currency || 'USD'));
+  if (currencies.size > 1) return `Every supplier in a split award must be quoted in the same currency (found ${Array.from(currencies).join(', ')})`;
+  return null;
+};
+
+const awardChoicePayload = (choice: AwardChoice) =>
+  Object.entries(choice).map(([itemId, qid]) => ({ request_item_id: Number(itemId), quotation_id: qid || null }));
+
+const AwardPicker: React.FC<{
+  items: ProcRequestItem[];
+  quotations: ProcQuotation[];
+  value: AwardChoice;
+  onChange: (next: AwardChoice) => void;
+}> = ({ items, quotations, value, onChange }) => {
+  const priced = items.map(item => {
+    const offers = item.id ? offersFor(item.id, quotations) : [];
+    const chosen = item.id ? value[item.id] : undefined;
+    const offer = offers.find(o => o.quotation.id === chosen);
+    const subtotal = offer ? Number(item.quantity || 1) * Number(offer.line.unit_price || 0) : 0;
+    return { item, offers, chosen, offer, subtotal };
+  });
+  const total = priced.reduce((s, p) => s + p.subtotal, 0);
+  const currency = priced.find(p => p.offer)?.offer?.quotation.currency || 'USD';
+  const suppliers = new Set(priced.filter(p => p.offer).map(p => p.chosen));
+  const error = awardChoiceError(items, quotations, value);
+
+  return (
+    <Box>
+      <TableContainer>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Item</TableCell>
+              <TableCell align="right">Qty</TableCell>
+              <TableCell sx={{ minWidth: 220 }}>Supplier</TableCell>
+              <TableCell align="right">Subtotal</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {priced.map(({ item, offers, chosen, subtotal, offer }) => (
+              <TableRow key={item.id}>
+                <TableCell>
+                  <Typography variant="body2">{item.item_description}</Typography>
+                </TableCell>
+                <TableCell align="right">{item.quantity}</TableCell>
+                <TableCell>
+                  <TextField
+                    select size="small" fullWidth
+                    value={chosen === undefined ? '' : chosen}
+                    onChange={e => onChange({ ...value, [item.id!]: Number(e.target.value) })}
+                    error={chosen === undefined}
+                    helperText={offers.length === 0 ? 'No quotation offers this item' : undefined}
+                  >
+                    {offers.map(({ quotation, line }) => (
+                      <MenuItem key={quotation.id} value={quotation.id}>
+                        {quotation.vendor_name} — {quotation.currency} {Number(line.unit_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} each
+                      </MenuItem>
+                    ))}
+                    <MenuItem value={0}><em>Not awarded — no supplier</em></MenuItem>
+                  </TextField>
+                </TableCell>
+                <TableCell align="right">
+                  {offer
+                    ? `${offer.quotation.currency} ${subtotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+                    : '—'}
+                </TableCell>
+              </TableRow>
+            ))}
+            <TableRow>
+              <TableCell colSpan={3} align="right">
+                <Typography fontWeight={700}>
+                  Awarded total{suppliers.size > 0 ? ` (${suppliers.size} supplier${suppliers.size === 1 ? '' : 's'})` : ''}
+                </Typography>
+              </TableCell>
+              <TableCell align="right">
+                <Typography fontWeight={700}>
+                  {currency} {total.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </Typography>
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </TableContainer>
+      {error && <Alert severity="warning" sx={{ mt: 1, py: 0.25 }}>{error}</Alert>}
+    </Box>
+  );
+};
+
 const PurchaseRequestDetail: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
@@ -380,7 +519,7 @@ const PurchaseRequestDetail: React.FC = () => {
   // a filtered list) rather than always to the purchase request list.
   const goBack = useGoBack('/procurement/requests');
   const { id } = useParams<{ id: string }>();
-  const { user, hasPermission, hasRole } = useAuthStore();
+  const { user, hasPermission, hasRole, isFinanceManager } = useAuthStore();
   const qc = useQueryClient();
 
   const [actionDialog, setActionDialog] = useState<null | 'approve_dept' | 'reject' | 'submit_committee' | 'committee' | 'final_finance' | 'high_value'>(null);
@@ -408,6 +547,15 @@ const PurchaseRequestDetail: React.FC = () => {
   const [resubmitComments, setResubmitComments] = useState('');
   const [resubmitQuotId, setResubmitQuotId] = useState<number | null>(null);
 
+  // Split award — a different supplier per item. Shared by the submit and
+  // resubmit dialogs, which are never open together.
+  const [splitAward, setSplitAward] = useState(false);
+  const [awardChoice, setAwardChoice] = useState<AwardChoice>({});
+
+  // Recall to Procurement
+  const [recallDialog, setRecallDialog] = useState(false);
+  const [recallReason, setRecallReason] = useState('');
+
   // POP upload state (for final finance approval)
   const [popFile, setPopFile] = useState<File[]>([]);
   const [popUploading, setPopUploading] = useState(false);
@@ -428,7 +576,10 @@ const PurchaseRequestDetail: React.FC = () => {
   const { data: vendors = [] } = useQuery({
     queryKey: ['proc-vendors-list'],
     queryFn: () => getVendors({ limit: 200 } as any),
-    staleTime: 60000
+    staleTime: 60000,
+    // Only the quotation dialogs use the vendor list, and not every role that
+    // opens this page may read the vendor database.
+    enabled: hasPermission('manage_quotations')
   });
 
   const { data: request, isLoading, error, refetch } = useQuery({
@@ -489,17 +640,20 @@ const PurchaseRequestDetail: React.FC = () => {
       return hoursElapsed <= 12;
     })()
   );
+  // The Finance desk: the Finance Clerk, and the Finance Lead / Head of
+  // Department, who holds every one of the Clerk's powers here.
+  const canProcFinance = hasPermission('proc_finance_approve') || isFinanceManager();
   const canReject = (
     (hasPermission('approve_purchase_request') && ['PENDING_DEPT_APPROVAL'].includes(request?.status || '')) ||
     (hasPermission('manage_quotations') && ['PENDING_PROCUREMENT'].includes(request?.status || '')) ||
-    (hasPermission('proc_finance_approve') && ['PENDING_FINAL_FINANCE'].includes(request?.status || '')) ||
+    (canProcFinance && ['PENDING_FINAL_FINANCE'].includes(request?.status || '')) ||
     (hasRole('ADMIN') && ['PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE'].includes(request?.status || ''))
   );
   const canUploadQuotation = hasPermission('manage_quotations') && ['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '');
   const canSubmitCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_PROCUREMENT';
   const canResubmitToCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_COMMITTEE';
   const canCommitteeDecide = hasPermission('committee_review') && request?.status === 'PENDING_COMMITTEE';
-  const canFinalApprove = hasPermission('proc_finance_approve') && request?.status === 'PENDING_FINAL_FINANCE';
+  const canFinalApprove = canProcFinance && request?.status === 'PENDING_FINAL_FINANCE';
   // High-value stage: the Super Admin seat (ADMIN) and the Finance seat (the
   // Lead / Head of Department of Finance, whichever department raised the
   // request). The server verifies both and records which seat a decision fills.
@@ -509,8 +663,14 @@ const PurchaseRequestDetail: React.FC = () => {
     (hasRole('ADMIN') || isFinanceLead);
   // Finance can keep attaching payment batches after completion — that is the
   // whole point of supporting more than one POP per request.
-  const canManagePOP = (hasPermission('proc_finance_approve') || hasRole('ADMIN')) &&
+  const canManagePOP = (canProcFinance || hasRole('ADMIN')) &&
     ['PENDING_FINAL_FINANCE', 'COMPLETED'].includes(request?.status || '');
+  // Procurement can take a request back from the Committee, the high-value
+  // approvers or Finance to amend the quotations or the award — until a
+  // payment has been recorded against it.
+  const canRecall = hasPermission('manage_quotations') &&
+    ['PENDING_COMMITTEE', 'PENDING_HIGH_VALUE_APPROVAL', 'PENDING_FINAL_FINANCE'].includes(request?.status || '') &&
+    pops.length === 0;
   const canEdit = ['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
   const canSubmit = ['DRAFT', 'REJECTED'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
 
@@ -533,15 +693,22 @@ const PurchaseRequestDetail: React.FC = () => {
           await rejectProcurementRequest(id!, comments);
           toast.success('Request rejected');
           break;
-        case 'submit_committee':
-          if (!selectedQuotId) {
+        case 'submit_committee': {
+          if (splitAward) {
+            const err = awardChoiceError(request?.items || [], request?.quotations || [], awardChoice);
+            if (err) { toast.error(err); setActionLoading(false); return; }
+          } else if (!selectedQuotId) {
             toast.error('Choose the quotation you are recommending to the Committee');
             setActionLoading(false);
             return;
           }
-          await submitToCommittee(id!, selectedQuotId, comments);
+          await submitToCommittee(
+            id!, splitAward ? null : selectedQuotId, comments,
+            splitAward ? awardChoicePayload(awardChoice) : null
+          );
           toast.success('Submitted to Procurement Committee');
           break;
+        }
         case 'committee': {
           const result = await committeeDecision(id!, committeeDecisionVal, selectedQuotId, comments);
           toast.success('Decision recorded successfully.');
@@ -704,10 +871,40 @@ const PurchaseRequestDetail: React.FC = () => {
     }
   };
 
-  const handleResubmitToCommittee = async () => {
+  /** Open the submit/resubmit dialogs on the award as it stands. */
+  const primeAward = () => {
+    const split = isSplitAward(request?.quotations || []);
+    setSplitAward(split);
+    setAwardChoice(defaultAwardChoice(request?.items || [], request?.quotations || []));
+  };
+
+  const handleRecall = async () => {
+    if (!recallReason.trim()) { toast.error('Give a reason for recalling the request'); return; }
     setActionLoading(true);
     try {
-      await resubmitToCommittee(id!, resubmitQuotId, resubmitComments);
+      await recallToProcurement(id!, recallReason.trim());
+      toast.success('Recalled to Procurement — amend the quotations, then submit again');
+      setRecallDialog(false);
+      setRecallReason('');
+      invalidate();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'Recall failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleResubmitToCommittee = async () => {
+    if (splitAward) {
+      const err = awardChoiceError(request?.items || [], request?.quotations || [], awardChoice);
+      if (err) { toast.error(err); return; }
+    }
+    setActionLoading(true);
+    try {
+      await resubmitToCommittee(
+        id!, splitAward ? null : resubmitQuotId, resubmitComments,
+        splitAward ? awardChoicePayload(awardChoice) : null
+      );
       toast.success('Revised quotations resubmitted to the Procurement Committee');
       setResubmitDialog(false);
       setResubmitComments('');
@@ -975,8 +1172,9 @@ ${allCommitteeApproved ? `
 
   const downloadPurchaseOrder = () => {
     if (!request) return;
-    const html = buildPurchaseOrderHTML(request);
-    downloadHTMLAsPDF(html, `PO-${request.request_code}-${format(new Date(), 'yyyy-MM-dd')}`);
+    // A split award produces one order per supplier.
+    buildPurchaseOrders(request).forEach(({ html, suffix }) =>
+      downloadHTMLAsPDF(html, `PO-${request.request_code}${suffix}-${format(new Date(), 'yyyy-MM-dd')}`));
   };
 
   const handleDownloadAttachment = async (attachmentId: number, fileName?: string) => {
@@ -1030,7 +1228,10 @@ ${allCommitteeApproved ? `
   // ── What the selected supplier will actually charge ──────────────────────
   // Filled in when the request went to the Committee, so before that stage the
   // page shows estimates only and these columns stay out of the way.
-  const selectedQuotation = (request.quotations || []).find(q => q.is_selected) || null;
+  const selectedQuotations = (request.quotations || []).filter(q => q.is_selected);
+  const splitAwarded = isSplitAward(request.quotations || []);
+  const vendorOfQuotation = (quotationId?: number | null) =>
+    (request.quotations || []).find(q => q.id === Number(quotationId))?.vendor_name;
   const hasActuals = (request.items || []).some(i => i.actual_quotation_id != null);
   const totalActual = (request.items || []).reduce(
     (sum, i) => sum + Number(i.actual_total || 0), 0
@@ -1050,7 +1251,7 @@ ${allCommitteeApproved ? `
   ];
 
   const hasAnyAction = canEdit || canSubmit || canApproveDept || canReverseDept || canReject ||
-    canSubmitCommittee || canResubmitToCommittee || canCommitteeDecide || canHighValueDecide || canFinalApprove ||
+    canSubmitCommittee || canResubmitToCommittee || canRecall || canCommitteeDecide || canHighValueDecide || canFinalApprove ||
     (['PENDING_FINAL_FINANCE', 'COMPLETED'] as string[]).includes(request.status);
 
   const showCommittee = ['PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', 'COMPLETED'].includes(request.status);
@@ -1122,9 +1323,19 @@ ${allCommitteeApproved ? `
             <Divider sx={{ mb: 2 }} />
             {hasActuals && (
               <Alert severity="success" icon={<CompareIcon />} sx={{ mb: 2 }}>
-                The <strong>Actual</strong> columns are the prices from the selected quotation
-                {selectedQuotation ? <> — <strong>{selectedQuotation.vendor_name}</strong></> : null}.
-                They replace the estimates the requester entered.
+                {splitAwarded ? (
+                  <>
+                    The items were <strong>split between {selectedQuotations.length} suppliers</strong> —{' '}
+                    {selectedQuotations.map(q => q.vendor_name).join(', ')}. Each item's <strong>Actual</strong>{' '}
+                    price is from the supplier named under it.
+                  </>
+                ) : (
+                  <>
+                    The <strong>Actual</strong> columns are the prices from the selected quotation
+                    {selectedQuotations[0] ? <> — <strong>{selectedQuotations[0].vendor_name}</strong></> : null}.
+                  </>
+                )}
+                {' '}They replace the estimates the requester entered.
               </Alert>
             )}
             <TableContainer>
@@ -1158,8 +1369,13 @@ ${allCommitteeApproved ? `
                         {item.specifications && (
                           <Typography variant="caption" color="text.secondary" display="block">{item.specifications}</Typography>
                         )}
+                        {splitAwarded && !unavailable && item.actual_quotation_id != null && (
+                          <Typography variant="caption" color="success.dark" display="block">
+                            Supplier: {vendorOfQuotation(item.actual_quotation_id) || '—'}
+                          </Typography>
+                        )}
                         {unavailable && (
-                          <Chip label="Not available from supplier" size="small" color="warning" variant="outlined" sx={{ mt: 0.5, height: 20, fontSize: '0.65rem' }} />
+                          <Chip label={splitAwarded ? 'Not awarded' : 'Not available from supplier'} size="small" color="warning" variant="outlined" sx={{ mt: 0.5, height: 20, fontSize: '0.65rem' }} />
                         )}
                       </TableCell>
                       <TableCell align="right">{item.quantity}</TableCell>
@@ -1236,7 +1452,14 @@ ${allCommitteeApproved ? `
                           <Box display="flex" alignItems="center" gap={0.75} flexWrap="wrap">
                             <VendorIcon fontSize="small" color="action" />
                             <Typography variant="body2" fontWeight={600}>{quot.vendor_name}</Typography>
-                            {quot.is_selected && <Chip label="Selected" color="success" size="small" />}
+                            {quot.is_selected && (
+                              <Chip
+                                color="success" size="small"
+                                label={quot.awarded_amount != null
+                                  ? `Awarded ${(request.items || []).filter(i => Number(i.actual_quotation_id) === quot.id && Number(i.is_available) === 1).length} item(s) · ${quot.currency} ${Number(quot.awarded_amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+                                  : 'Selected'}
+                              />
+                            )}
                             {quot.is_prequalified && <Chip label="Prequalified" color="info" size="small" variant="outlined" />}
                           </Box>
                           {quot.notes && (
@@ -1484,14 +1707,20 @@ ${allCommitteeApproved ? `
               )}
               {canSubmitCommittee && (
                 <Button fullWidth variant="contained" startIcon={<CommitteeIcon />}
-                  onClick={() => { setSelectedQuotId(lowestQuotation?.id || null); setActionDialog('submit_committee'); }}>
+                  onClick={() => { setSelectedQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); primeAward(); setActionDialog('submit_committee'); }}>
                   Submit to Committee
                 </Button>
               )}
               {canResubmitToCommittee && (
                 <Button fullWidth variant="outlined" color="warning" startIcon={<SendIcon />}
-                  onClick={() => { setResubmitQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); setResubmitDialog(true); }}>
+                  onClick={() => { setResubmitQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); primeAward(); setResubmitDialog(true); }}>
                   Resubmit Amended Quotations
+                </Button>
+              )}
+              {canRecall && (
+                <Button fullWidth variant="outlined" color="warning" startIcon={<UndoIcon />}
+                  onClick={() => { setRecallReason(''); setRecallDialog(true); }}>
+                  Recall to Procurement
                 </Button>
               )}
               {canCommitteeDecide && (
@@ -1562,7 +1791,7 @@ ${allCommitteeApproved ? `
             <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
               <Typography variant="h6" gutterBottom>High-Value Approval</Typography>
               <Typography variant="caption" color="text.secondary">
-                Selected quotation {money((request as any).selected_quotation_amount)} — threshold {money((request as any).high_value_threshold || 5000)}
+                {splitAwarded ? 'Awarded total' : 'Selected quotation'} {money((request as any).selected_quotation_amount)} — threshold {money((request as any).high_value_threshold || 5000)}
               </Typography>
               <Divider sx={{ my: 2 }} />
               <Stack spacing={1}>
@@ -1812,7 +2041,8 @@ ${allCommitteeApproved ? `
                     columnGap: 3,
                   }}
                 >
-                  {request.approvalTrail.map((log, idx) => {
+                  {/* Latest action first; the API returns the trail oldest first. */}
+                  {[...request.approvalTrail].reverse().map((log, idx) => {
                     const tone = isAmendmentAction(log.action)
                       ? theme.palette.warning.main
                       : log.action.includes('APPROVED')
@@ -1868,7 +2098,7 @@ ${allCommitteeApproved ? `
       </Grid>
 
       {/* Action Dialog */}
-      <Dialog open={Boolean(actionDialog)} onClose={() => !actionLoading && setActionDialog(null)} maxWidth="sm" fullWidth>
+      <Dialog open={Boolean(actionDialog)} onClose={() => !actionLoading && setActionDialog(null)} maxWidth={actionDialog === 'submit_committee' && splitAward ? 'md' : 'sm'} fullWidth>
         <DialogTitle>
           {actionDialog === 'approve_dept' && (request.status === 'PENDING_GS_APPROVAL' ? 'Approve (General Secretary)' : 'Approve (Department Level)')}
           {actionDialog === 'reject' && 'Reject Request'}
@@ -1889,13 +2119,42 @@ ${allCommitteeApproved ? `
             </TextField>
           )}
           {actionDialog === 'submit_committee' && (
-            <Alert severity="info" sx={{ mb: 2, mt: 1 }}>
-              The Committee decides on one fully priced bid. The quotation you choose must
-              answer <strong>every</strong> requested item — with a price, or marked as not
-              available — and its prices become the request's actual costs from here on.
-            </Alert>
+            <>
+              <Box display="flex" alignItems="center" gap={1} mt={1} mb={1}>
+                <Switch checked={splitAward} onChange={e => setSplitAward(e.target.checked)} />
+                <Typography variant="body2">
+                  Award items to <strong>different suppliers</strong>
+                </Typography>
+              </Box>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                {splitAward ? (
+                  <>
+                    Choose the supplier for <strong>each</strong> item. Only quotations that price an
+                    item as available are offered for it. Every supplier must quote in the same currency.
+                    The awarded total decides whether the Committee is needed (under USD 500 goes
+                    straight to Finance), and each supplier gets their own Purchase Order.
+                  </>
+                ) : (
+                  <>
+                    The quotation you choose must answer <strong>every</strong> requested item — with
+                    a price, or marked as not available — and its prices become the request's actual
+                    costs from here on.
+                  </>
+                )}
+              </Alert>
+              {splitAward && (
+                <Box mb={2}>
+                  <AwardPicker
+                    items={request.items || []}
+                    quotations={request.quotations || []}
+                    value={awardChoice}
+                    onChange={setAwardChoice}
+                  />
+                </Box>
+              )}
+            </>
           )}
-          {(actionDialog === 'submit_committee' || actionDialog === 'committee') && request.quotations && request.quotations.length > 0 && (
+          {((actionDialog === 'submit_committee' && !splitAward) || (actionDialog === 'committee' && !splitAwarded)) && request.quotations && request.quotations.length > 0 && (
             <TextField
               select fullWidth required={actionDialog === 'submit_committee'}
               label={actionDialog === 'submit_committee' ? 'Recommended Quotation *' : 'Selected Quotation'}
@@ -2163,7 +2422,7 @@ ${allCommitteeApproved ? `
       </Dialog>
 
       {/* Resubmit to Committee Dialog */}
-      <Dialog open={resubmitDialog} onClose={() => !actionLoading && setResubmitDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog open={resubmitDialog} onClose={() => !actionLoading && setResubmitDialog(false)} maxWidth={splitAward ? 'md' : 'sm'} fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <SendIcon color="warning" />
           Resubmit Amended Quotations to Committee
@@ -2172,7 +2431,23 @@ ${allCommitteeApproved ? `
           <Alert severity="warning" sx={{ mb: 2 }}>
             This will reset all existing committee votes so members can review the updated quotations afresh.
           </Alert>
-          {request?.quotations && request.quotations.length > 0 && (
+          <Box display="flex" alignItems="center" gap={1} mb={1}>
+            <Switch checked={splitAward} onChange={e => setSplitAward(e.target.checked)} />
+            <Typography variant="body2">
+              Award items to <strong>different suppliers</strong>
+            </Typography>
+          </Box>
+          {splitAward && request && (
+            <Box mb={2}>
+              <AwardPicker
+                items={request.items || []}
+                quotations={request.quotations || []}
+                value={awardChoice}
+                onChange={setAwardChoice}
+              />
+            </Box>
+          )}
+          {!splitAward && request?.quotations && request.quotations.length > 0 && (
             <TextField
               select fullWidth label="Recommended Quotation (optional)" size="small" sx={{ mb: 2 }}
               value={resubmitQuotId || ''}
@@ -2198,6 +2473,36 @@ ${allCommitteeApproved ? `
           <Button variant="contained" color="warning" onClick={handleResubmitToCommittee} disabled={actionLoading}
             startIcon={actionLoading ? <CircularProgress size={16} /> : <SendIcon />}>
             Resubmit to Committee
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Recall to Procurement Dialog */}
+      <Dialog open={recallDialog} onClose={() => !actionLoading && setRecallDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <UndoIcon color="warning" />
+          Recall to Procurement
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2, mt: 1 }}>
+            The request returns to <strong>Pending Procurement</strong> so you can edit the quotations
+            or change the supplier(s). Any Committee votes and high-value approvals already given are
+            cleared, and it is routed afresh when you submit it again.
+          </Alert>
+          <TextField
+            fullWidth multiline rows={3} required autoFocus
+            label="Reason for recalling"
+            placeholder="e.g. Item B is cheaper from a second supplier — splitting the award"
+            value={recallReason}
+            onChange={e => setRecallReason(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRecallDialog(false)} disabled={actionLoading}>Cancel</Button>
+          <Button variant="contained" color="warning" onClick={handleRecall}
+            disabled={actionLoading || !recallReason.trim()}
+            startIcon={actionLoading ? <CircularProgress size={16} /> : <UndoIcon />}>
+            Recall
           </Button>
         </DialogActions>
       </Dialog>

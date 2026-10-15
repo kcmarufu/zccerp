@@ -61,6 +61,26 @@ class ApprovalController {
       const reqRows = await query('SELECT status FROM requests WHERE id = ?', [requestId]);
       const currentStatus = reqRows[0]?.status;
 
+      // Finance desk rule: while any reconciliation has sat with Finance for
+      // more than two days, a Finance Clerk may not approve floats (rejecting
+      // and dispatching stay open). The Finance Lead / HOD and Super Admin are
+      // exempt — they are who approves in the meantime.
+      if (currentStatus === REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
+        try {
+          await reconciliationService.assertFinanceDeskClear(req.user);
+        } catch (backlogError) {
+          if (backlogError.code === 'FINANCE_RECON_BACKLOG_BLOCKED') {
+            return res.status(403).json({
+              success: false,
+              error: backlogError.message,
+              code: backlogError.code,
+              data: backlogError.backlog
+            });
+          }
+          throw backlogError;
+        }
+      }
+
       let result;
 
       switch (approverRole) {

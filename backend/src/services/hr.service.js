@@ -2169,7 +2169,7 @@ class HRService {
        LEFT JOIN roles req_r   ON req_u.role_id   = req_r.id
        LEFT JOIN users au      ON lr.approved_by  = au.id
        WHERE ${where.join(' AND ')}
-       ORDER BY lr.created_at DESC`,
+       ORDER BY lr.created_at DESC, lr.id DESC`,
       params
     );
   }

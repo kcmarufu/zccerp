@@ -159,6 +159,7 @@ router.get('/reconciliations/history', authenticateToken, reconciliationControll
 router.get('/reconciliations/finance-review-history', authenticateToken, reconciliationController.getFinanceReviewHistory.bind(reconciliationController));
 router.get('/reconciliations/overdue-check', authenticateToken, reconciliationController.getOverdueCheck.bind(reconciliationController));
 router.get('/reconciliations/lead-desk-backlog', authenticateToken, reconciliationController.getLeadDeskBacklog.bind(reconciliationController));
+router.get('/reconciliations/finance-desk-backlog', authenticateToken, reconciliationController.getFinanceDeskBacklog.bind(reconciliationController));
 router.get('/reconciliations/:requestId', authenticateToken, reconciliationController.getReconciliation.bind(reconciliationController));
 router.post('/reconciliations', authenticateToken, reconciliationController.submitReconciliation.bind(reconciliationController));
 router.put('/reconciliations/:requestId', authenticateToken, reconciliationController.updateReconciliation.bind(reconciliationController));
@@ -210,6 +211,9 @@ router.post('/procurement/requests/:id/reverse-dept-approval', authenticateToken
 router.post('/procurement/requests/:id/finance-approve', authenticateToken, procurementController.approveFinanceLevel.bind(procurementController));
 router.post('/procurement/requests/:id/submit-committee', authenticateToken, procurementController.submitToCommittee.bind(procurementController));
 router.post('/procurement/requests/:id/resubmit-committee', authenticateToken, procurementController.resubmitToCommittee.bind(procurementController));
+// Procurement takes a request back from the Committee, the high-value approvers
+// or Finance to amend the quotations or the award, then submits it again.
+router.post('/procurement/requests/:id/recall', authenticateToken, procurementController.recallToProcurement.bind(procurementController));
 router.post('/procurement/requests/:id/committee-decision', authenticateToken, procurementController.committeeDecision.bind(procurementController));
 // High-value requests (selected quotation >= USD 5,000) need the Super Admin and
 // the owning department's Lead/HOP to approve, independently, before Finance.

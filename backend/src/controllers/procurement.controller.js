@@ -5,7 +5,7 @@
 
 const { validationResult } = require('express-validator');
 const procurementService = require('../services/procurement.service');
-const { ROLES } = require('../config/roles');
+const { ROLES, canViewVendorDatabase, canManageVendors } = require('../config/roles');
 const { query } = require('../config/database');
 const path = require('path');
 const fs = require('fs');
@@ -156,7 +156,8 @@ class ProcurementController {
   async submitToCommittee(req, res) {
     try {
       const result = await procurementService.submitToCommittee(
-        req.params.id, req.body.selected_quotation_id || null, req.user, req.body.comments || ''
+        req.params.id, req.body.selected_quotation_id || null, req.user, req.body.comments || '',
+        req.body.awards || null
       );
       res.json({ success: true, data: result, message: 'Submitted to procurement committee' });
     } catch (err) {
@@ -167,9 +168,21 @@ class ProcurementController {
   async resubmitToCommittee(req, res) {
     try {
       const result = await procurementService.resubmitToCommittee(
-        req.params.id, req.body.selected_quotation_id || null, req.user, req.body.comments || ''
+        req.params.id, req.body.selected_quotation_id || null, req.user, req.body.comments || '',
+        req.body.awards || null
       );
       res.json({ success: true, data: result, message: 'Quotations amended and resubmitted to the Procurement Committee' });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async recallToProcurement(req, res) {
+    try {
+      const result = await procurementService.recallToProcurement(
+        req.params.id, req.user, req.body.reason || ''
+      );
+      res.json({ success: true, data: result, message: 'Request recalled to Procurement for amendment' });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
     }
@@ -373,6 +386,9 @@ class ProcurementController {
 
   async getVendors(req, res) {
     try {
+      if (!canViewVendorDatabase(req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have access to the vendor database' });
+      }
       const vendors = await procurementService.getVendors(req.query);
       res.json({ success: true, data: vendors });
     } catch (err) {
@@ -382,7 +398,10 @@ class ProcurementController {
 
   async getVendorById(req, res) {
     try {
-      const vendor = await procurementService.getVendorById(req.params.vendorId);
+      if (!canViewVendorDatabase(req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have access to the vendor database' });
+      }
+      const vendor = await procurementService.getVendorById(req.params.id);
       if (!vendor) return res.status(404).json({ success: false, error: 'Vendor not found' });
       res.json({ success: true, data: vendor });
     } catch (err) {
@@ -392,6 +411,9 @@ class ProcurementController {
 
   async createVendor(req, res) {
     try {
+      if (!canManageVendors(req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have permission to manage vendors' });
+      }
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ success: false, errors: errors.array() });
@@ -405,7 +427,10 @@ class ProcurementController {
 
   async updateVendor(req, res) {
     try {
-      const result = await procurementService.updateVendor(req.params.vendorId, req.body);
+      if (!canManageVendors(req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have permission to manage vendors' });
+      }
+      const result = await procurementService.updateVendor(req.params.id, req.body);
       res.json({ success: true, data: result, message: 'Vendor updated successfully' });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
@@ -414,7 +439,10 @@ class ProcurementController {
 
   async deleteVendor(req, res) {
     try {
-      const result = await procurementService.deleteVendor(req.params.vendorId, req.user);
+      if (!canManageVendors(req.user)) {
+        return res.status(403).json({ success: false, error: 'You do not have permission to manage vendors' });
+      }
+      const result = await procurementService.deleteVendor(req.params.id, req.user);
       res.json({ success: true, data: result, message: 'Vendor deactivated successfully' });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
@@ -448,7 +476,7 @@ class ProcurementController {
          JOIN users u ON pal.actor_id = u.id
          LEFT JOIN departments d ON u.department_id = d.id
          WHERE pal.request_id = ?
-         ORDER BY pal.created_at ASC`,
+         ORDER BY pal.created_at ASC, pal.id ASC`,
         [req.params.id]
       );
       res.json({ success: true, data: logs });
