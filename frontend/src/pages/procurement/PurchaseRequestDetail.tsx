@@ -398,6 +398,23 @@ const isSplitAward = (quotations: ProcQuotation[] = []) => {
 };
 
 /**
+ * Items another quotation offers that this one does not — what choosing this
+ * quotation alone would silently drop from the purchase.
+ */
+const itemsLeftBehind = (quotation: ProcQuotation | undefined, items: ProcRequestItem[], quotations: ProcQuotation[]) =>
+  quotation
+    ? items.filter(item => {
+        if (!item.id) return false;
+        const offers = offersFor(item.id, quotations);
+        return offers.length > 0 && !offers.some(o => o.quotation.id === quotation.id);
+      })
+    : [];
+
+/** True when no single supplier offers everything the quotations cover between them. */
+const needsSplitAward = (items: ProcRequestItem[], quotations: ProcQuotation[]) =>
+  quotations.length > 1 && quotations.every(q => itemsLeftBehind(q, items, quotations).length > 0);
+
+/**
  * Starting point for the picker: the existing split award where there is one,
  * otherwise the cheapest available offer for each item.
  */
@@ -703,6 +720,9 @@ const PurchaseRequestDetail: React.FC = () => {
             toast.error('Choose the quotation you are recommending to the Committee');
             setActionLoading(false);
             return;
+          } else {
+            const err = leftBehindError(selectedQuotId);
+            if (err) { toast.error(err); setActionLoading(false); return; }
           }
           await submitToCommittee(
             id!, splitAward ? null : selectedQuotId, comments,
@@ -875,7 +895,10 @@ const PurchaseRequestDetail: React.FC = () => {
 
   /** Open the submit/resubmit dialogs on the award as it stands. */
   const primeAward = () => {
-    const split = isSplitAward(request?.quotations || []);
+    // Open on the per-item picker when the award is already split, or when the
+    // items are spread across suppliers so that no one quotation covers them all.
+    const split = isSplitAward(request?.quotations || [])
+      || needsSplitAward(request?.items || [], request?.quotations || []);
     setSplitAward(split);
     setAwardChoice(defaultAwardChoice(request?.items || [], request?.quotations || []));
   };
@@ -896,9 +919,24 @@ const PurchaseRequestDetail: React.FC = () => {
     }
   };
 
+  /**
+   * Choosing one quotation must not quietly drop items another supplier quoted
+   * for — those go through the per-item award, where "Not awarded" is explicit.
+   */
+  const leftBehindError = (quotationId: number | null) => {
+    const quotation = request?.quotations?.find(q => q.id === quotationId);
+    const dropped = itemsLeftBehind(quotation, request?.items || [], request?.quotations || []);
+    return dropped.length
+      ? `${quotation!.vendor_name} does not supply ${dropped.map(i => i.item_description).join(', ')}, which another supplier quoted for. Turn on "Award items to different suppliers" to choose a supplier per item.`
+      : null;
+  };
+
   const handleResubmitToCommittee = async () => {
     if (splitAward) {
       const err = awardChoiceError(request?.items || [], request?.quotations || [], awardChoice);
+      if (err) { toast.error(err); return; }
+    } else {
+      const err = leftBehindError(resubmitQuotId);
       if (err) { toast.error(err); return; }
     }
     setActionLoading(true);
@@ -2125,7 +2163,7 @@ ${allCommitteeApproved ? `
               <Box display="flex" alignItems="center" gap={1} mt={1} mb={1}>
                 <Switch checked={splitAward} onChange={e => setSplitAward(e.target.checked)} />
                 <Typography variant="body2">
-                  Award items to <strong>different suppliers</strong>
+                  Award items to <strong>different suppliers</strong> — choose the supplier and price for each item
                 </Typography>
               </Box>
               <Alert severity="info" sx={{ mb: 2 }}>
@@ -2179,6 +2217,14 @@ ${allCommitteeApproved ? `
                 );
               })}
             </TextField>
+          )}
+          {actionDialog === 'submit_committee' && !splitAward && leftBehindError(selectedQuotId) && (
+            <Alert
+              severity="warning" sx={{ mb: 2 }}
+              action={<Button color="inherit" size="small" onClick={() => setSplitAward(true)}>Split</Button>}
+            >
+              {leftBehindError(selectedQuotId)}
+            </Alert>
           )}
           {actionDialog === 'high_value' && (
             <>
@@ -2436,7 +2482,7 @@ ${allCommitteeApproved ? `
           <Box display="flex" alignItems="center" gap={1} mb={1}>
             <Switch checked={splitAward} onChange={e => setSplitAward(e.target.checked)} />
             <Typography variant="body2">
-              Award items to <strong>different suppliers</strong>
+              Award items to <strong>different suppliers</strong> — choose the supplier and price for each item
             </Typography>
           </Box>
           {splitAward && request && (
@@ -2462,6 +2508,14 @@ ${allCommitteeApproved ? `
                 </MenuItem>
               ))}
             </TextField>
+          )}
+          {!splitAward && leftBehindError(resubmitQuotId) && (
+            <Alert
+              severity="warning" sx={{ mb: 2 }}
+              action={<Button color="inherit" size="small" onClick={() => setSplitAward(true)}>Split</Button>}
+            >
+              {leftBehindError(resubmitQuotId)}
+            </Alert>
           )}
           <TextField
             fullWidth multiline rows={3} label="Amendment Notes / Comments"
