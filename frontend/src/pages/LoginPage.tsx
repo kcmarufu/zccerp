@@ -244,7 +244,7 @@ const LoginPage: React.FC = () => {
           mt={3}
           sx={{ letterSpacing: 0.5 }}
         >
-          ERP Connect v1.0 &nbsp;·&nbsp; {new Date().getFullYear()}
+          ERP Connect v2.0 &nbsp;·&nbsp; {new Date().getFullYear()}
         </Typography>
       </Box>
     </Box>

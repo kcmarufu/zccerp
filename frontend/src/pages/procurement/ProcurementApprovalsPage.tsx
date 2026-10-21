@@ -60,7 +60,7 @@ import {
 } from '../../services/procurementService';
 import { ProcRequest } from '../../types';
 import api from '../../services/api';
-import { downloadHTMLAsPDF, buildPurchaseOrders } from '../../utils/pdfUtils';
+import { downloadPurchaseOrderPDF } from '../../utils/pdfUtils';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
 import { formatRoleLabel } from '../../utils/roleUtils';
 import { usePersistentState } from '../../utils/navigationState';
@@ -265,9 +265,8 @@ const ProcurementApprovalsPage: React.FC = () => {
     try {
       const request = await getPurchaseRequestById(String(requestId)) as any;
       if (!request) { toast.error('Could not load request details'); return; }
-      // A split award produces one order per supplier.
-      buildPurchaseOrders(request).forEach(({ html, suffix }) =>
-        downloadHTMLAsPDF(html, `PO-${request.request_code}${suffix}-${format(new Date(), 'yyyy-MM-dd')}`));
+      // A split award prints one page per supplier, in one PDF.
+      downloadPurchaseOrderPDF(request, `PO-${request.request_code}-${format(new Date(), 'yyyy-MM-dd')}`);
     } catch {
       toast.error('Failed to generate Purchase Order PDF');
     } finally {

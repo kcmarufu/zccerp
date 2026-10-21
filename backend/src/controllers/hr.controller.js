@@ -366,7 +366,14 @@ class HRController {
       const { comments, approved } = req.body || {};
       const result = await hrService.approveLeaveRequest(
         req.params.leaveId,
-        { id: req.user.id, role: req.user.role, department_id: req.user.department_id },
+        {
+          id: req.user.id,
+          role: req.user.role,
+          department_id: req.user.department_id,
+          // Without the code the Admin & HR HOD/Lead is not recognised as the HR
+          // Office, and is refused on other departments' leave.
+          department_code: req.user.department_code,
+        },
         { approved: approved !== false, comments: comments || null }
       );
       res.json({
@@ -591,7 +598,7 @@ class HRController {
       // The owner may add documents while it is still pending; HR/Admin any time.
       const isOwner = Number(request.employee_user_id) === Number(req.user.id);
       const isOversight = req.user.role === ROLES.ADMIN || isAdminHrManager(req.user)
-        || (req.user.role === ROLES.HEAD_OF_PROGRAMS
+        || (isDeptScopedRole(req.user.role)
             && Number(request.department_id) === Number(req.user.department_id));
       if (!isOwner && !isOversight) {
         return res.status(403).json({ success: false, error: 'You cannot attach documents to this request' });

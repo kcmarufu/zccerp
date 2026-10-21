@@ -200,18 +200,31 @@ export const downloadHTMLAsPDF = (htmlString: string, filename: string): void =>
 };
 
 /**
- * The Purchase Orders a request produces: one, or — when the items were split
- * between suppliers — one per supplier, each listing only what that supplier
- * was awarded. `suffix` distinguishes them in the PO number and file name.
+ * The Purchase Order document for a request, as one HTML string: a single
+ * order, or — when the items were split between suppliers — one page per
+ * supplier, each listing only what that supplier was awarded and numbered
+ * PO-<code>-1, -2, … so each page can be sent to its supplier on its own.
  */
-export const buildPurchaseOrders = (request: any): { html: string; suffix: string }[] => {
+export const buildPurchaseOrderDocument = (request: any): string => {
   const selected: any[] = (request.quotations || []).filter((q: any) => q.is_selected);
-  if (selected.length <= 1) return [{ html: buildPurchaseOrderHTML(request), suffix: '' }];
-  return selected.map((q: any, i: number) => ({
-    html: buildPurchaseOrderHTML(request, q, `-${i + 1}`),
-    suffix: `-${i + 1}`,
-  }));
+  if (selected.length <= 1) return buildPurchaseOrderHTML(request);
+
+  const pages = selected.map((q: any, i: number) => {
+    const html = buildPurchaseOrderHTML(request, q, `-${i + 1}`, `Supplier ${i + 1} of ${selected.length}`);
+    return html.slice(html.indexOf('<body>') + '<body>'.length, html.lastIndexOf('</body>'));
+  });
+  const head = buildPurchaseOrderHTML(request, selected[0], '-1');
+  return head.slice(0, head.indexOf('<body>') + '<body>'.length)
+    // The PDF has no page margin — the first page is padded by the wrapper —
+    // so each following page carries its own top padding.
+    + pages.map((body, i) => (i === 0 ? body : `<div style="padding-top:44px">${body}</div>`))
+      .join('<div class="html2pdf__page-break"></div>')
+    + '</body></html>';
 };
+
+/** Download the Purchase Order(s) for a request as a single PDF. */
+export const downloadPurchaseOrderPDF = (request: any, filename: string): void =>
+  downloadHTMLAsPDF(buildPurchaseOrderDocument(request), filename);
 
 /**
  * Single source of truth for the Purchase Order PDF.
@@ -220,7 +233,7 @@ export const buildPurchaseOrders = (request: any): { html: string; suffix: strin
  *
  * `supplierQuotation` narrows the order to one supplier of a split award.
  */
-export const buildPurchaseOrderHTML = (request: any, supplierQuotation?: any, poSuffix = ''): string => {
+export const buildPurchaseOrderHTML = (request: any, supplierQuotation?: any, poSuffix = '', pageLabel = ''): string => {
   const quotations: any[] = request.quotations || [];
   const selectedQuot: any = supplierQuotation || quotations.find((q: any) => q.is_selected);
   const items: any[] = supplierQuotation
@@ -296,6 +309,7 @@ export const buildPurchaseOrderHTML = (request: any, supplierQuotation?: any, po
   </div>
   <div class="po-ref-box">
     <div class="po-ref">PO-${reqCode}</div>
+    ${pageLabel ? `<div style="font-size:11px;color:#555;">${pageLabel}</div>` : ''}
     <div style="font-size:11px;color:#555;">Date: ${poDate}</div>
     ${selectedQuot ? `<div style="font-size:11px;color:#555;">Supplier: ${selectedQuot.vendor_name || selectedQuot.vendor_company || '—'}</div>` : ''}
     ${selectedQuot?.quotation_number ? `<div style="font-size:11px;color:#555;">Quotation Ref: ${selectedQuot.quotation_number}</div>` : ''}

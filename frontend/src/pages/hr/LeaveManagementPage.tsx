@@ -2,9 +2,11 @@
  * Leave Management Page
  *
  * Single-stage, role-routed approval:
- *   GENERAL_USER / PROGRAM_LEAD / FINANCE_CLERK / PROCUREMENT_*
- *                     → HEAD_OF_PROGRAMS of their department
+ *   GENERAL_USER / FINANCE_CLERK / PROCUREMENT_*
+ *                     → PROGRAM_LEAD or HEAD_OF_PROGRAMS of their department
+ *   PROGRAM_LEAD      → HEAD_OF_PROGRAMS of their department
  *   HEAD_OF_PROGRAMS  → Super Admin (ADMIN)
+ *   The HR Office (Super Admin, Admin & HR HOD/Lead) may approve any of these.
  *   ADMIN             → another Super Admin
  *
  * Deductible leave types (e.g. Vacation) reserve days on submit and are
@@ -98,9 +100,10 @@ const statusMeta = (s: LeaveStatus): StatusMeta =>
 
 /** Who has to approve a request raised by someone in this role. */
 const approverFor = (role?: string) => {
-  if (role === 'HEAD_OF_PROGRAMS') return 'Super Admin';
+  if (role === 'HEAD_OF_PROGRAMS') return 'a Super Admin';
   if (role === 'ADMIN')            return 'another Super Admin';
-  return 'the Head of Department';
+  if (role === 'PROGRAM_LEAD')     return 'your Head of Department';
+  return 'your Department Lead or Head of Department';
 };
 
 // ─── Leave Balance Card ──────────────────────────────────────────────────────
@@ -137,12 +140,9 @@ const BalanceCard: React.FC<{ balance: HRLeaveBalance }> = ({ balance }) => {
 };
 
 // ─── Balance Impact panel ────────────────────────────────────────────────────
-// The core of the approver's decision: what they have now, what it costs, and
-// what is left afterwards.
+// What the employee has now, what this request costs, and what is left.
 
 const BalanceImpact: React.FC<{ request: HRLeaveRequest; dense?: boolean }> = ({ request, dense }) => {
-  const theme = useTheme();
-
   const total    = Number(request.total_days ?? request.days_requested ?? 0);
   const charged  = Number(request.deductible_days ?? 0);
   const freeUsed = Number(request.free_days_used ?? 0);
@@ -152,14 +152,13 @@ const BalanceImpact: React.FC<{ request: HRLeaveRequest; dense?: boolean }> = ({
   // type's free allowance.
   if (charged === 0) {
     return (
-      <Alert severity="success" icon={<InfoIcon />} sx={{ py: dense ? 0.25 : 1 }}>
-        {limit
-          ? <>All <strong>{days(total)}</strong> day(s) fall inside the{' '}
-              <strong>{days(limit)}-day</strong> {request.leave_type_name} allowance —
-              nothing is taken from the leave balance.</>
-          : <><strong>{request.leave_type_name}</strong> is never deducted — the
-              leave balance is unaffected.</>}
-      </Alert>
+      <Paper elevation={0} sx={{ p: dense ? 1 : 1.5, border: '1px solid', borderColor: 'divider' }}>
+        <Typography variant="body2">
+          {limit
+            ? `Not charged to the leave balance. All ${days(total)} day(s) fall within the ${days(limit)}-day ${request.leave_type_name} allowance.`
+            : `Not charged to the leave balance. ${request.leave_type_name} is non-deductible.`}
+        </Typography>
+      </Paper>
     );
   }
 
@@ -167,59 +166,46 @@ const BalanceImpact: React.FC<{ request: HRLeaveRequest; dense?: boolean }> = ({
   const after  = request.balance_after;
   const short  = after !== null && after !== undefined && Number(after) < 0;
 
-  const Cell: React.FC<{ label: string; value: React.ReactNode; color?: string }> = ({ label, value, color }) => (
-    <Box flex={1} textAlign="center">
-      <Typography variant="caption" color="text.secondary" fontWeight={600} display="block">
-        {label}
-      </Typography>
-      <Typography variant={dense ? 'body1' : 'h5'} fontWeight={700} color={color}>
-        {value}
-      </Typography>
-    </Box>
-  );
+  const head = { fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', fontSize: 12 };
+  const cell = { fontSize: dense ? 14 : 16, fontWeight: 700 };
 
   return (
     <Box>
-      {/* Part-free requests need the split spelled out before the arithmetic. */}
+      <Table size="small" sx={{ border: '1px solid', borderColor: 'divider' }}>
+        <TableHead>
+          <TableRow>
+            <TableCell sx={head} align="center">Balance before</TableCell>
+            <TableCell sx={head} align="center">Days charged</TableCell>
+            <TableCell sx={head} align="center">Balance after</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          <TableRow>
+            <TableCell align="center" sx={cell}>{days(before)}</TableCell>
+            <TableCell align="center" sx={{ ...cell, color: 'error.main' }}>{days(charged)}</TableCell>
+            <TableCell align="center" sx={{ ...cell, color: short ? 'error.main' : 'text.primary' }}>{days(after)}</TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
       {freeUsed > 0 && (
-        <Alert severity="info" sx={{ mb: 1, py: 0.25 }}>
-          {days(total)} day(s) requested — <strong>{days(freeUsed)}</strong> covered by the
-          {limit ? ` ${days(limit)}-day` : ''} allowance,{' '}
-          <strong>{days(charged)}</strong> charged to the balance.
-        </Alert>
+        <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
+          {days(total)} day(s) requested; {days(freeUsed)} fall within the
+          {limit ? ` ${days(limit)}-day` : ''} allowance and are not charged.
+        </Typography>
       )}
-
-      <Paper
-        elevation={0}
-        sx={{
-          p: dense ? 1 : 1.75,
-          border: '1px solid',
-          borderColor: short ? 'error.main' : 'divider',
-          bgcolor: alpha(theme.palette.primary.main, 0.03),
-        }}
-      >
-        <Box display="flex" alignItems="center" gap={1}>
-          <Cell label="BALANCE BEFORE" value={days(before)} />
-          <ArrowIcon fontSize="small" color="disabled" />
-          <Cell label="DAYS CHARGED" value={`− ${days(charged)}`} color="error.main" />
-          <ArrowIcon fontSize="small" color="disabled" />
-          <Cell label="BALANCE AFTER" value={days(after)} color={short ? 'error.main' : 'success.main'} />
-        </Box>
-        {short && (
-          <Typography variant="caption" color="error.main" display="block" textAlign="center" mt={0.5}>
-            This takes the employee below zero — allowed, but worth a second look.
-          </Typography>
-        )}
-        {/* On a request still awaiting a decision these figures are recomputed
-            from the balance as it stands now, not as it stood when the employee
-            applied — accruals and manual adjustments since then are included. */}
-        {request.balance_is_live && (
-          <Typography variant="caption" color="text.secondary" display="block" textAlign="center" mt={0.5}>
-            Balance as it stands right now — includes any accrual or manual
-            adjustment made since this request was raised.
-          </Typography>
-        )}
-      </Paper>
+      {short && (
+        <Typography variant="caption" color="error.main" display="block" mt={0.5}>
+          The balance after approval is negative.
+        </Typography>
+      )}
+      {/* On a request still awaiting a decision these figures are recomputed
+          from the balance as it stands now, not as it stood when the employee
+          applied — accruals and manual adjustments since then are included. */}
+      {request.balance_is_live && (
+        <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
+          Based on the current balance.
+        </Typography>
+      )}
     </Box>
   );
 };
@@ -279,11 +265,10 @@ const AuditTrail: React.FC<{ leaveId: number }> = ({ leaveId }) => {
   return (
     <TableContainer>
       {manualCount > 0 && (
-        <Alert severity="info" sx={{ mb: 1, py: 0.25 }}>
-          This balance was also changed by hand{' '}
-          <strong>{manualCount} time{manualCount === 1 ? '' : 's'}</strong> this year.
-          Those top-ups and deductions are listed below alongside the request itself, latest first.
-        </Alert>
+        <Typography variant="caption" color="text.secondary" display="block" mb={0.75}>
+          Includes {manualCount} manual adjustment{manualCount === 1 ? '' : 's'} to
+          this balance during the year (shaded).
+        </Typography>
       )}
       <Table size="small">
         <TableHead>
@@ -313,6 +298,7 @@ const AuditTrail: React.FC<{ leaveId: number }> = ({ leaveId }) => {
                   <Chip
                     label={ACTION_LABEL[e.action] || String(e.action).replace(/_/g, ' ')}
                     size="small"
+                    variant="outlined"
                     color={ACTION_COLOR[e.action] || 'default'}
                     icon={manual ? <AdjustIcon sx={{ fontSize: 14 }} /> : undefined}
                   />
@@ -320,7 +306,7 @@ const AuditTrail: React.FC<{ leaveId: number }> = ({ leaveId }) => {
                       reason the figures on the request no longer add up. */}
                   {manual && e.after_request && (
                     <Typography variant="caption" color="text.secondary" display="block">
-                      after this request was raised
+                      after this request
                     </Typography>
                   )}
                 </TableCell>
@@ -497,6 +483,41 @@ const AttachmentList: React.FC<{
 
 // ─── Detail Dialog ────────────────────────────────────────────────────────────
 
+const SectionTitle: React.FC<{ children: React.ReactNode; first?: boolean }> = ({ children, first }) => (
+  <Typography
+    variant="subtitle2" fontWeight={700} color="primary.main"
+    mt={first ? 0 : 3} mb={1} pb={0.5}
+    sx={{ borderBottom: '1px solid', borderColor: 'divider', textTransform: 'uppercase', fontSize: 12, letterSpacing: 0.6 }}
+  >
+    {children}
+  </Typography>
+);
+
+/** Label/value pairs laid out as a form: two pairs a row, or one spanning the row. */
+const FormTable: React.FC<{ rows: [string, React.ReactNode][][] }> = ({ rows }) => {
+  const label = {
+    width: '18%', bgcolor: 'grey.50', color: 'text.secondary', fontWeight: 600,
+    fontSize: 12, borderRight: '1px solid', borderColor: 'divider', verticalAlign: 'top',
+  };
+  const value = { fontSize: 14, borderRight: '1px solid', borderColor: 'divider', verticalAlign: 'top' };
+  return (
+    <Table size="small" sx={{ border: '1px solid', borderColor: 'divider', tableLayout: 'fixed' }}>
+      <TableBody>
+        {rows.map((pairs, i) => (
+          <TableRow key={i}>
+            {pairs.map(([l, v]) => (
+              <React.Fragment key={l}>
+                <TableCell sx={label}>{l}</TableCell>
+                <TableCell sx={value} colSpan={pairs.length === 1 ? 3 : 1}>{v}</TableCell>
+              </React.Fragment>
+            ))}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+};
+
 const DetailDialog: React.FC<{
   request: HRLeaveRequest | null;
   onClose: () => void;
@@ -511,6 +532,8 @@ const DetailDialog: React.FC<{
   if (!request) return null;
 
   const meta = statusMeta(request.status);
+  const ref  = `LV-${String(request.id).padStart(5, '0')}`;
+  const comments = request.approver_comments || request.approval_comments;
 
   const handleExport = async () => {
     setExporting(true);
@@ -523,98 +546,70 @@ const DetailDialog: React.FC<{
     }
   };
 
-  const Field: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
-    <Grid item xs={6}>
-      <Typography variant="caption" color="text.secondary">{label}</Typography>
-      <Typography variant="body2" fontWeight={600}>{value}</Typography>
-    </Grid>
-  );
+  const decisionRows: [string, React.ReactNode][][] = request.status === 'PENDING'
+    ? [[['Status', meta.label], ['Approver', approverFor(request.requester_role)
+          .replace(/^your /, '').replace(/^./, (c) => c.toUpperCase())]]]
+    : [
+        [['Status', meta.label], ['Decided by', request.approved_by_name || '—']],
+        [['Date', fmtDt(request.approved_at)]],
+        ...(request.rejection_reason
+          ? [[['Reason for rejection', <Typography variant="body2" color="error.main">{request.rejection_reason}</Typography>]] as [string, React.ReactNode][]]
+          : []),
+        ...(comments && !request.rejection_reason ? [[['Comments', comments]] as [string, React.ReactNode][]] : []),
+      ];
 
   return (
     <Dialog open={!!request} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 1 }}>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', pb: 1.5 }}>
         <Box>
-          <Typography variant="h6" fontWeight={700}>Leave Request Details</Typography>
-          <Typography variant="caption" color="text.secondary">
-            LV-{String(request.id).padStart(5, '0')}
+          <Typography variant="h6" fontWeight={700}>Leave Application</Typography>
+          <Typography variant="body2" color="text.secondary">
+            {ref} &middot; submitted {fmtDt(request.created_at)}
           </Typography>
         </Box>
-        <Chip label={meta.label} color={meta.color} size="small" />
+        <Chip label={meta.label} color={meta.color} size="small" variant="outlined" sx={{ fontWeight: 600 }} />
       </DialogTitle>
       <Divider />
-      <DialogContent sx={{ pt: 2 }}>
-        <Grid container spacing={1.5}>
-          <Field label="Employee"   value={request.employee_name} />
-          <Field label="Department" value={request.department_name || '—'} />
-          <Field label="Leave Type" value={
-            <Stack direction="row" spacing={0.75} alignItems="center">
-              <span>{request.leave_type_name}</span>
-              <Chip
-                size="small"
-                variant="outlined"
-                color={truthy(request.is_deductible) ? 'warning' : 'success'}
-                label={truthy(request.is_deductible) ? 'Deductible' : 'Non-deductible'}
-              />
-            </Stack>
-          } />
-          <Field label="Days Requested" value={`${days(request.total_days ?? request.days_requested)} day(s)`} />
-          <Field label="First Day" value={fmt(request.start_date)} />
-          <Field label="Last Day"  value={fmt(request.end_date)} />
-          {request.reason && (
-            <Grid item xs={12}>
-              <Typography variant="caption" color="text.secondary">Reason</Typography>
-              <Typography variant="body2">{request.reason}</Typography>
-            </Grid>
-          )}
-        </Grid>
+      <DialogContent sx={{ pt: 2.5 }}>
+        <SectionTitle first>Employee</SectionTitle>
+        <FormTable rows={[
+          [['Name', request.employee_name || '—'], ['Employee No.', request.employee_number || '—']],
+          [['Department', request.department_name || '—']],
+        ]} />
 
-        <Typography variant="subtitle2" fontWeight={700} mt={2.5} mb={1}>Leave Balance Impact</Typography>
-        <BalanceImpact request={request} />
+        <SectionTitle>Leave</SectionTitle>
+        <FormTable rows={[
+          [['Leave type', request.leave_type_name || '—'],
+           ['Deduction', truthy(request.is_deductible) ? 'Deducted from balance' : 'Not deducted']],
+          [['From', fmt(request.start_date)], ['To', fmt(request.end_date)]],
+          [['Days', `${days(request.total_days ?? request.days_requested)}`], ['Applied on', fmt(request.created_at)]],
+          [['Reason', request.reason || '—']],
+        ]} />
 
-        {(request.approved_by || request.rejection_reason) && (
-          <Paper elevation={0} sx={{ mt: 2, p: 1.5, bgcolor: 'grey.50', border: '1px solid', borderColor: 'divider' }}>
-            <Typography variant="caption" color="text.secondary" fontWeight={600}>DECISION</Typography>
-            {request.approved_by_name && (
-              <Typography variant="body2" mt={0.5}><strong>By:</strong> {request.approved_by_name}</Typography>
-            )}
-            {request.approved_at && (
-              <Typography variant="body2"><strong>At:</strong> {fmtDt(request.approved_at)}</Typography>
-            )}
-            {request.rejection_reason && (
-              <Typography variant="body2" color="error.main">
-                <strong>Reason:</strong> {request.rejection_reason}
-              </Typography>
-            )}
-          </Paper>
-        )}
+        <SectionTitle>Leave balance</SectionTitle>
+        <BalanceImpact request={request} dense />
 
-        {/* How this person's balance was built, so the approver decides against
-            the full picture rather than a single number. */}
+        <SectionTitle>Approval</SectionTitle>
+        <FormTable rows={decisionRows} />
+
         {showAccruals && request.employee_id && (
           <>
-            <Typography variant="subtitle2" fontWeight={700} mt={2.5} mb={1}
-              display="flex" alignItems="center" gap={0.75}>
-              <HistoryIcon fontSize="small" /> How Their Leave Built Up
-            </Typography>
+            <SectionTitle>Leave history this year</SectionTitle>
             <AccrualStatement employeeId={Number(request.employee_id)} dense />
           </>
         )}
 
-        <Typography variant="subtitle2" fontWeight={700} mt={2.5} mb={1}
-          display="flex" alignItems="center" gap={0.75}>
-          <AttachIcon fontSize="small" /> Supporting Documents
-        </Typography>
+        <SectionTitle>Supporting documents</SectionTitle>
         <AttachmentList leaveId={request.id} canEdit={canEditDocs}
           canDelete={request.status === 'PENDING' && Number(request.employee_user_id) === Number(currentUserId)} />
 
-        <Typography variant="subtitle2" fontWeight={700} mt={2.5} mb={1}
-          display="flex" alignItems="center" gap={0.75}>
-          <HistoryIcon fontSize="small" /> Audit Trail
-        </Typography>
+        <SectionTitle>History</SectionTitle>
         <AuditTrail leaveId={request.id} />
       </DialogContent>
-      <DialogActions>
+      <Divider />
+      <DialogActions sx={{ px: 3, py: 1.5 }}>
         <Button
+          variant="outlined"
           startIcon={exporting ? <CircularProgress size={16} /> : <PdfIcon />}
           onClick={handleExport}
           disabled={exporting}
@@ -622,7 +617,7 @@ const DetailDialog: React.FC<{
           Export PDF
         </Button>
         <Box flex={1} />
-        <Button onClick={onClose}>Close</Button>
+        <Button variant="contained" onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>
   );
@@ -981,10 +976,14 @@ const LeaveManagementPage: React.FC = () => {
           </Typography>
           <Typography variant="body2" color="text.secondary" mt={0.5}>
             {isHrOffice
-              ? 'Super Admin — full visibility across every department, and approver for Heads of Department'
+              ? (user?.role === 'ADMIN'
+                  ? 'Leave across all departments. Heads of Department send their leave to you for approval.'
+                  : 'HR Office. Leave across all departments; you may approve on any department’s behalf.')
               : isDeptHead
-              ? 'Head of Department — approve your department’s leave; your own requests go to a Super Admin'
-              : `Apply for leave — your requests are approved by ${approverFor(user?.role)}`}
+              ? (user?.role === 'PROGRAM_LEAD'
+                  ? 'Department Lead. You approve your department’s staff leave; your own leave goes to your Head of Department.'
+                  : 'Head of Department. You approve your department’s leave; your own leave goes to a Super Admin.')
+              : `Your leave requests are approved by ${approverFor(user?.role)}.`}
           </Typography>
         </Box>
         <Stack direction="row" spacing={1}>
@@ -1043,16 +1042,6 @@ const LeaveManagementPage: React.FC = () => {
         </Alert>
       )}
 
-      {/* ── Accrual statement (own leave) — same for every role ── */}
-      {tab === TAB_MY && (
-        <Box mb={3}>
-          <Typography variant="subtitle2" color="text.secondary" fontWeight={600} mb={1.5}>
-            MY LEAVE ACCRUALS — {yearFilter}
-          </Typography>
-          <AccrualStatement year={yearFilter} />
-        </Box>
-      )}
-
       {/* ── Tabs ── */}
       <Tabs
         value={tab}
@@ -1105,7 +1094,9 @@ const LeaveManagementPage: React.FC = () => {
               + 'Use All Departments to act on anything else.'
             : isHrOffice
               ? 'My Department lists your own department’s staff; use All Departments to approve on another department’s behalf. Your own leave goes to a Super Admin.'
-              : 'You approve staff in your own department; your own leave goes to a Super Admin.'}
+              : user?.role === 'PROGRAM_LEAD'
+              ? 'You approve leave for staff in your department. Leave from the Head of Department and other Leads is approved elsewhere.'
+              : 'You approve leave for staff and Leads in your department. Your own leave goes to a Super Admin.'}
         </Alert>
       )}
       {tab === TAB_ALL && (
@@ -1409,6 +1400,16 @@ const LeaveManagementPage: React.FC = () => {
         )}
       </Paper>
 
+      {/* ── Accrual statement (own leave), below the request list for every role ── */}
+      {tab === TAB_MY && (
+        <Box mt={3}>
+          <Typography variant="subtitle2" color="text.secondary" fontWeight={600} mb={1.5}>
+            MY LEAVE ACCRUALS — {yearFilter}
+          </Typography>
+          <AccrualStatement year={yearFilter} />
+        </Box>
+      )}
+
       {/* ─────────────────────── Apply Leave Dialog ─────────────────────────── */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>
@@ -1647,17 +1648,16 @@ const LeaveManagementPage: React.FC = () => {
               <BalanceImpact request={approvalDialog.request} />
 
               {!approvalDialog.approve && (
-                <Alert severity="info" sx={{ mt: 1.5, py: 0.5 }}>
-                  Rejecting changes nothing — days are only ever deducted when a
-                  request is approved.
-                </Alert>
+                <Typography variant="caption" color="text.secondary" display="block" mt={1}>
+                  No days are deducted when a request is rejected.
+                </Typography>
               )}
 
               {approvalDialog.request.employee_id && (
                 <Box mt={2}>
                   <Typography variant="subtitle2" fontWeight={700} mb={1}
                     display="flex" alignItems="center" gap={0.75}>
-                    <HistoryIcon fontSize="small" /> How their leave built up
+                    <HistoryIcon fontSize="small" /> Leave history this year
                   </Typography>
                   <AccrualStatement employeeId={Number(approvalDialog.request.employee_id)} dense />
                 </Box>
@@ -1670,9 +1670,6 @@ const LeaveManagementPage: React.FC = () => {
                 onChange={(e) => setApprovalComments(e.target.value)}
                 required={!approvalDialog.approve}
               />
-              <Typography variant="caption" color="text.secondary" display="block" mt={1}>
-                This decision is written to the audit trail with the balance either side.
-              </Typography>
             </>
           )}
         </DialogContent>

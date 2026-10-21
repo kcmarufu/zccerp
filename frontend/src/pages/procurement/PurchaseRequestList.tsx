@@ -34,7 +34,7 @@ import {
 import { ProcurementStatus, Priority } from '../../types';
 import * as XLSX from 'xlsx';
 import api from '../../services/api';
-import { downloadHTMLAsPDF, buildPurchaseOrders } from '../../utils/pdfUtils';
+import { downloadPurchaseOrderPDF } from '../../utils/pdfUtils';
 import { toast } from 'react-toastify';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
 import { usePersistentState } from '../../utils/navigationState';
@@ -133,9 +133,8 @@ const PurchaseRequestList: React.FC = () => {
     try {
       const request = await getPurchaseRequestById(String(reqId)) as any;
       if (!request) { toast.error('Could not load request details'); return; }
-      // A split award produces one order per supplier.
-      buildPurchaseOrders(request).forEach(({ html, suffix }) =>
-        downloadHTMLAsPDF(html, `PO-${reqCode}${suffix}-${format(new Date(), 'yyyy-MM-dd')}`));
+      // A split award prints one page per supplier, in one PDF.
+      downloadPurchaseOrderPDF(request, `PO-${reqCode}-${format(new Date(), 'yyyy-MM-dd')}`);
     } catch {
       toast.error('Failed to generate Purchase Order PDF');
     } finally {

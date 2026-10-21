@@ -2,11 +2,16 @@
  * Leave Approval Service
  *
  * Single-stage role-based approval routing:
- *   GENERAL_USER / PROGRAM_LEAD / FINANCE_CLERK / PROCUREMENT_*
- *     → HEAD_OF_PROGRAMS of the requester's department
- *     → fallback to ADMIN when no HOP exists in that department
+ *   GENERAL_USER / FINANCE_CLERK / PROCUREMENT_*
+ *     → the Department Lead OR the Head of Department of the requester's department
+ *   PROGRAM_LEAD
+ *     → the Head of Department of their department (a Lead does not approve a fellow Lead)
+ *   either of the above → fallback to ADMIN when the department has no one to approve
  *   HEAD_OF_PROGRAMS → any ADMIN
  *   ADMIN            → any other ADMIN (self-approval blocked)
+ *
+ * On top of this table the HR Office (Super Admin, and the HOD/Lead of Admin &
+ * HR) may approve any request but their own.
  *
  * The service exposes:
  *   - resolveApprover(requester)         — for create-time validation / display
@@ -26,31 +31,35 @@ const NON_PRIVILEGED_ROLES = [
 ];
 
 /**
- * Does the given department have at least one active HOP?
+ * Does the given department have at least one active user in one of `roles`?
  */
-async function departmentHasHOP(departmentId) {
-  if (!departmentId) return false;
+async function departmentHasRole(departmentId, roles) {
+  if (!departmentId || !roles.length) return false;
   const rows = await query(
     `SELECT 1
      FROM users u
      JOIN roles r ON u.role_id = r.id
      WHERE u.department_id = ?
-       AND r.role_name = ?
+       AND r.role_name IN (${roles.map(() => '?').join(', ')})
        AND u.is_active = TRUE
      LIMIT 1`,
-    [departmentId, ROLES.HEAD_OF_PROGRAMS]
+    [departmentId, ...roles]
   );
   return rows.length > 0;
 }
 
+/** Does the given department have at least one active HOP? */
+const departmentHasHOP = (departmentId) =>
+  departmentHasRole(departmentId, [ROLES.HEAD_OF_PROGRAMS]);
+
 /**
  * Given the requester (role, dept), describe who must approve.
- * Returns: { approverRole, approverDepartmentId, excludeUserId, isFallback }
+ * Returns: { approverRoles, approverDepartmentId, excludeUserId, isFallback }
  */
 async function resolveApprover({ userId, role, departmentId }) {
   if (role === ROLES.ADMIN) {
     return {
-      approverRole: ROLES.ADMIN,
+      approverRoles: [ROLES.ADMIN],
       approverDepartmentId: null,
       excludeUserId: userId,
       isFallback: false,
@@ -59,26 +68,31 @@ async function resolveApprover({ userId, role, departmentId }) {
 
   if (role === ROLES.HEAD_OF_PROGRAMS) {
     return {
-      approverRole: ROLES.ADMIN,
+      approverRoles: [ROLES.ADMIN],
       approverDepartmentId: null,
       excludeUserId: null,
       isFallback: false,
     };
   }
 
-  // All other roles route to HOP of their department.
-  if (departmentId && (await departmentHasHOP(departmentId))) {
+  // A Lead's leave goes to their Head of Department; everyone else's may be
+  // approved by either the Lead or the Head of their department.
+  const deptRoles = role === ROLES.PROGRAM_LEAD
+    ? [ROLES.HEAD_OF_PROGRAMS]
+    : [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
+
+  if (departmentId && (await departmentHasRole(departmentId, deptRoles))) {
     return {
-      approverRole: ROLES.HEAD_OF_PROGRAMS,
+      approverRoles: deptRoles,
       approverDepartmentId: departmentId,
       excludeUserId: userId,
       isFallback: false,
     };
   }
 
-  // No HOP in the dept (or no dept at all) → fall back to any ADMIN.
+  // Nobody to approve in the dept (or no dept at all) → fall back to any ADMIN.
   return {
-    approverRole: ROLES.ADMIN,
+    approverRoles: [ROLES.ADMIN],
     approverDepartmentId: null,
     excludeUserId: userId,
     isFallback: true,
@@ -109,14 +123,14 @@ async function assertCanApprove(approver, requester) {
 
   const target = await resolveApprover(requester);
 
-  // Approver must hold the required role.
-  if (approver.role !== target.approverRole) {
+  // Approver must hold one of the required roles.
+  if (!target.approverRoles.includes(approver.role)) {
     throw new Error(
-      `This request requires approval by ${humanRole(target.approverRole)}`
+      `This request requires approval by ${humanRoles(target.approverRoles)}`
     );
   }
 
-  // Department match (only relevant for HOP approving non-privileged users).
+  // Department match (only relevant for a Lead/HOP approving their own staff).
   if (target.approverDepartmentId
       && Number(approver.department_id) !== Number(target.approverDepartmentId)) {
     throw new Error('You can only approve leave from your own department');
@@ -180,18 +194,22 @@ function pendingForApproverWhereClause(approver, scope = 'department') {
 
   // ── Department HOP/Lead (CPJS, FOS, HSD) ────────────────────────────────
   // Their own department only. Requests raised by a HOP or Admin route upward
-  // to the HR Office instead, so they are excluded here.
+  // to the HR Office instead, so they are excluded here — and a Lead does not
+  // see a fellow Lead's request, which belongs to the Head of Department.
   if (hasDepartmentHrAccess(approver)) {
+    const routedElsewhere = approver.role === ROLES.PROGRAM_LEAD
+      ? [ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN, ROLES.PROGRAM_LEAD]
+      : [ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN];
     return {
       sql: `(
         e.department_id = ?
-        AND COALESCE(req_r.role_name, ?) NOT IN (?, ?)
+        AND COALESCE(req_r.role_name, ?) NOT IN (${routedElsewhere.map(() => '?').join(', ')})
         AND (req_u.id IS NULL OR req_u.id <> ?)
       )`,
       params: [
         approver.department_id,
         ROLES.GENERAL_USER,
-        ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN,
+        ...routedElsewhere,
         approver.id,
       ],
     };
@@ -247,9 +265,16 @@ function humanRole(role) {
   switch (role) {
     case ROLES.HEAD_OF_PROGRAMS: return 'the Head of Department of your department';
     case ROLES.ADMIN:            return 'a Super Admin';
-    case ROLES.PROGRAM_LEAD:     return 'a Department Lead';
+    case ROLES.PROGRAM_LEAD:     return 'the Department Lead';
     default:                     return role;
   }
+}
+
+function humanRoles(roles) {
+  if (roles.includes(ROLES.PROGRAM_LEAD) && roles.includes(ROLES.HEAD_OF_PROGRAMS)) {
+    return 'the Department Lead or Head of Department of your department';
+  }
+  return roles.map(humanRole).join(' or ');
 }
 
 module.exports = {
@@ -258,4 +283,5 @@ module.exports = {
   assertCanApprove,
   pendingForApproverWhereClause,
   departmentHasHOP,
+  departmentHasRole,
 };

@@ -358,7 +358,7 @@ const SystemSettingsPage: React.FC = () => {
               </Grid>
               {[
                 { label: 'Application Name', value: 'ZCC ERP System' },
-                { label: 'Version', value: 'v1.0.0' },
+                { label: 'Version', value: 'v2.0.0' },
                 { label: 'Environment', value: process.env.NODE_ENV === 'production' ? 'Production' : 'Development' },
                 { label: 'Database', value: 'MySQL 9.6 (finance_erp)' },
                 { label: 'Backend Framework', value: 'Node.js / Express.js' },

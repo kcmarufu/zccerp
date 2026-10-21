@@ -924,7 +924,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       <Divider />
       <Box sx={{ p: 1.5 }}>
         <Typography variant="caption" color="text.disabled" textAlign="center" display="block">
-          ERP Connect v1.0.0
+          ERP Connect v2.0.0
         </Typography>
       </Box>
     </Box>

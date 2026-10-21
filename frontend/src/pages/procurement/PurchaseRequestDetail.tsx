@@ -74,7 +74,7 @@ import {
   viewProofOfPayment
 } from '../../services/procurementService';
 import { ProcQuotation, ProcQuotationItem, ProcRequestItem, ProcVendor } from '../../types';
-import { downloadHTMLAsPDF, buildPurchaseOrders } from '../../utils/pdfUtils';
+import { downloadHTMLAsPDF, downloadPurchaseOrderPDF } from '../../utils/pdfUtils';
 import { formatRoleLabel } from '../../utils/roleUtils';
 import { useGoBack } from '../../utils/navigationState';
 import * as XLSX from 'xlsx';
@@ -1212,9 +1212,8 @@ ${allCommitteeApproved ? `
 
   const downloadPurchaseOrder = () => {
     if (!request) return;
-    // A split award produces one order per supplier.
-    buildPurchaseOrders(request).forEach(({ html, suffix }) =>
-      downloadHTMLAsPDF(html, `PO-${request.request_code}${suffix}-${format(new Date(), 'yyyy-MM-dd')}`));
+    // A split award prints one page per supplier, in one PDF.
+    downloadPurchaseOrderPDF(request, `PO-${request.request_code}-${format(new Date(), 'yyyy-MM-dd')}`);
   };
 
   const handleDownloadAttachment = async (attachmentId: number, fileName?: string) => {
