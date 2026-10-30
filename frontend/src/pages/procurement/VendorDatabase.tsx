@@ -8,7 +8,7 @@ import {
   Box, Paper, Typography, TextField, Button, Grid, Chip, IconButton, Table,
   TableHead, TableRow, TableCell, TableBody, TableContainer, TablePagination, Dialog,
   DialogTitle, DialogContent, DialogActions, Stack, Avatar, Switch,
-  FormControlLabel, InputAdornment, Alert, CircularProgress, Rating,
+  FormControl, FormLabel, Radio, RadioGroup, FormControlLabel, InputAdornment, Alert, CircularProgress, Rating,
   Tooltip, MenuItem, alpha, useTheme
 } from '@mui/material';
 import {
@@ -32,10 +32,12 @@ import { useAuthStore } from '../../store/authStore';
 import { getVendors, createVendor, updateVendor, deleteVendor } from '../../services/procurementService';
 import { canManageVendors } from '../../utils/vendorAccess';
 import { ProcVendor } from '../../types';
+import {
+  ANTI_TERROR_CHECK_LABEL, UNCATEGORIZED, VENDOR_CATEGORIES,
+  antiTerrorLabel, isAntiTerrorVerified
+} from '../../utils/vendorRegister';
 import { formatDate } from '../../utils/datetime';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
-
-const CATEGORIES = ['IT Equipment', 'Office Supplies', 'Construction', 'Vehicles', 'Consultancy', 'Food & Beverage', 'Medical', 'Training', 'Transport', 'Other'];
 
 const emptyVendor = (): Partial<ProcVendor> => ({
   company_name: '', contact_person: '', email: '', phone: '', address: '',
@@ -51,6 +53,7 @@ const VendorDatabase: React.FC = () => {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [prequalFilter, setPrequalFilter] = useState('');
+  const [antiTerrorFilter, setAntiTerrorFilter] = useState('');
   const [dialog, setDialog] = useState<null | 'create' | 'edit'>(null);
   const [selected, setSelected] = useState<Partial<ProcVendor> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -65,11 +68,12 @@ const VendorDatabase: React.FC = () => {
   const canManage = canManageVendors(user);
 
   const { data: vendors = [], isLoading, error, refetch } = useQuery({
-    queryKey: ['proc-vendors', search, categoryFilter, prequalFilter],
+    queryKey: ['proc-vendors', search, categoryFilter, prequalFilter, antiTerrorFilter],
     queryFn: () => getVendors({
       search: search || undefined,
       category: categoryFilter || undefined,
-      is_prequalified: prequalFilter || undefined
+      is_prequalified: prequalFilter || undefined,
+      antiterror: antiTerrorFilter || undefined
     }),
     refetchInterval: 60000
   });
@@ -87,6 +91,11 @@ const VendorDatabase: React.FC = () => {
 
   const handleSave = async () => {
     if (!formData.company_name?.trim()) { toast.error('Company name is required'); return; }
+    if (!formData.category) { toast.error('Choose a category'); return; }
+    if (formData.antiterror_verified === null || formData.antiterror_verified === undefined) {
+      toast.error('Record whether the anti-terrorism check has been done');
+      return;
+    }
     setSaving(true);
     try {
       if (dialog === 'create') {
@@ -208,7 +217,8 @@ const VendorDatabase: React.FC = () => {
           <TextField select size="small" label="Category" sx={{ minWidth: 160 }}
             value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
             <MenuItem value="">All Categories</MenuItem>
-            {CATEGORIES.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+            <MenuItem value={UNCATEGORIZED}>Uncategorized</MenuItem>
+            {VENDOR_CATEGORIES.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
           </TextField>
           <TextField select size="small" label="Prequalification" sx={{ minWidth: 160 }}
             value={prequalFilter} onChange={e => setPrequalFilter(e.target.value)}>
@@ -216,8 +226,15 @@ const VendorDatabase: React.FC = () => {
             <MenuItem value="true">Prequalified</MenuItem>
             <MenuItem value="false">Not Prequalified</MenuItem>
           </TextField>
-          {(search || categoryFilter || prequalFilter) && (
-            <Button size="small" onClick={() => { setSearch(''); setCategoryFilter(''); setPrequalFilter(''); }}>Clear</Button>
+          <TextField select size="small" label={ANTI_TERROR_CHECK_LABEL} sx={{ minWidth: 190 }}
+            value={antiTerrorFilter} onChange={e => setAntiTerrorFilter(e.target.value)}>
+            <MenuItem value="">All</MenuItem>
+            <MenuItem value="verified">Verified</MenuItem>
+            <MenuItem value="not_verified">Not verified</MenuItem>
+            <MenuItem value="not_recorded">Not yet recorded</MenuItem>
+          </TextField>
+          {(search || categoryFilter || prequalFilter || antiTerrorFilter) && (
+            <Button size="small" onClick={() => { setSearch(''); setCategoryFilter(''); setPrequalFilter(''); setAntiTerrorFilter(''); }}>Clear</Button>
           )}
         </Stack>
       </Paper>
@@ -232,6 +249,7 @@ const VendorDatabase: React.FC = () => {
               <TableCell><strong>Company</strong></TableCell>
               <TableCell><strong>Contact</strong></TableCell>
               <TableCell><strong>Category</strong></TableCell>
+              <TableCell><strong>Anti-terrorism</strong></TableCell>
               <TableCell><strong>Status</strong></TableCell>
               <TableCell><strong>Rating</strong></TableCell>
               <TableCell><strong>Quotations</strong></TableCell>
@@ -240,10 +258,10 @@ const VendorDatabase: React.FC = () => {
           </TableHead>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4 }}><CircularProgress size={32} /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} align="center" sx={{ py: 4 }}><CircularProgress size={32} /></TableCell></TableRow>
             ) : vendors.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center" sx={{ py: 6 }}>
+                <TableCell colSpan={9} align="center" sx={{ py: 6 }}>
                   <VendorIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1, display: 'block', mx: 'auto' }} />
                   <Typography color="text.secondary">No vendors found</Typography>
                 </TableCell>
@@ -269,7 +287,15 @@ const VendorDatabase: React.FC = () => {
                   <Typography variant="caption" color="text.secondary">{vendor.email}</Typography>
                 </TableCell>
                 <TableCell>
-                  {vendor.category ? <Chip label={vendor.category} size="small" variant="outlined" /> : '—'}
+                  {vendor.category
+                    ? <Chip label={vendor.category} size="small" variant="outlined" />
+                    : <Chip label="Uncategorized" size="small" color="warning" variant="outlined" />}
+                </TableCell>
+                <TableCell>
+                  <Chip size="small" variant="outlined"
+                    color={isAntiTerrorVerified(vendor.antiterror_verified) ? 'success' : 'warning'}
+                    label={vendor.antiterror_verified === null || vendor.antiterror_verified === undefined
+                      ? 'Not yet recorded' : antiTerrorLabel(vendor.antiterror_verified)} />
                 </TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5}>
@@ -360,10 +386,21 @@ const VendorDatabase: React.FC = () => {
               <TextField fullWidth label="Registration Number" value={formData.registration_number || ''} onChange={field('registration_number')} />
             </Grid>
             <Grid item xs={12} md={4}>
-              <TextField select fullWidth label="Category" value={formData.category || ''} onChange={field('category')}>
-                <MenuItem value="">Select category</MenuItem>
-                {CATEGORIES.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+              <TextField select fullWidth required label="Category" value={formData.category || ''} onChange={field('category')}>
+                {VENDOR_CATEGORIES.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
               </TextField>
+            </Grid>
+            <Grid item xs={12}>
+              <FormControl required>
+                <FormLabel>{ANTI_TERROR_CHECK_LABEL}</FormLabel>
+                <RadioGroup row
+                  value={formData.antiterror_verified === null || formData.antiterror_verified === undefined
+                    ? '' : String(Number(formData.antiterror_verified))}
+                  onChange={e => setFormData(f => ({ ...f, antiterror_verified: Number(e.target.value) }))}>
+                  <FormControlLabel value="1" control={<Radio />} label="Verified" />
+                  <FormControlLabel value="0" control={<Radio />} label="Not verified" />
+                </RadioGroup>
+              </FormControl>
             </Grid>
             <Grid item xs={12} md={6}>
               <FormControlLabel

@@ -7,6 +7,7 @@
 const { query, transaction } = require('../config/database');
 const { ROLES, isAdminHrManager, isFinanceManager, FINANCE_DEPT_CODE, isGsTrackRole } = require('../config/roles');
 const notificationService = require('./notification.service');
+const workflowEmail = require('./workflowEmail.service');
 
 const PROC_STATUS = {
   DRAFT: 'DRAFT',
@@ -51,6 +52,9 @@ const HV_SEAT = { SUPER_ADMIN: 'SUPER_ADMIN', FINANCE: 'FINANCE' };
 
 // Below this USD value a request skips the Committee and goes straight to Finance.
 const COMMITTEE_BYPASS_THRESHOLD_USD = 500;
+
+// getVendors category filter for suppliers with no category yet.
+const UNCATEGORIZED = '__UNCATEGORIZED__';
 
 // What a selected quotation is worth on its request. A request may be split
 // across several suppliers, each awarded only some items — awarded_amount is
@@ -508,7 +512,8 @@ class ProcurementService {
       ),
       query(
         `SELECT pq.*,
-          v.company_name AS vendor_company, v.is_prequalified,
+          v.company_name AS vendor_company, v.is_prequalified, v.category AS vendor_category,
+          v.antiterror_verified,
           u.first_name AS created_by_first_name, u.last_name AS created_by_last_name
          FROM proc_quotations pq
          LEFT JOIN proc_vendors v ON pq.vendor_id = v.id
@@ -1932,12 +1937,30 @@ class ProcurementService {
     );
   }
 
+  /**
+   * A quotation names a supplier from the register, never free text, and only
+   * once the register says what the supplier does and whether the
+   * anti-terrorism check has been recorded.
+   */
+  async _vendorForQuotation(vendorId) {
+    const [vendor] = vendorId
+      ? await query('SELECT * FROM proc_vendors WHERE id = ? AND is_active = 1', [vendorId])
+      : [];
+    if (!vendor) throw new Error('Choose the supplier from the vendor list');
+    if (!vendor.category || vendor.antiterror_verified === null) {
+      throw new Error(`Record the category and anti-terrorism check for ${vendor.company_name} before using this supplier`);
+    }
+    return vendor;
+  }
+
   async addQuotation(requestId, data, user) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
     if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(req.status)) {
       throw new Error('Quotations can only be added when request is in procurement or committee review stage');
     }
+
+    const vendor = await this._vendorForQuotation(data.vendor_id);
 
     const items = this.parseQuotationItems(data.items);
     // When lines are supplied the total is their sum — a header figure that
@@ -1955,10 +1978,10 @@ class ProcurementService {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
           requestId,
-          data.vendor_id || null,
-          data.vendor_name,
-          data.vendor_email || null,
-          data.vendor_phone || null,
+          vendor.id,
+          vendor.company_name,
+          data.vendor_email || vendor.email || null,
+          data.vendor_phone || vendor.phone || null,
           data.quotation_number || null,
           totalAmount,
           this._normalizeCurrency(data.currency),
@@ -1978,7 +2001,7 @@ class ProcurementService {
       }
       await this._logEvent(
         conn, requestId, user, 'QUOTATION_ADDED', req.status, req.status,
-        `Quotation from ${this._short(data.vendor_name, 80)} added at `
+        `Quotation from ${this._short(vendor.company_name, 80)} added at `
         + `${this._normalizeCurrency(data.currency)} ${Number(totalAmount || 0).toFixed(2)}`
         + `${data.quotation_number ? ` (Ref ${this._short(data.quotation_number, 40)})` : ''}`
         + `${items && items.length ? ` — ${items.length} priced line(s)` : ''}`
@@ -1991,6 +2014,7 @@ class ProcurementService {
     const quotations = await query(
       `SELECT pq.*,
         v.company_name AS vendor_company, v.is_prequalified, v.rating AS vendor_rating,
+        v.category AS vendor_category, v.antiterror_verified,
         u.first_name AS created_by_first_name, u.last_name AS created_by_last_name
        FROM proc_quotations pq
        LEFT JOIN proc_vendors v ON pq.vendor_id = v.id
@@ -2041,6 +2065,12 @@ class ProcurementService {
     // Amended lines replace the previous ones wholesale, and the header total
     // follows them. Sending no `items` at all leaves the existing lines alone,
     // which is what an edit that only touches the vendor details means.
+    // Changing the supplier goes through the register like a new quotation;
+    // correcting a price on the existing supplier does not.
+    const vendorChanged = data.vendor_id && Number(data.vendor_id) !== Number(quot.vendor_id);
+    const vendor = vendorChanged ? await this._vendorForQuotation(data.vendor_id) : null;
+    data.vendor_name = vendor ? vendor.company_name : null;
+
     const items = this.parseQuotationItems(data.items);
     const totalAmount = items && items.length
       ? this.quotationItemsTotal(items)
@@ -2050,21 +2080,21 @@ class ProcurementService {
     const hasNewFile = data.file_path != null;
     const sql = hasNewFile
       ? `UPDATE proc_quotations SET
-          vendor_name=COALESCE(?,vendor_name), vendor_email=COALESCE(?,vendor_email), vendor_phone=COALESCE(?,vendor_phone),
+          vendor_id=COALESCE(?,vendor_id), vendor_name=COALESCE(?,vendor_name), vendor_email=COALESCE(?,vendor_email), vendor_phone=COALESCE(?,vendor_phone),
           quotation_number=COALESCE(?,quotation_number), total_amount=COALESCE(?,total_amount),
           currency=COALESCE(?,currency), validity_date=COALESCE(?,validity_date),
           delivery_timeline=COALESCE(?,delivery_timeline), notes=COALESCE(?,notes),
           file_path=?, file_name=?, file_size=?, updated_at=NOW()
          WHERE id=?`
       : `UPDATE proc_quotations SET
-          vendor_name=COALESCE(?,vendor_name), vendor_email=COALESCE(?,vendor_email), vendor_phone=COALESCE(?,vendor_phone),
+          vendor_id=COALESCE(?,vendor_id), vendor_name=COALESCE(?,vendor_name), vendor_email=COALESCE(?,vendor_email), vendor_phone=COALESCE(?,vendor_phone),
           quotation_number=COALESCE(?,quotation_number), total_amount=COALESCE(?,total_amount),
           currency=COALESCE(?,currency), validity_date=COALESCE(?,validity_date),
           delivery_timeline=COALESCE(?,delivery_timeline), notes=COALESCE(?,notes), updated_at=NOW()
          WHERE id=?`;
 
     const params = [
-      data.vendor_name || null, data.vendor_email || null, data.vendor_phone || null,
+      vendor ? vendor.id : null, data.vendor_name, data.vendor_email || null, data.vendor_phone || null,
       data.quotation_number || null, totalAmount,
       data.currency ? this._normalizeCurrency(data.currency, quot.currency) : null,
       data.validity_date || null, data.delivery_timeline || null,
@@ -2183,10 +2213,15 @@ class ProcurementService {
       const s = `%${filters.search}%`;
       params.push(s, s, s);
     }
-    if (filters.category) {
+    if (filters.category === UNCATEGORIZED) {
+      where += " AND (v.category IS NULL OR v.category = '')";
+    } else if (filters.category) {
       where += ' AND v.category = ?';
       params.push(filters.category);
     }
+    if (filters.antiterror === 'verified') where += ' AND v.antiterror_verified = 1';
+    if (filters.antiterror === 'not_verified') where += ' AND v.antiterror_verified = 0';
+    if (filters.antiterror === 'not_recorded') where += ' AND v.antiterror_verified IS NULL';
     if (filters.is_prequalified !== undefined) {
       where += ' AND v.is_prequalified = ?';
       params.push(filters.is_prequalified === 'true' ? 1 : 0);
@@ -2206,12 +2241,30 @@ class ProcurementService {
        LEFT JOIN users u ON v.created_by = u.id
        ${where}
        ORDER BY v.company_name ASC
-       LIMIT ${parseInt(filters.limit) || 100}`,
+       LIMIT ${parseInt(filters.limit) || 5000}`,
       params
     );
   }
 
+  /** Every supplier has a category and a recorded anti-terrorism check, and one entry. */
+  async _assertVendorComplete(data, vendorId = null) {
+    const name = String(data.company_name || '').trim();
+    if (!name) throw new Error('Company name is required');
+    if (!String(data.category || '').trim()) throw new Error('Choose a category for this supplier');
+    if (![true, false, 1, 0, '1', '0'].includes(data.antiterror_verified)) {
+      throw new Error('Record whether this supplier has passed the anti-terrorism check');
+    }
+    const [twin] = await query(
+      'SELECT company_name FROM proc_vendors WHERE LOWER(TRIM(company_name)) = LOWER(?) AND id <> ?',
+      [name, vendorId || 0]
+    );
+    if (twin) throw new Error(`${twin.company_name} is already in the vendor list`);
+    return { name, verified: [true, 1, '1'].includes(data.antiterror_verified) ? 1 : 0 };
+  }
+
   async createVendor(data, user) {
+    const { name, verified } = await this._assertVendorComplete(data);
+
     // Auto-generate vendor code
     const seqRows = await query('SELECT COUNT(*) + 1 AS seq FROM proc_vendors');
     const vendorCode = `VND-${String(seqRows[0].seq).padStart(3, '0')}`;
@@ -2219,11 +2272,12 @@ class ProcurementService {
     const result = await query(
       `INSERT INTO proc_vendors 
         (vendor_code, company_name, contact_person, email, phone, address, tin_number,
-         registration_number, category, is_prequalified, prequalification_expiry, notes, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+         registration_number, category, is_prequalified, prequalification_expiry, notes,
+         antiterror_verified, antiterror_checked_by, antiterror_checked_at, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, NOW())`,
       [
         vendorCode,
-        data.company_name,
+        name,
         data.contact_person || null,
         data.email || null,
         data.phone || null,
@@ -2234,6 +2288,8 @@ class ProcurementService {
         data.is_prequalified ? 1 : 0,
         data.prequalification_expiry || null,
         data.notes || null,
+        verified,
+        user.id,
         user.id
       ]
     );
@@ -2241,18 +2297,23 @@ class ProcurementService {
     return { vendorId: result.insertId, vendorCode };
   }
 
-  async updateVendor(vendorId, data) {
-    const vendors = await query('SELECT id FROM proc_vendors WHERE id = ?', [vendorId]);
+  async updateVendor(vendorId, data, user) {
+    const vendors = await query('SELECT id, antiterror_verified FROM proc_vendors WHERE id = ?', [vendorId]);
     if (!vendors.length) throw new Error('Vendor not found');
+    const { name, verified } = await this._assertVendorComplete(data, vendorId);
+    const checkChanged = verified !== vendors[0].antiterror_verified ? 1 : 0;
 
     await query(
       `UPDATE proc_vendors SET
         company_name=?, contact_person=?, email=?, phone=?, address=?, tin_number=?,
         registration_number=?, category=?, is_prequalified=?, prequalification_expiry=?,
-        notes=?, is_active=?, updated_at=NOW()
+        notes=?, is_active=?, antiterror_verified=?,
+        antiterror_checked_by=IF(?, ?, antiterror_checked_by),
+        antiterror_checked_at=IF(?, NOW(), antiterror_checked_at),
+        updated_at=NOW()
        WHERE id=?`,
       [
-        data.company_name,
+        name,
         data.contact_person || null,
         data.email || null,
         data.phone || null,
@@ -2264,6 +2325,9 @@ class ProcurementService {
         data.prequalification_expiry || null,
         data.notes || null,
         data.is_active !== undefined ? (data.is_active ? 1 : 0) : 1,
+        verified,
+        checkChanged, user.id,
+        checkChanged,
         vendorId
       ]
     );
@@ -2747,6 +2811,23 @@ class ProcurementService {
     };
   }
 
+}
+
+// Every action that can move a request is followed by its emails, so a new
+// route to a stage cannot be added and forget them. Mail goes out after the
+// transaction and cannot undo a step that has been committed.
+for (const action of [
+  'submitPurchaseRequest', 'approveDeptLevel', 'rejectRequest', 'submitToCommittee',
+  'committeeDecision', 'highValueDecision', 'finalFinanceApproval'
+]) {
+  const step = ProcurementService.prototype[action];
+  ProcurementService.prototype[action] = async function emailingStep(requestId, ...args) {
+    const [before] = await query('SELECT status FROM proc_requests WHERE id = ?', [requestId]);
+    const result = await step.call(this, requestId, ...args);
+    workflowEmail.procurementStepTaken(requestId, before?.status)
+      .catch((err) => console.error('[Procurement] email error:', err.message));
+    return result;
+  };
 }
 
 module.exports = new ProcurementService();

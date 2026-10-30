@@ -1266,6 +1266,8 @@ export interface ProcQuotation {
    */
   awarded_amount?: number | string | null;
   is_prequalified?: boolean;    // used in some pages
+  vendor_category?: string | null;
+  antiterror_verified?: boolean | number | null;
   notes?: string | null;
   uploaded_by: number;
   uploader_name?: string;
@@ -1288,6 +1290,8 @@ export interface ProcVendor {
   category?: string;
   notes?: string;
   is_prequalified: boolean;
+  /** 1 verified, 0 not verified, null when nobody has recorded the check yet. */
+  antiterror_verified?: boolean | number | null;
   is_active: boolean;
   rating?: number;
   quotation_count?: number;  // used in VendorDatabase page

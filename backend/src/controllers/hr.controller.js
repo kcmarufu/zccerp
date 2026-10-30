@@ -4,6 +4,7 @@
  */
 
 const hrService = require('../services/hr.service');
+const workflowEmail = require('../services/workflowEmail.service');
 const { query } = require('../config/database');
 const {
   ROLES, isAdminHrManager,
@@ -317,6 +318,7 @@ class HRController {
       }
 
       const result = await hrService.createLeaveRequest(body, req.user.id);
+      workflowEmail.leaveSubmitted(result.id).catch((err) => console.error('Leave email error:', err.message));
       res.status(201).json({ success: true, message: 'Leave request submitted', data: result });
     } catch (error) {
       console.error('Error creating leave request:', error);
@@ -347,6 +349,9 @@ class HRController {
         role: req.user.role,
         isHrOffice: hasFullHrAccess(req.user),
       });
+      if (result.resubmitted) {
+        workflowEmail.leaveSubmitted(result.id).catch((err) => console.error('Leave email error:', err.message));
+      }
 
       res.json({
         success: true,
@@ -376,6 +381,7 @@ class HRController {
         },
         { approved: approved !== false, comments: comments || null }
       );
+      workflowEmail.leaveDecided(result.id).catch((err) => console.error('Leave email error:', err.message));
       res.json({
         success: true,
         message: `Leave request ${result.status.toLowerCase()} successfully`,

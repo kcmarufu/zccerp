@@ -312,8 +312,8 @@ class ProcurementController {
         data.file_size = req.file.size;
       }
 
-      if (!data.vendor_name) {
-        return res.status(400).json({ success: false, error: 'Vendor name is required' });
+      if (!data.vendor_id) {
+        return res.status(400).json({ success: false, error: 'Choose the supplier from the vendor list' });
       }
       // A quotation priced line by line derives its total from those lines, so
       // a header figure is only required when no breakdown was sent.
@@ -430,7 +430,7 @@ class ProcurementController {
       if (!canManageVendors(req.user)) {
         return res.status(403).json({ success: false, error: 'You do not have permission to manage vendors' });
       }
-      const result = await procurementService.updateVendor(req.params.id, req.body);
+      const result = await procurementService.updateVendor(req.params.id, req.body, req.user);
       res.json({ success: true, data: result, message: 'Vendor updated successfully' });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });

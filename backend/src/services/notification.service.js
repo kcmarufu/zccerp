@@ -5,6 +5,7 @@
 
 const { query, pool } = require('../config/database');
 const { FINANCE_DEPT_CODE } = require('../config/roles');
+const workflowEmail = require('./workflowEmail.service');
 
 class NotificationService {
 
@@ -22,6 +23,11 @@ class NotificationService {
     } catch (err) {
       console.error('[NotificationService] Failed to create notification:', err.message);
     }
+  }
+
+  /** Email goes out in the background; a failure is logged and goes no further. */
+  _email(sending) {
+    sending.catch((err) => console.error('[NotificationService] email error:', err.message));
   }
 
   /**
@@ -109,6 +115,10 @@ class NotificationService {
       kind === 'reconciliation' ? 'reconciliation_pending' : 'approval_pending',
       copy.entityType, requestId, copy.link, requesterId
     );
+    // A purchase request is emailed from procurementStepTaken with its other steps.
+    if (kind !== 'proc_request') {
+      this._email(workflowEmail.floatSubmitted(kind === 'reconciliation' ? 'reconciliation' : 'float', requestId));
+    }
   }
 
   /**
@@ -161,6 +171,7 @@ class NotificationService {
       `A float request has been approved and requires finance approval.`,
       'approval_pending', 'request', requestId, financeLink
     );
+    this._email(workflowEmail.floatGsApproved('float', requestId, approverName));
   }
 
   /** Finance approved — notify requester + Admin */
@@ -177,6 +188,7 @@ class NotificationService {
       `Float request ${requestCode} has been fully approved by Finance (${approverName}).`,
       'success', 'request', requestId, `/finance/approvals`, requesterId
     );
+    this._email(workflowEmail.floatDecided('float', requestId, { approved: true, decidedBy: approverName }));
   }
 
   /** Request rejected — notify requester + Admin */
@@ -196,6 +208,7 @@ class NotificationService {
       `Float request ${requestCode} was rejected by ${rejectedBy}.`,
       'error', 'request', requestId, `/finance/approvals`, requesterId
     );
+    this._email(workflowEmail.floatDecided('float', requestId, { approved: false, decidedBy: rejectedBy, reason }));
   }
 
   /** Request dispatched — notify requester + Admin */
@@ -261,6 +274,7 @@ class NotificationService {
       `A reconciliation has passed lead review and requires finance approval.`,
       'reconciliation_pending', 'request', requestId, `/finance/reconciliation`
     );
+    this._email(workflowEmail.floatGsApproved('reconciliation', requestId, approverName));
   }
 
   /**
@@ -298,6 +312,7 @@ class NotificationService {
       `Reconciliation for ${requestCode} has been fully approved by ${approverName}.`,
       'success', 'request', requestId, `/finance/reconciliation`, requesterId
     );
+    this._email(workflowEmail.floatDecided('reconciliation', requestId, { approved: true, decidedBy: approverName }));
   }
 
   /** Reconciliation rejected — notify requester + Admin */
@@ -317,6 +332,7 @@ class NotificationService {
       `Reconciliation for ${requestCode} was rejected by ${rejectedBy}.`,
       'error', 'request', requestId, `/finance/reconciliation`, requesterId
     );
+    this._email(workflowEmail.floatDecided('reconciliation', requestId, { approved: false, decidedBy: rejectedBy, reason }));
   }
 
   // ─────────────────────────────────────────────────────────────────

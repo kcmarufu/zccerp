@@ -8,6 +8,7 @@
 
 const { query, transaction, pool } = require('../config/database');
 const notificationService = require('./notification.service');
+const workflowEmail = require('./workflowEmail.service');
 const reconciliationService = require('./reconciliation.service');
 const requestRouting = require('./requestRouting.service');
 const {
@@ -233,6 +234,11 @@ class ApprovalService {
         notificationService.onRequestAwaitingGs(requestId, n.requestCode, n.requesterId).catch(() => {});
       } else {
         notificationService.onRequestSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.routingDeptId).catch(() => {});
+        if (n.targetStatus === REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
+          // Rejected by Finance and sent straight back to the same desk.
+          workflowEmail.floatResubmittedToFinance('float', requestId)
+            .catch((err) => console.error('[Approval] email error:', err.message));
+        }
       }
     }
     return result;

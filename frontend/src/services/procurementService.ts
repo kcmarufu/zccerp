@@ -319,6 +319,7 @@ export const getCommitteeReviews = async (requestId: number | string): Promise<P
 // VENDORS
 // ============================================================================
 export const getVendors = async (params?: {
+  antiterror?: string;
   search?: string;
   category?: string;
   is_prequalified?: string;

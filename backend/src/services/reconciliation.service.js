@@ -11,6 +11,7 @@ const {
   isGsTrackRole, gsTrackRequesterSql
 } = require('../config/roles');
 const notificationService = require('./notification.service');
+const workflowEmail = require('./workflowEmail.service');
 
 /**
  * Can this approver act on the departmental (Lead/HOP) stage of a reconciliation?
@@ -567,6 +568,11 @@ class ReconciliationService {
         notificationService.onRequestAwaitingGs(requestId, n.requestCode, n.requesterId, 'reconciliation').catch(() => {});
       } else {
         notificationService.onReconciliationSubmitted(requestId, n.requestCode, n.requesterId, n.deptId, n.timeliness, n.routingDeptId).catch(() => {});
+        if (n.nextStatus === REQUEST_STATUS.RECON_PENDING_FINANCE) {
+          // Rejected by Finance and sent straight back to the same desk.
+          workflowEmail.floatResubmittedToFinance('reconciliation', requestId)
+            .catch((err) => console.error('[Reconciliation] email error:', err.message));
+        }
       }
     }
     return result;

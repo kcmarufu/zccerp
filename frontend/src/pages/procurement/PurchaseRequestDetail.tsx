@@ -9,7 +9,7 @@ import {
   Table, TableContainer, TableHead, TableRow, TableCell, TableBody, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, IconButton, Tooltip, Stack,
   Stepper, Step, StepLabel, Avatar, List, ListItem, ListItemText,
-  ListItemAvatar, alpha, useTheme, MenuItem, Autocomplete, Switch
+  ListItemAvatar, alpha, useTheme, MenuItem, Switch
 } from '@mui/material';
 import {
   ArrowBack as BackIcon,
@@ -74,6 +74,9 @@ import {
   viewProofOfPayment
 } from '../../services/procurementService';
 import { ProcQuotation, ProcQuotationItem, ProcRequestItem, ProcVendor } from '../../types';
+import VendorPicker from '../../components/procurement/VendorPicker';
+import VendorQuickDialog from '../../components/procurement/VendorQuickDialog';
+import { antiTerrorLabel, isAntiTerrorVerified, isVendorComplete } from '../../utils/vendorRegister';
 import { downloadHTMLAsPDF, downloadPurchaseOrderPDF } from '../../utils/pdfUtils';
 import { formatRoleLabel } from '../../utils/roleUtils';
 import { useGoBack } from '../../utils/navigationState';
@@ -549,6 +552,9 @@ const PurchaseRequestDetail: React.FC = () => {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [quotForm, setQuotForm] = useState({ vendor_name: '', vendor_email: '', vendor_phone: '', quotation_number: '', total_amount: '', currency: 'USD', validity_date: '', delivery_timeline: '', notes: '' });
   const [selectedVendor, setSelectedVendor] = useState<ProcVendor | null>(null);
+  const [editSelectedVendor, setEditSelectedVendor] = useState<ProcVendor | null>(null);
+  /** Which quotation dialog the supplier dialog fills in once saved, and the supplier being completed. */
+  const [vendorDialog, setVendorDialog] = useState<{ target: 'upload' | 'edit'; vendor: ProcVendor | null } | null>(null);
   /** The supplier's priced breakdown being entered on the upload dialog. */
   const [quotLines, setQuotLines] = useState<QuotLine[]>([]);
 
@@ -592,7 +598,7 @@ const PurchaseRequestDetail: React.FC = () => {
 
   const { data: vendors = [] } = useQuery({
     queryKey: ['proc-vendors-list'],
-    queryFn: () => getVendors({ limit: 200 } as any),
+    queryFn: () => getVendors(),
     staleTime: 60000,
     // Only the quotation dialogs use the vendor list, and not every role that
     // opens this page may read the vendor database.
@@ -796,9 +802,28 @@ const PurchaseRequestDetail: React.FC = () => {
     setUploadDialog(true);
   };
 
+  const applyVendor = (target: 'upload' | 'edit', vendor: ProcVendor | null) => {
+    if (target === 'upload') {
+      setSelectedVendor(vendor);
+      setQuotForm(f => ({ ...f, vendor_name: vendor?.company_name || '', vendor_email: vendor?.email || '', vendor_phone: vendor?.phone || '' }));
+    } else {
+      setEditSelectedVendor(vendor);
+      setEditQuotForm(f => ({ ...f, vendor_name: vendor?.company_name || '', vendor_email: vendor?.email || '', vendor_phone: vendor?.phone || '' }));
+    }
+  };
+
+  /** A supplier missing its category or check is completed before it can be used. */
+  const pickVendor = (target: 'upload' | 'edit', vendor: ProcVendor | null) => {
+    if (vendor && !isVendorComplete(vendor)) {
+      setVendorDialog({ target, vendor });
+      return;
+    }
+    applyVendor(target, vendor);
+  };
+
   const handleUploadQuotation = async () => {
-    if (!quotForm.vendor_name) {
-      toast.error('Vendor name is required');
+    if (!selectedVendor) {
+      toast.error('Choose the supplier from the list');
       return;
     }
     const lineError = quotLinesError(quotLines);
@@ -811,6 +836,7 @@ const PurchaseRequestDetail: React.FC = () => {
     try {
       const fd = new FormData();
       Object.entries(quotForm).forEach(([k, v]) => { if (v) fd.append(k, v); });
+      fd.set('vendor_id', String(selectedVendor.id));
       // The lines are the quotation's substance; the server recomputes the
       // total from them and ignores any header figure sent alongside.
       if (quotLines.length) fd.set('items', JSON.stringify(quotLinesPayload(quotLines)));
@@ -843,6 +869,10 @@ const PurchaseRequestDetail: React.FC = () => {
 
   const openEditQuot = (quot: ProcQuotation) => {
     setEditingQuot(quot);
+    setEditSelectedVendor(quot.vendor_id
+      ? (vendors as ProcVendor[]).find(v => v.id === quot.vendor_id)
+        || ({ id: quot.vendor_id, company_name: quot.vendor_name || '' } as ProcVendor)
+      : null);
     setEditQuotForm({
       vendor_name: quot.vendor_name || '',
       vendor_email: quot.vendor_email || '',
@@ -863,8 +893,8 @@ const PurchaseRequestDetail: React.FC = () => {
 
   const handleUpdateQuotation = async () => {
     if (!editingQuot) return;
-    if (!editQuotForm.vendor_name) {
-      toast.error('Vendor name is required');
+    if (!editSelectedVendor) {
+      toast.error('Choose the supplier from the list');
       return;
     }
     const lineError = quotLinesError(editQuotLines);
@@ -877,6 +907,7 @@ const PurchaseRequestDetail: React.FC = () => {
     try {
       const fd = new FormData();
       Object.entries(editQuotForm).forEach(([k, v]) => { if (v) fd.append(k, v); });
+      fd.set('vendor_id', String(editSelectedVendor.id));
       if (editQuotLines.length) fd.set('items', JSON.stringify(quotLinesPayload(editQuotLines)));
       if (editQuotFile) fd.append('file', editQuotFile);
       await updateQuotation(id!, editingQuot.id, fd);
@@ -1049,9 +1080,11 @@ const PurchaseRequestDetail: React.FC = () => {
 
     // Sheet 3: Quotations
     if (request.quotations && request.quotations.length > 0) {
-      const qHeaders = ['Vendor', 'Reference', 'Amount', 'Currency', 'Valid Until', 'Delivery', 'Selected', 'Notes'];
+      const qHeaders = ['Vendor', 'Category', 'Anti-Terrorism Check', 'Reference', 'Amount', 'Currency', 'Valid Until', 'Delivery', 'Selected', 'Notes'];
       const qRows = request.quotations.map(q => [
         q.vendor_name,
+        q.vendor_category || '',
+        antiTerrorLabel(q.antiterror_verified),
         q.quotation_number || '',
         Number(q.total_amount || 0).toFixed(2),
         q.currency,
@@ -1179,9 +1212,9 @@ ${request.status === 'DRAFT' ? '<div class="watermark">DRAFT</div>' : ''}
 ${quotations.length > 0 ? `
 <h3>Bid Analysis (${quotations.length})</h3>
 <table>
-  <thead><tr><th>Vendor</th><th>Quotation Ref</th><th align="right">Amount</th><th>Currency</th><th>Valid Until</th><th>Lead Time</th><th>Notes</th></tr></thead>
+  <thead><tr><th>Vendor</th><th>Anti-Terrorism Check</th><th>Quotation Ref</th><th align="right">Amount</th><th>Currency</th><th>Valid Until</th><th>Lead Time</th><th>Notes</th></tr></thead>
   <tbody>
-    ${quotations.map(q => `<tr><td>${q.vendor_name}${q.is_selected ? '<span class="selected-badge">✓ SELECTED</span>' : ''}</td><td>${q.quotation_number || '—'}</td><td align="right">${Number(q.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td><td>${q.currency}</td><td>${formatDate(q.validity_date)}</td><td>${q.delivery_timeline || '—'}</td><td>${q.notes || '—'}</td></tr>`).join('')}
+    ${quotations.map(q => `<tr><td>${q.vendor_name}${q.is_selected ? '<span class="selected-badge">✓ SELECTED</span>' : ''}</td><td style="font-weight:bold;color:${isAntiTerrorVerified(q.antiterror_verified) ? '#2e7d32' : '#c62828'}">${antiTerrorLabel(q.antiterror_verified)}</td><td>${q.quotation_number || '—'}</td><td align="right">${Number(q.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td><td>${q.currency}</td><td>${formatDate(q.validity_date)}</td><td>${q.delivery_timeline || '—'}</td><td>${q.notes || '—'}</td></tr>`).join('')}
   </tbody>
 </table>` : ''}
 
@@ -1500,6 +1533,11 @@ ${allCommitteeApproved ? `
                               />
                             )}
                             {quot.is_prequalified && <Chip label="Prequalified" color="info" size="small" variant="outlined" />}
+                            <Chip
+                              size="small" variant="outlined"
+                              color={isAntiTerrorVerified(quot.antiterror_verified) ? 'success' : 'warning'}
+                              label={`Anti-terrorism: ${antiTerrorLabel(quot.antiterror_verified)}`}
+                            />
                           </Box>
                           {quot.notes && (
                             <Typography variant="caption" color="text.secondary" display="block">Note: {quot.notes}</Typography>
@@ -2317,34 +2355,11 @@ ${allCommitteeApproved ? `
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
             <Grid item xs={12}>
-              <Autocomplete
-                options={vendors as ProcVendor[]}
-                getOptionLabel={(v) => typeof v === 'string' ? v : v.company_name || ''}
+              <VendorPicker
+                vendors={vendors as ProcVendor[]}
                 value={selectedVendor}
-                onChange={(_, newVal) => {
-                  if (newVal && typeof newVal !== 'string') {
-                    setSelectedVendor(newVal);
-                    setQuotForm(f => ({
-                      ...f,
-                      vendor_name: newVal.company_name || '',
-                      vendor_email: newVal.email || '',
-                      vendor_phone: newVal.phone || ''
-                    }));
-                  } else {
-                    setSelectedVendor(null);
-                  }
-                }}
-                freeSolo
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    fullWidth
-                    required
-                    label="Vendor / Supplier Name *"
-                    value={quotForm.vendor_name}
-                    onChange={e => setQuotForm(f => ({ ...f, vendor_name: e.target.value }))}
-                  />
-                )}
+                onChange={(vendor) => pickVendor('upload', vendor)}
+                onAddNew={() => setVendorDialog({ target: 'upload', vendor: null })}
               />
             </Grid>
             <Grid item xs={12} md={3}>
@@ -2394,14 +2409,30 @@ ${allCommitteeApproved ? `
         </DialogActions>
       </Dialog>
 
+      <VendorQuickDialog
+        open={Boolean(vendorDialog)}
+        vendor={vendorDialog?.vendor}
+        onClose={() => setVendorDialog(null)}
+        onSaved={(vendor) => {
+          applyVendor(vendorDialog!.target, vendor);
+          setVendorDialog(null);
+          qc.invalidateQueries({ queryKey: ['proc-vendors-list'] });
+          toast.success('Supplier saved');
+        }}
+      />
+
       {/* Edit Quotation Dialog */}
       <Dialog open={editQuotDialog} onClose={() => !actionLoading && setEditQuotDialog(false)} maxWidth="lg" fullWidth>
         <DialogTitle>Edit Quotation</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
             <Grid item xs={12}>
-              <TextField fullWidth required label="Vendor / Supplier Name *" value={editQuotForm.vendor_name}
-                onChange={e => setEditQuotForm(f => ({ ...f, vendor_name: e.target.value }))} />
+              <VendorPicker
+                vendors={vendors as ProcVendor[]}
+                value={editSelectedVendor}
+                onChange={(vendor) => pickVendor('edit', vendor)}
+                onAddNew={() => setVendorDialog({ target: 'edit', vendor: null })}
+              />
             </Grid>
             <Grid item xs={12} md={3}>
               <TextField fullWidth label="Quotation Reference #" value={editQuotForm.quotation_number}
