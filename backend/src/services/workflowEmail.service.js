@@ -155,6 +155,7 @@ class WorkflowEmailService {
     await this._sendToAll(await this._generalSecretary(), {
       subject: `For your approval: ${copy.label} ${record.code} from ${fullName(record)}`,
       heading: `A ${copy.label} needs your attention`,
+      tone: 'action',
       intro: `${fullName(record)} has submitted a ${copy.label} that seeks your attention. Please review it, then approve or reject it.`,
       details: this._baseDetails(record, copy.label),
       link: copy.approvalsLink
@@ -169,6 +170,7 @@ class WorkflowEmailService {
     await this._sendToAll(await this._financeHod(), {
       subject: `Approved by the General Secretary: ${copy.label} ${record.code}`,
       heading: `A ${copy.label} is ready for Finance`,
+      tone: 'action',
       intro: `${approverName} has approved this ${copy.label} at the General Secretary stage. Please check it, then approve or reject it.`,
       details: this._baseDetails(record, copy.label),
       link: copy.approvalsLink
@@ -177,6 +179,7 @@ class WorkflowEmailService {
       to: record.email,
       subject: `Your ${copy.label} ${record.code} was approved by the General Secretary`,
       heading: 'Approved by the General Secretary',
+      tone: 'approved',
       intro: `${approverName} approved your ${copy.label}. It is now with Finance.`,
       details: this._baseDetails(record, copy.label),
       link: copy.requesterLink
@@ -191,6 +194,7 @@ class WorkflowEmailService {
     await this._sendToAll(await this._financeHod(), {
       subject: `Resubmitted to Finance: ${copy.label} ${record.code}`,
       heading: `A ${copy.label} is back with Finance`,
+      tone: 'action',
       intro: `${fullName(record)} has amended and resubmitted this ${copy.label}. Please check it, then approve or reject it.`,
       details: this._baseDetails(record, copy.label),
       link: copy.approvalsLink
@@ -207,6 +211,7 @@ class WorkflowEmailService {
       to: record.email,
       subject: `Your ${copy.label} ${record.code} was ${outcome}`,
       heading: `${capitalise(copy.label)} ${outcome}`,
+      tone: approved ? 'approved' : 'rejected',
       intro: `${decidedBy} ${outcome} your ${copy.label}.`,
       details: [...this._baseDetails(record, copy.label), ['Reason', reason]],
       link: copy.requesterLink
@@ -233,6 +238,7 @@ class WorkflowEmailService {
     await this._sendToAll(await this._generalSecretary(), {
       subject: `For your approval: leave request from ${fullName(record)}`,
       heading: 'A leave request needs your attention',
+      tone: 'action',
       intro: `${fullName(record)} has submitted a leave request that seeks your attention. Please review it, then approve or reject it.`,
       details: this._leaveDetails(record),
       link: '/hr/leave'
@@ -247,6 +253,7 @@ class WorkflowEmailService {
       to: record.email,
       subject: `Your leave request was ${outcome}`,
       heading: `Leave request ${outcome}`,
+      tone: record.status === 'APPROVED' ? 'approved' : 'rejected',
       intro: `${record.approver_name} ${outcome} your leave request.`,
       details: [...this._leaveDetails(record), ['Reason', record.rejection_reason]],
       link: '/hr/leave'
@@ -292,6 +299,7 @@ class WorkflowEmailService {
         await this._sendToAll(await this._generalSecretary(), {
           subject: `For your approval: purchase request ${record.code} from ${fullName(record)}`,
           heading: 'A purchase request needs your attention',
+          tone: 'action',
           intro: `${fullName(record)} has submitted a purchase request that seeks your attention. Please review it, then approve or reject it.`,
           details, link
         }, [record.requester_id]);
@@ -303,6 +311,7 @@ class WorkflowEmailService {
             to: record.email,
             subject: `Your purchase request ${record.code} was approved by the General Secretary`,
             heading: 'Approved by the General Secretary',
+            tone: 'approved',
             intro: `${actorName} approved your purchase request. It is now with Procurement.`,
             details, link
           });
@@ -314,6 +323,7 @@ class WorkflowEmailService {
         await this._sendToAll(seats, {
           subject: `High-value approval needed: ${record.code}`,
           heading: 'A high-value purchase request needs your approval',
+          tone: 'action',
           intro: 'The Procurement Committee has recommended this request. It needs approval from both the General Secretary and Finance. Please review it, then approve or reject it.',
           details, link
         }, [record.requester_id]);
@@ -325,6 +335,7 @@ class WorkflowEmailService {
           await this._sendToAll(await this._financeHod(), {
             subject: `Ready for Finance: purchase request ${record.code}`,
             heading: 'A purchase request is ready for Finance',
+            tone: 'action',
             intro: wasHighValue
               ? 'The General Secretary and Finance have both approved this high-value request. Please check it, then give final approval or reject it.'
               : 'This Head of Department\'s purchase request has cleared Procurement. Please check it, then give final approval or reject it.',
@@ -336,6 +347,7 @@ class WorkflowEmailService {
             to: record.email,
             subject: `Your purchase request ${record.code} is with Finance`,
             heading: 'Now with Finance',
+            tone: 'info',
             intro: 'Your purchase request has reached Finance for final approval.',
             details, link
           });
@@ -348,6 +360,7 @@ class WorkflowEmailService {
             to: record.email,
             subject: `Your purchase request ${record.code} was approved`,
             heading: 'Purchase request approved',
+            tone: 'approved',
             intro: `${actorName} gave final approval to your purchase request.`,
             details, link
           });
@@ -372,6 +385,7 @@ class WorkflowEmailService {
     await this._sendToAll(gsHasApproved ? await this._financeHod() : await this._generalSecretary(), {
       subject: `Your approval is still needed: ${record.code}`,
       heading: 'A high-value purchase request needs your approval',
+      tone: 'action',
       intro: `${actorName} has approved this high-value request. It cannot go further without your decision.`,
       details, link
     }, [actorId, record.requester_id]);
@@ -384,6 +398,7 @@ class WorkflowEmailService {
       await this._sendToAll(seats, {
         subject: `High-value request rejected: ${record.code}`,
         heading: 'A high-value purchase request was rejected',
+        tone: 'rejected',
         intro: `${actorName} rejected this high-value request. No further approval is needed unless it is amended and resubmitted.`,
         details: withReason, link
       }, [actorId, record.requester_id]);
@@ -393,6 +408,7 @@ class WorkflowEmailService {
         to: record.email,
         subject: `Your purchase request ${record.code} was rejected`,
         heading: 'Purchase request rejected',
+        tone: 'rejected',
         intro: `${actorName} rejected your purchase request.`,
         details: withReason, link
       });
