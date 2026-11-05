@@ -9,20 +9,17 @@ const { ROLES } = require('../config/roles');
 /**
  * Who may open Rejection Insights (user decision, 2026-11-05):
  *   - the Super Admin;
- *   - the HOD and the Lead of Finance (FOS), HSD and CPJS;
- *   - the Lead of Admin & HR (AHR) — the Lead only.
+ *   - the HOD and the Lead of Finance (FOS), HSD, CPJS and Admin & HR (AHR).
  * Nobody else, including Finance Clerks and the procurement team. The
  * frontend mirrors this in utils/insightsAccess.ts.
  */
-const HOD_AND_LEAD_DEPTS = ['FOS', 'HSD', 'CPJS'];
-const LEAD_ONLY_DEPTS = ['AHR'];
+const HOD_AND_LEAD_DEPTS = ['FOS', 'HSD', 'CPJS', 'AHR'];
 
 function canViewRejectionInsights(user) {
   if (!user) return false;
   if (user.role === ROLES.ADMIN) return true;
   const dept = user.department_code;
-  if ([ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role) && HOD_AND_LEAD_DEPTS.includes(dept)) return true;
-  return user.role === ROLES.PROGRAM_LEAD && LEAD_ONLY_DEPTS.includes(dept);
+  return [ROLES.HEAD_OF_PROGRAMS, ROLES.PROGRAM_LEAD].includes(user.role) && HOD_AND_LEAD_DEPTS.includes(dept);
 }
 
 const moduleOf = (value) => (value === 'procurement' ? 'procurement' : 'float');

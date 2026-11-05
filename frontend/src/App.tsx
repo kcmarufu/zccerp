@@ -171,7 +171,7 @@ const NoCommitteeRoute: React.FC = () => {
   return user?.role === 'PROCUREMENT_COMMITTEE' ? <Navigate to="/unauthorized" replace /> : <Outlet />;
 };
 
-/** Rejection Insights: Super Admin, Finance/HSD/CPJS HOD and Lead, Admin & HR Lead. */
+/** Rejection Insights: Super Admin, and the HOD and Lead of Finance, HSD, CPJS and Admin & HR. */
 const InsightsRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const user = useAuthStore((state) => state.user);
   return canViewRejectionInsights(user) ? <>{children}</> : <Navigate to="/unauthorized" replace />;

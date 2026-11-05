@@ -447,7 +447,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         },
         {
           // Why float and purchase requests are rejected. Super Admin, the HOD
-          // and Lead of Finance, HSD and CPJS, and the Admin & HR Lead only.
+          // and Lead of Finance, HSD, CPJS and Admin & HR only.
           path: '/reports/rejection-insights',
           label: 'Rejection Insights',
           icon: <AnalyticsIcon />,

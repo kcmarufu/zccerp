@@ -1,7 +1,7 @@
 /**
  * Rejection Insights (Reports) — what float and purchase requests are sent back for.
- * Visible to the Super Admin, the HOD/Lead of Finance, HSD and CPJS, and the
- * Admin & HR Lead (utils/insightsAccess.ts; the API enforces the same rule).
+ * Visible to the Super Admin and the HOD/Lead of Finance, HSD, CPJS and
+ * Admin & HR (utils/insightsAccess.ts; the API enforces the same rule).
  *
  * Every rejection comment reviewers have written is read against the known
  * mistakes (missing concept note, bank charges, claim form errors, ...) and
