@@ -3,8 +3,8 @@
  *
  * Every rejection comment reviewers have written is read against the known
  * mistakes (missing concept note, bank charges, claim form errors, ...) and
- * counted. The same analysis drives the "Avoid a rejection" hints requesters
- * see on the request forms, so improving reviewer comments improves the hints.
+ * counted. The same analysis drives the tips requesters see beside the
+ * fields on the request forms, so improving reviewer comments improves the hints.
  * Figures are recomputed from live data (at most 30 minutes old; Refresh forces
  * it).
  */

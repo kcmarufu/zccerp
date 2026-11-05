@@ -49,6 +49,8 @@ export interface RequestHint {
   severity: 'warning' | 'info';
   title: string;
   message: string;
+  /** The case-specific part of the message, e.g. which supplier kinds were found. */
+  detail?: string;
   evidence: string;
 }
 

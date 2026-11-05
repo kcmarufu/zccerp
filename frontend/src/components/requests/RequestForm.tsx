@@ -66,7 +66,7 @@ import attachmentService from '../../services/attachmentService';
 import perDiemService from '../../services/perDiemService';
 import { reconciliationService, ReconRequestBlock } from '../../services/reconciliationService';
 import ReconBlockAlert from '../common/ReconBlockAlert';
-import RequestHints from '../common/RequestHints';
+import { useRequestHints, InlineTip } from '../common/RequestHints';
 import { FloatDraft } from '../../services/insightsService';
 import TravelClaimSection from './TravelClaimSection';
 import { useAuthStore } from '../../store/authStore';
@@ -183,6 +183,22 @@ const RequestForm: React.FC = () => {
   const watchedJustification = watch('justification');
   const watchedActivityStart = watch('activityStartDate');
   const watchedActivityEnd = watch('activityEndDate');
+
+  // Tips shown beside the relevant fields when the draft is missing something
+  // reviewers often send requests back for.
+  const tips = useRequestHints('float', {
+    isActivityRequest: Boolean(watchedIsActivityRequest),
+    justification: watchedJustification || '',
+    hasPerDiemClaim,
+    activityStartDate: watchedActivityStart || '',
+    activityEndDate: watchedActivityEnd || '',
+    items: (watchedItems || []).map(i => ({ category: i.category, description: i.itemDescription })),
+    attachments: [
+      ...existingAttachments.map((a: any) => ({ name: a.original_name || a.file_name || '', type: a.attachment_type })),
+      ...uploadedFiles.map(f => ({ name: f.name }))
+    ]
+  } as FloatDraft);
+  const hasItemText = (watchedItems || []).some(i => (i.itemDescription || '').trim().length > 0);
 
   // Fetch active donors + per diem rates on mount
   useEffect(() => {
@@ -1005,7 +1021,11 @@ const RequestForm: React.FC = () => {
                     rows={3}
                     fullWidth
                     error={!!errors.justification}
-                    helperText={errors.justification?.message || 'Describe the activity and purpose for this float'}
+                    helperText={errors.justification?.message || (
+                      tips.has('detailed_justification') && (watchedJustification || '').trim().length > 0
+                        ? 'Add a little more: what the activity is, who it is for and what each cost covers.'
+                        : 'Describe the activity and purpose for this float'
+                    )}
                   />
                 )}
               />
@@ -1291,6 +1311,9 @@ const RequestForm: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
+          <InlineTip show={hasItemText && tips.has('bank_charges')}>
+            If the money will be sent by bank transfer or EcoCash, add a line for the transfer charges.
+          </InlineTip>
           {overBudgetLines.length > 0 && (
             <Alert severity="error" sx={{ mt: 2 }}>
               <strong>Budget exceeded — this request cannot be saved or submitted.</strong>
@@ -1404,6 +1427,18 @@ const RequestForm: React.FC = () => {
               No documents uploaded yet. Quotations are strongly recommended for procurement requests.
             </Alert>
           )}
+          <InlineTip show={tips.has('activity_concept_note')}>
+            Activity requests need the concept note, programme and any facilitator ToRs attached.
+          </InlineTip>
+          <InlineTip show={hasItemText && tips.has('goods_quotation')}>
+            Attach the quotation or invoice for the goods being bought.
+          </InlineTip>
+          <InlineTip show={tips.has('fuel_schedule')}>
+            This request includes fuel — attach the signed fuel schedule.
+          </InlineTip>
+          <InlineTip show={tips.has('vehicle_hire_agreement')}>
+            This request includes vehicle hire — attach the hire agreement.
+          </InlineTip>
         </Paper>
 
         {/* ── Travel & Per Diem Claim Toggle ───────────────────────────────── */}
@@ -1449,23 +1484,6 @@ const RequestForm: React.FC = () => {
             rates={perDiemRates}
           />
         )}
-
-        {/* Hints learned from past rejections — advisory, never blocks submitting */}
-        <RequestHints
-          module="float"
-          draft={{
-            isActivityRequest: Boolean(watchedIsActivityRequest),
-            justification: watchedJustification || '',
-            hasPerDiemClaim,
-            activityStartDate: watchedActivityStart || '',
-            activityEndDate: watchedActivityEnd || '',
-            items: (watchedItems || []).map(i => ({ category: i.category, description: i.itemDescription })),
-            attachments: [
-              ...existingAttachments.map((a: any) => ({ name: a.original_name || a.file_name || '', type: a.attachment_type })),
-              ...uploadedFiles.map(f => ({ name: f.name }))
-            ]
-          } as FloatDraft}
-        />
 
         <Paper elevation={2} sx={{ p: 3 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center">

@@ -41,7 +41,7 @@ import { useAuthStore } from '../../store/authStore';
 import { reconciliationService, ReconRequestBlock } from '../../services/reconciliationService';
 import ReconBlockAlert from '../../components/common/ReconBlockAlert';
 import { VENDOR_CATEGORIES } from '../../utils/vendorRegister';
-import RequestHints from '../../components/common/RequestHints';
+import { useRequestHints, InlineTip } from '../../components/common/RequestHints';
 
 interface ItemRow extends Omit<ProcRequestItem, 'id' | 'request_id'> {
   _key: string;
@@ -219,6 +219,28 @@ const PurchaseRequestForm: React.FC = () => {
   const removeItem = (key: string) => setItems(prev => prev.filter(i => i._key !== key));
 
   const totalEstimated = items.reduce((sum, i) => sum + (i.quantity * i.estimated_unit_price), 0);
+
+  // Tips shown beside the relevant fields when the draft is missing something
+  // reviewers often send purchase requests back for.
+  const tips = useRequestHints('procurement', {
+    title,
+    justification,
+    expectedDeliveryDate: deliveryDate || null,
+    items: items.map(i => ({
+      description: i.item_description,
+      specifications: i.specifications || '',
+      category: i.category || null,
+      price: i.estimated_unit_price
+    })),
+    attachments: [
+      ...savedAttachments.map((a: any) => ({ name: a.original_name || a.file_name || '', type: a.attachment_type })),
+      ...pendingFiles.map(pf => ({ name: pf.file.name, type: pf.attachment_type }))
+    ]
+  });
+  const describedItems = items.filter(i => i.item_description.trim().length > 0);
+  const deliveryDaysAway = deliveryDate
+    ? Math.ceil((new Date(deliveryDate).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000)
+    : null;
 
   const getPayload = () => ({
     title,
@@ -449,6 +471,9 @@ const PurchaseRequestForm: React.FC = () => {
               inputProps={{ min: new Date().toISOString().split('T')[0] }}
               helperText="When do you need the items?"
             />
+            <InlineTip show={deliveryDaysAway != null && deliveryDaysAway >= 3 && tips.has('lead_time')}>
+              Allow at least a week so quotations can be collected and approved in time.
+            </InlineTip>
             {deliveryDate && (() => {
               const today = new Date(); today.setHours(0, 0, 0, 0);
               const delivery = new Date(deliveryDate); delivery.setHours(0, 0, 0, 0);
@@ -472,6 +497,9 @@ const PurchaseRequestForm: React.FC = () => {
               value={justification} onChange={e => setJustification(e.target.value)}
               placeholder="Explain why this procurement is needed, how it supports programme activities, and any urgency factors..."
             />
+            <InlineTip show={justification.trim().length > 0 && tips.has('detailed_justification')}>
+              Add a little more: what the items are for, which activity they support and why they are needed now.
+            </InlineTip>
           </Grid>
         </Grid>
       </Paper>
@@ -610,6 +638,15 @@ const PurchaseRequestForm: React.FC = () => {
             </TableBody>
           </Table>
         </Box>
+        <InlineTip show={describedItems.length > 1 && tips.has('one_supplier_type')}>
+          {tips.get('one_supplier_type')?.detail} Items from different kinds of supplier go on separate purchase requests.
+        </InlineTip>
+        <InlineTip show={describedItems.length > 0 && tips.has('specifications')}>
+          Add specifications (brand, model, size) to each item so the right quotations can be sourced.
+        </InlineTip>
+        <InlineTip show={describedItems.length > 0 && tips.has('prices')}>
+          Give each item an estimated unit price.
+        </InlineTip>
 
         <Divider sx={{ my: 2 }} />
         <Box display="flex" justifyContent="flex-end">
@@ -700,27 +737,10 @@ const PurchaseRequestForm: React.FC = () => {
             No files selected yet
           </Typography>
         )}
+        <InlineTip show={describedItems.length > 0 && tips.has('supporting_docs')}>
+          Attach a specification, photo or proforma quotation for the items.
+        </InlineTip>
       </Paper>
-
-      {/* Hints learned from past rejections — advisory, never blocks submitting */}
-      <RequestHints
-        module="procurement"
-        draft={{
-          title,
-          justification,
-          expectedDeliveryDate: deliveryDate || null,
-          items: items.map(i => ({
-            description: i.item_description,
-            specifications: i.specifications || '',
-            category: i.category || null,
-            price: i.estimated_unit_price
-          })),
-          attachments: [
-            ...savedAttachments.map((a: any) => ({ name: a.original_name || a.file_name || '', type: a.attachment_type })),
-            ...pendingFiles.map(pf => ({ name: pf.file.name, type: pf.attachment_type }))
-          ]
-        }}
-      />
 
       {/* Actions */}
       <Box display="flex" gap={2} justifyContent="flex-end" flexWrap="wrap">

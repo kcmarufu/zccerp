@@ -1,31 +1,22 @@
 /**
- * "Avoid a rejection" panel on the float and purchase request forms.
+ * Field-level tips on the float and purchase request forms.
  *
- * Sends the draft as it stands to the API, which checks it against the
- * mistakes reviewers most often reject requests for — learned from this
- * system's own rejection history and refreshed as new decisions are made — and
- * shows what to fix before submitting. Advisory only: nothing here blocks a
- * submission.
+ * The draft is checked against the things reviewers most often send requests
+ * back for (see POST /insights/request-hints). Instead of a separate panel,
+ * each tip appears as a single quiet line under the part of the form it is
+ * about — the attachments, the items, the justification — and disappears as
+ * soon as it is dealt with. Advisory only: nothing here blocks submitting.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, AlertTitle, Box, Collapse, IconButton, Paper, Typography } from '@mui/material';
-import {
-  Lightbulb as TipIcon,
-  ExpandMore as ExpandIcon,
-  ExpandLess as CollapseIcon,
-} from '@mui/icons-material';
-import insightsService, { FloatDraft, InsightsModule, ProcurementDraft, RequestHints as Hints } from '../../services/insightsService';
+import { Box, Collapse, Typography } from '@mui/material';
+import { InfoOutlined as TipIcon } from '@mui/icons-material';
+import insightsService, { FloatDraft, InsightsModule, ProcurementDraft, RequestHint } from '../../services/insightsService';
 
-interface Props {
-  module: InsightsModule;
-  draft: FloatDraft | ProcurementDraft;
-}
+const DEBOUNCE_MS = 700;
 
-const DEBOUNCE_MS = 800;
-
-const RequestHints: React.FC<Props> = ({ module, draft }) => {
-  const [data, setData] = useState<Hints | null>(null);
-  const [open, setOpen] = useState(true);
+/** The checks the current draft does not yet meet, keyed by id. */
+export function useRequestHints(module: InsightsModule, draft: FloatDraft | ProcurementDraft): Map<string, RequestHint> {
+  const [hints, setHints] = useState<Map<string, RequestHint>>(new Map());
   // Re-check only when the draft's content changes, not on every render.
   const draftKey = useMemo(() => JSON.stringify(draft), [draft]);
 
@@ -33,64 +24,24 @@ const RequestHints: React.FC<Props> = ({ module, draft }) => {
     let cancelled = false;
     const timer = setTimeout(() => {
       insightsService.getRequestHints(module, JSON.parse(draftKey))
-        .then(res => { if (!cancelled) setData(res); })
-        .catch(() => { /* hints are advisory; a failure just shows none */ });
+        .then(res => {
+          if (cancelled) return;
+          setHints(new Map(res.hints.filter(h => h.severity === 'warning').map(h => [h.id, h])));
+        })
+        .catch(() => { /* tips are optional; on failure none are shown */ });
     }, DEBOUNCE_MS);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [module, draftKey]);
 
-  if (!data || data.hints.length === 0) return null;
+  return hints;
+}
 
-  const warnings = data.hints.filter(h => h.severity === 'warning');
-  const tips = data.hints.filter(h => h.severity === 'info');
-
-  return (
-    <Paper elevation={2} sx={{ p: 2.5, mb: 3, borderLeft: 4, borderColor: warnings.length ? 'warning.main' : 'info.main' }}>
-      <Box display="flex" alignItems="center" gap={1}>
-        <TipIcon color={warnings.length ? 'warning' : 'info'} />
-        <Box flex={1}>
-          <Typography variant="h6" sx={{ fontSize: '1.05rem' }}>
-            Avoid a rejection{warnings.length > 0 ? ` — ${warnings.length} thing${warnings.length !== 1 ? 's' : ''} to check` : ''}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Learned from {data.learnedFrom.rejections.toLocaleString()} past rejections
-            across {data.learnedFrom.requests.toLocaleString()} {module === 'procurement' ? 'purchase' : 'float'} requests
-            ({data.learnedFrom.rejectionRate}% were sent back at least once). Updated as reviewers make new decisions.
-          </Typography>
-        </Box>
-        <IconButton size="small" onClick={() => setOpen(o => !o)} aria-label={open ? 'Hide tips' : 'Show tips'}>
-          {open ? <CollapseIcon /> : <ExpandIcon />}
-        </IconButton>
-      </Box>
-      <Collapse in={open}>
-        <Box mt={1.5} display="flex" flexDirection="column" gap={1}>
-          {warnings.map(h => (
-            <Alert key={h.id} severity="warning">
-              <AlertTitle sx={{ mb: 0.25 }}>{h.title}</AlertTitle>
-              <Typography variant="body2">{h.message}</Typography>
-              {h.evidence && (
-                <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>{h.evidence}</Typography>
-              )}
-            </Alert>
-          ))}
-          {tips.length > 0 && (
-            <Typography variant="subtitle2" color="text.secondary" mt={warnings.length ? 1 : 0}>
-              Common reasons requests like this are sent back
-            </Typography>
-          )}
-          {tips.map(h => (
-            <Alert key={h.id} severity="info" variant="outlined">
-              <AlertTitle sx={{ mb: 0.25 }}>{h.title}</AlertTitle>
-              <Typography variant="body2">{h.message}</Typography>
-              {h.evidence && (
-                <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>{h.evidence}</Typography>
-              )}
-            </Alert>
-          ))}
-        </Box>
-      </Collapse>
-    </Paper>
-  );
-};
-
-export default RequestHints;
+/** One quiet line of guidance under a form section. Renders nothing when `show` is false. */
+export const InlineTip: React.FC<{ show: boolean; children: React.ReactNode; sx?: object }> = ({ show, children, sx }) => (
+  <Collapse in={show} unmountOnExit>
+    <Box display="flex" alignItems="flex-start" gap={0.75} sx={{ mt: 1, color: 'warning.dark', ...sx }}>
+      <TipIcon sx={{ fontSize: 16, mt: '2px' }} />
+      <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>{children}</Typography>
+    </Box>
+  </Collapse>
+);

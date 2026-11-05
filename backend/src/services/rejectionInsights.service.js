@@ -717,6 +717,7 @@ async function getHintsForDraft(module, draft = {}) {
       severity: 'warning',
       title: fac.title,
       message: [detail, theme?.advice].filter(Boolean).join(' '),
+      detail: detail || '',
       evidence: [evidenceSentence(moduleLabel, ev), factorSentence(stat)].filter(Boolean).join(' '),
     });
     coveredThemes.add(fac.theme);
