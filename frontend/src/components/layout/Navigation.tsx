@@ -81,6 +81,7 @@ import {
 import { useAuthStore } from '../../store/authStore';
 import { hasFullHrAccess, hasHrOversight } from '../../utils/hrAccess';
 import { canViewVendorDatabase } from '../../utils/vendorAccess';
+import { canViewRejectionInsights } from '../../utils/insightsAccess';
 import {
   hasOrgTimesheetAccess, hasTeamTimesheetAccess, requiresTimesheet, TIMESHEETS_ENABLED,
 } from '../../utils/timesheetAccess';
@@ -299,13 +300,6 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           label: 'Procurement Reports',
           icon: <AnalyticsIcon />,
           permission: 'view_reports'
-        },
-        {
-          // Common reasons purchase requests are rejected, learned from reviewers' comments
-          path: '/procurement/rejection-insights',
-          label: 'Rejection Insights',
-          icon: <AnalyticsIcon />,
-          roles: ['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'] as UserRole[]
         }
       ]
     },
@@ -452,11 +446,12 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           icon: <ProcurementIcon />
         },
         {
-          // Common reasons float and purchase requests are rejected
+          // Why float and purchase requests are rejected. Super Admin, the HOD
+          // and Lead of Finance, HSD and CPJS, and the Admin & HR Lead only.
           path: '/reports/rejection-insights',
           label: 'Rejection Insights',
           icon: <AnalyticsIcon />,
-          roles: ['ADMIN', 'FINANCE_CLERK', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'] as UserRole[]
+          condition: () => canViewRejectionInsights(user)
         }
       ]
     },

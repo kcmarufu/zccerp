@@ -47,6 +47,7 @@ import VendorDatabase from './pages/procurement/VendorDatabase';
 import ProcurementApprovalsPage from './pages/procurement/ProcurementApprovalsPage';
 import ProcurementReportsPage from './pages/procurement/ProcurementReportsPage';
 import RejectionInsightsPage from './pages/RejectionInsightsPage';
+import { canViewRejectionInsights } from './utils/insightsAccess';
 
 // Admin Pages (lazy load)
 const UserManagementPage = React.lazy(() => import('./pages/admin/UserManagementPage'));
@@ -147,8 +148,6 @@ const ALL_FINANCE_ROLES: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEA
 // (own vs department vs organisation) is enforced by the API, not here.
 const HR_MANAGERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'];
 const HR_APPROVERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS'];
-// Rejection Insights: the reviewing desks (the API applies the same list).
-const INSIGHT_ROLES: UserRole[] = ['ADMIN', 'FINANCE_CLERK', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'PROCUREMENT_OFFICER'];
 
 /**
  * The request form is reachable from two routes and for any request id. React
@@ -170,6 +169,12 @@ const VendorRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 const NoCommitteeRoute: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   return user?.role === 'PROCUREMENT_COMMITTEE' ? <Navigate to="/unauthorized" replace /> : <Outlet />;
+};
+
+/** Rejection Insights: Super Admin, Finance/HSD/CPJS HOD and Lead, Admin & HR Lead. */
+const InsightsRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const user = useAuthStore((state) => state.user);
+  return canViewRejectionInsights(user) ? <>{children}</> : <Navigate to="/unauthorized" replace />;
 };
 
 const KeyedRequestForm: React.FC = () => {
@@ -277,8 +282,8 @@ const App: React.FC = () => {
                           reports; the server narrows the figures per role. */}
                       <Route path="/procurement/reports" element={<ProcurementReportsPage />} />
                       <Route path="/reports/procurement" element={<ProcurementReportsPage />} />
-                      <Route path="/reports/rejection-insights" element={<ProtectedRoute allowedRoles={INSIGHT_ROLES}><RejectionInsightsPage /></ProtectedRoute>} />
-                      <Route path="/procurement/rejection-insights" element={<ProtectedRoute allowedRoles={INSIGHT_ROLES}><RejectionInsightsPage /></ProtectedRoute>} />
+                      <Route path="/reports/rejection-insights" element={<InsightsRoute><RejectionInsightsPage /></InsightsRoute>} />
+                      <Route path="/procurement/rejection-insights" element={<Navigate to="/reports/rejection-insights" replace />} />
                       <Route path="/procurement/vendors" element={<ProtectedRoute allowedRoles={['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'] as UserRole[]}><VendorRoute><VendorDatabase /></VendorRoute></ProtectedRoute>} />
 
                       <Route path="/grants" element={<ComingSoonPage module="Grants & Partners" />} />
