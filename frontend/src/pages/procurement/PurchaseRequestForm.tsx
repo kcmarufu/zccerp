@@ -22,8 +22,7 @@ import {
   Image as PhotoIcon,
   Description as DocIcon,
   Receipt as QuotationIcon,
-  Close as RemoveIcon,
-  Warning as WarningIcon
+  Close as RemoveIcon
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
@@ -33,12 +32,16 @@ import {
   createPurchaseRequest,
   updatePurchaseRequest,
   submitPurchaseRequest,
-  getPurchaseRequestById
+  getPurchaseRequestById,
+  getRequestAttachments
 } from '../../services/procurementService';
 import { ProcRequestItem, BudgetLine, Project } from '../../types';
 import projectService from '../../services/projectService';
 import { useAuthStore } from '../../store/authStore';
-import { reconciliationService } from '../../services/reconciliationService';
+import { reconciliationService, ReconRequestBlock } from '../../services/reconciliationService';
+import ReconBlockAlert from '../../components/common/ReconBlockAlert';
+import { VENDOR_CATEGORIES } from '../../utils/vendorRegister';
+import RequestHints from '../../components/common/RequestHints';
 
 interface ItemRow extends Omit<ProcRequestItem, 'id' | 'request_id'> {
   _key: string;
@@ -55,6 +58,7 @@ const emptyItem = (): ItemRow => ({
   _key: Math.random().toString(36).slice(2),
   item_description: '',
   specifications: '',
+  category: '',
   quantity: 1,
   unit_of_measure: 'unit',
   estimated_unit_price: 0,
@@ -95,8 +99,7 @@ const PurchaseRequestForm: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [crossDeptWarning, setCrossDeptWarning] = useState<string | null>(null);
-  const [overdueBlocked, setOverdueBlocked] = useState(false);
-  const [overdueCount, setOverdueCount] = useState(0);
+  const [reconBlock, setReconBlock] = useState<ReconRequestBlock | null>(null);
   const [title, setTitle] = useState('');
   const [justification, setJustification] = useState('');
   const [donorId, setDonorId] = useState<number | null>(null);
@@ -111,6 +114,13 @@ const PurchaseRequestForm: React.FC = () => {
   const { data: existingRequest, isLoading: loadingExisting } = useQuery({
     queryKey: ['proc-request', id],
     queryFn: () => getPurchaseRequestById(id!),
+    enabled: isEdit
+  });
+
+  // Documents already on a draft being edited — read by the rejection hints.
+  const { data: savedAttachments = [] } = useQuery<any[]>({
+    queryKey: ['proc-request-attachments', id],
+    queryFn: () => getRequestAttachments(id!),
     enabled: isEdit
   });
 
@@ -136,17 +146,16 @@ const PurchaseRequestForm: React.FC = () => {
     ? budgetLines.filter(bl => bl.donor_id === donorId)
     : budgetLines);
 
-  // Check overdue reconciliation compliance (only for new requests)
+  // Reconciliation compliance. Checked for drafts being edited too: a saved
+  // draft is still a new request when submitted, and the server refuses it.
+  // Only resubmitting a rejected request is exempt.
   useEffect(() => {
-    if (!isEdit) {
-      reconciliationService.getOverdueCheck()
-        .then(res => {
-          setOverdueCount(res.overdueCount);
-          setOverdueBlocked(res.isBlocked);
-        })
-        .catch(() => { /* allow creation if check fails */ });
-    }
+    reconciliationService.getOverdueCheck()
+      .then(setReconBlock)
+      .catch(() => { /* the server still enforces the rule on submit */ });
   }, [isEdit]);
+  const isResubmission = isEdit && existingRequest?.status === 'REJECTED';
+  const overdueBlocked = Boolean(reconBlock?.isBlocked) && !isResubmission;
 
   useEffect(() => {
     if (!donorId) { setProjects([]); setProjectId(null); return; }
@@ -191,6 +200,7 @@ const PurchaseRequestForm: React.FC = () => {
           _key: Math.random().toString(36).slice(2),
           item_description: i.item_description || '',
           specifications: i.specifications || '',
+          category: i.category || '',
           quantity: i.quantity || 1,
           unit_of_measure: i.unit_of_measure || 'unit',
           estimated_unit_price: i.estimated_unit_price || 0,
@@ -219,6 +229,8 @@ const PurchaseRequestForm: React.FC = () => {
     items: items.map(i => ({
       item_description: i.item_description,
       specifications: i.specifications || undefined,
+      // Blank lets the server work the category out from the description.
+      category: i.category || undefined,
       quantity: i.quantity,
       unit_of_measure: i.unit_of_measure,
       estimated_unit_price: i.estimated_unit_price,
@@ -359,19 +371,8 @@ const PurchaseRequestForm: React.FC = () => {
         </Box>
       </Box>
 
-      {/* Overdue reconciliation block */}
-      {overdueBlocked && !isEdit && (
-        <Alert severity="error" sx={{ mb: 2 }} icon={<WarningIcon />}>
-          <Typography variant="subtitle2" fontWeight={700}>
-            Purchase Request Blocked — Overdue Reconciliations
-          </Typography>
-          <Typography variant="body2">
-            You have <strong>{overdueCount}</strong> overdue reconciliation{overdueCount !== 1 ? 's' : ''} that have not been submitted for approval.
-            You must submit your overdue reconciliations before creating a new purchase request.
-            Go to the <strong>Reconciliation</strong> module to submit them.
-          </Typography>
-        </Alert>
-      )}
+      {/* Reconciliation block / warning */}
+      <ReconBlockAlert block={isResubmission ? null : reconBlock} subject="purchase requests" />
 
       {/* Rejection reason banner */}
       {isEdit && existingRequest?.status === 'REJECTED' && existingRequest?.rejection_reason && (
@@ -492,6 +493,7 @@ const PurchaseRequestForm: React.FC = () => {
               <TableRow>
                 <TableCell sx={{ minWidth: 200 }}>Description *</TableCell>
                 <TableCell sx={{ minWidth: 140 }}>Specifications</TableCell>
+                <TableCell sx={{ minWidth: 190 }}>Category</TableCell>
                 <TableCell sx={{ minWidth: 80 }}>Qty *</TableCell>
                 <TableCell sx={{ minWidth: 90 }}>Unit</TableCell>
                 <TableCell sx={{ minWidth: 130 }}>Est. Unit Price</TableCell>
@@ -519,6 +521,17 @@ const PurchaseRequestForm: React.FC = () => {
                       placeholder="Brand, model, size..."
                       multiline minRows={1} maxRows={4}
                     />
+                  </TableCell>
+                  <TableCell>
+                    <TextField
+                      select size="small" fullWidth
+                      value={item.category || ''}
+                      onChange={e => updateItem(item._key, 'category', e.target.value)}
+                      SelectProps={{ displayEmpty: true }}
+                    >
+                      <MenuItem value=""><em>Auto-detect from description</em></MenuItem>
+                      {VENDOR_CATEGORIES.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+                    </TextField>
                   </TableCell>
                   <TableCell>
                     <TextField
@@ -689,6 +702,26 @@ const PurchaseRequestForm: React.FC = () => {
         )}
       </Paper>
 
+      {/* Hints learned from past rejections — advisory, never blocks submitting */}
+      <RequestHints
+        module="procurement"
+        draft={{
+          title,
+          justification,
+          expectedDeliveryDate: deliveryDate || null,
+          items: items.map(i => ({
+            description: i.item_description,
+            specifications: i.specifications || '',
+            category: i.category || null,
+            price: i.estimated_unit_price
+          })),
+          attachments: [
+            ...savedAttachments.map((a: any) => ({ name: a.original_name || a.file_name || '', type: a.attachment_type })),
+            ...pendingFiles.map(pf => ({ name: pf.file.name, type: pf.attachment_type }))
+          ]
+        }}
+      />
+
       {/* Actions */}
       <Box display="flex" gap={2} justifyContent="flex-end" flexWrap="wrap">
         <Button variant="text" color="inherit" onClick={() => navigate('/procurement/requests')}>
@@ -701,7 +734,7 @@ const PurchaseRequestForm: React.FC = () => {
         </Button>
         <Button variant="contained" color="primary" size="large"
           startIcon={submitting ? <CircularProgress size={16} /> : <SubmitIcon />}
-          onClick={handleSubmit} disabled={saving || submitting || (overdueBlocked && !isEdit)}
+          onClick={handleSubmit} disabled={saving || submitting || overdueBlocked}
           sx={{ borderRadius: 2, fontWeight: 700 }}>
           Save & Submit for Approval
         </Button>

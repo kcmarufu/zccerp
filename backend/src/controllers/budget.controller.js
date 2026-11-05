@@ -354,10 +354,9 @@ class BudgetController {
         const newAllocated = currentAllocated + parsedAmount;
         const newBalance = currentBalance + parsedAmount;
 
-        // For deductions, ensure we don't go below spent amount
-        if (parsedAmount < 0 && newBalance < 0) {
-          throw new Error('Deduction would result in negative balance');
-        }
+        // A deduction larger than the balance is allowed: the line goes into the
+        // minus and shows a negative balance, which Finance can see and top up,
+        // rather than the deduction being refused outright.
 
         // --- Hierarchy validation: top-up cannot push budget line above project available budget ---
         if (parsedAmount > 0 && budgetLines[0].project_id) {
@@ -412,9 +411,13 @@ class BudgetController {
         return { currentBalance, newBalance, newAllocated };
       });
 
+      const parsed = parseFloat(amount);
       res.json({
         success: true,
-        message: `Budget topped up by $${parseFloat(amount).toFixed(2)}`,
+        message: parsed >= 0
+          ? `Budget topped up by $${parsed.toFixed(2)}`
+          : `Budget deducted by $${Math.abs(parsed).toFixed(2)} — new balance ` +
+            `${result.newBalance < 0 ? '-' : ''}$${Math.abs(result.newBalance).toFixed(2)}`,
         data: result
       });
     } catch (error) {

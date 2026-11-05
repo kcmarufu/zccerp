@@ -1158,6 +1158,8 @@ export interface ProcRequestItem {
   request_id?: number;
   item_description: string;
   specifications?: string;
+  /** What is being bought (supplier-register category). Blank = inferred by the server. */
+  category?: string | null;
   quantity: number;
   unit_of_measure: string;
   estimated_unit_price: number;

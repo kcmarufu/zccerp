@@ -196,7 +196,9 @@ const BudgetListPage: React.FC = () => {
       return '$0.00';
     }
     
-    return `$${numAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    // Overdrawn lines read "-$174.39" rather than "$-174.39".
+    const formatted = Math.abs(numAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return numAmount < 0 ? `-$${formatted}` : `$${formatted}`;
   };
 
   // Helper function to convert budget amounts from strings to numbers
@@ -236,9 +238,11 @@ const BudgetListPage: React.FC = () => {
   const handleDeduct = async () => {
     if (!selectedBudgetForAction || !actionAmount) return;
     const amount = parseFloat(actionAmount);
-    const balance = selectedBudgetForAction.allocated_amount - selectedBudgetForAction.spent_amount;
-    if (amount > balance) {
-      toast.error('Deduction amount cannot exceed available balance');
+    // Enter the deduction as a positive figure; a minus sign here would turn
+    // it into a top-up. Deducting more than the balance is allowed — the line
+    // simply goes into the minus (see the preview in the dialog).
+    if (!(amount > 0)) {
+      toast.error('Enter the amount to deduct as a positive number');
       return;
     }
     try {
@@ -249,7 +253,7 @@ const BudgetListPage: React.FC = () => {
         actionDescription || 'Manual deduction'
       );
       if (response.success) {
-        toast.success('Budget deducted successfully');
+        toast.success(response.message || 'Budget deducted successfully');
         setIsDeductDialogOpen(false);
         resetActionForm();
         fetchBudgets();
@@ -335,10 +339,23 @@ const BudgetListPage: React.FC = () => {
     setActionDescription('');
   };
 
-  // Filter by search term + department + project (client-side)
+  // Filter by search term + department + project (client-side).
+  //
+  // The search used to look only at the code and the description, but the
+  // table shows the budget NAME and most lines have no description at all, so
+  // typing what you could see on screen found nothing. It now matches every
+  // word typed against everything shown on the row, in any order.
+  const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
   const filteredBudgets = budgets.filter(budget => {
-    if (searchTerm && !budget.budget_code.toLowerCase().includes(searchTerm.toLowerCase()) &&
-        !(budget.description || '').toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    if (searchWords.length > 0) {
+      const b = budget as any;
+      const haystack = [
+        b.budget_code, b.budget_name, b.description, b.category,
+        b.project_code, b.project_name, b.donor_name, b.donor_code,
+        b.department_name, b.department_code
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!searchWords.every(w => haystack.includes(w))) return false;
+    }
     // Budget lines with no department always appear regardless of dept filter
     const hasDept = (budget as any).department_id != null;
     if (deptFilter && hasDept && String((budget as any).department_id) !== deptFilter) return false;
@@ -483,7 +500,7 @@ const BudgetListPage: React.FC = () => {
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} flexWrap="wrap" useFlexGap>
           <TextField
             size="small"
-            placeholder="Search by code or description..."
+            placeholder="Search by code, name, project or partner..."
             value={searchTerm}
             onChange={(e) => { setSearchTerm(e.target.value); setPage(0); }}
             InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
@@ -786,8 +803,24 @@ const BudgetListPage: React.FC = () => {
                 value={actionAmount}
                 onChange={(e) => setActionAmount(e.target.value)}
                 InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
+                inputProps={{ min: 0, step: 0.01 }}
                 sx={{ mb: 2 }}
               />
+              {(() => {
+                const amount = parseFloat(actionAmount);
+                if (!(amount > 0)) return null;
+                const newBalance = Number(selectedBudgetForAction.balance) - amount;
+                const overdrawn = newBalance < 0;
+                return (
+                  <Alert severity={overdrawn ? 'error' : 'info'} sx={{ mb: 2 }}>
+                    Balance after deduction:{' '}
+                    <strong style={{ color: overdrawn ? '#c62828' : undefined }}>{formatCurrency(newBalance)}</strong>
+                    {overdrawn && (
+                      <><br />This is more than the balance, so the line will go into the minus by {formatCurrency(Math.abs(newBalance))}.</>
+                    )}
+                  </Alert>
+                );
+              })()}
               <TextField
                 label="Reason for Deduction"
                 fullWidth

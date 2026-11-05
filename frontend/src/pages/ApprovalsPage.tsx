@@ -189,7 +189,7 @@ const ApprovalsPage: React.FC = () => {
   const financeDeskBlocked = Boolean(financeBacklog?.isBlocked);
   const approvalsBlocked = leadDeskBlocked || financeDeskBlocked;
   const approvalsBlockedReason = financeDeskBlocked
-    ? `Approvals on hold — ${financeBacklog?.staleCount} reconciliation(s) have been on the Finance desk for more than ${financeBacklog?.thresholdDays} days. You can still reject and dispatch; only the Finance Lead / Head of Department can approve until they are cleared.`
+    ? `Approvals on hold — ${financeBacklog?.staleCount} reconciliation(s) have been on the Finance desk for more than ${financeBacklog?.thresholdDays} working days (Mon–Fri). You can still reject and dispatch; only the Finance Lead / Head of Department can approve until they are cleared.`
     : `Approvals on hold — ${reconBacklog?.staleCount} reconciliations have been awaiting your review for ${reconBacklog?.workingDays}+ working days. Clear them in the Reconciliation module.`;
 
   useEffect(() => {
@@ -997,7 +997,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
           </Typography>
           <Typography variant="body2">
             <strong>{financeBacklog.staleCount}</strong> reconciliation{financeBacklog.staleCount === 1 ? ' has' : 's have'} been
-            sitting on the Finance desk for more than <strong>{financeBacklog.thresholdDays} days</strong>.
+            sitting on the Finance desk for more than <strong>{financeBacklog.thresholdDays} working days</strong> (weekends are not counted).
             {financeBacklog.isBlocked
               ? ' You can still reject and dispatch requests, but only the Finance Lead / Head of Department can approve floats until every one of these is approved or rejected.'
               : ' Clearing them restores the Finance Clerks\' approvals.'}
@@ -1009,7 +1009,7 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 size="small"
                 color={financeBacklog.isBlocked ? 'error' : 'warning'}
                 variant="outlined"
-                label={`${item.request_code} · ${item.requester_name} · ${item.days_on_desk} days`}
+                label={`${item.request_code} · ${item.requester_name} · ${item.days_on_desk} working days`}
               />
             ))}
           </Box>

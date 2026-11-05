@@ -54,8 +54,7 @@ import {
   Security as ComplianceIcon,
   TrendingUp as MEIcon,
   VolunteerActivism as GrantsIcon,
-  AdminPanelSettings as AdminIcon,
-  NotificationsActive as AlertBellIcon
+  AdminPanelSettings as AdminIcon
 } from '@mui/icons-material';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 
@@ -64,7 +63,8 @@ import { requestService } from '../services/requestService';
 import { approvalService } from '../services/approvalService';
 import { budgetService } from '../services/budgetService';
 import { getProcurementDashboard } from '../services/procurementService';
-import { reconciliationService } from '../services/reconciliationService';
+import { reconciliationService, ReconRequestBlock } from '../services/reconciliationService';
+import ReconBlockAlert from '../components/common/ReconBlockAlert';
 import { Request, BudgetLine } from '../types';
 import { formatRoleLabel } from '../utils/roleUtils';
 
@@ -77,7 +77,7 @@ const DashboardPage: React.FC = () => {
 
   const [isLoading, setIsLoading] = useState(true);
   const [procStats, setProcStats] = useState({ total: 0, pending: 0, approved: 0, rejected: 0 });
-  const [overdueRecon, setOverdueRecon] = useState<{ overdueCount: number; isBlocked: boolean } | null>(null);
+  const [overdueRecon, setOverdueRecon] = useState<ReconRequestBlock | null>(null);
   const [pendingReconDesk, setPendingReconDesk] = useState(0);
   const [myReconStats, setMyReconStats] = useState({ total: 0, pending: 0, approved: 0 });
   const [pendingLeadCount, setPendingLeadCount] = useState(0);
@@ -412,29 +412,8 @@ const DashboardPage: React.FC = () => {
           </Box>
         </Box>
       </Paper>
-      {/* Overdue Reconciliation Banner — shown to general users with outstanding recons */}
-      {overdueRecon && overdueRecon.overdueCount > 0 && (
-        <Alert
-          severity={overdueRecon.isBlocked ? 'error' : 'warning'}
-          icon={<AlertBellIcon />}
-          sx={{ mb: 2 }}
-          action={
-            <Button color="inherit" size="small" onClick={() => navigate('/finance/reconciliation')}>
-              Submit Now
-            </Button>
-          }
-        >
-          <Typography variant="subtitle2" fontWeight={700}>
-            {overdueRecon.isBlocked ? '🚫 Float Requests Blocked' : '⚠️ Overdue Reconciliations'}
-          </Typography>
-          <Typography variant="body2">
-            You have <strong>{overdueRecon.overdueCount}</strong> overdue reconciliation{overdueRecon.overdueCount !== 1 ? 's' : ''} that must be submitted.
-            {overdueRecon.isBlocked
-              ? ' New float requests are blocked until all overdue reconciliations are submitted.'
-              : ' Please submit them as soon as possible to avoid your float requests being blocked.'}
-          </Typography>
-        </Alert>
-      )}
+      {/* Reconciliation block / warning — shown to general users */}
+      <ReconBlockAlert block={overdueRecon} subject="float and purchase requests" />
 
       {/* Pending Reconciliation Desk Alert — shown to approvers */}
       {pendingReconDesk > 0 && hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'FINANCE_CLERK') && (
@@ -729,7 +708,11 @@ const DashboardPage: React.FC = () => {
         System Modules
       </Typography>
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        {moduleCards.map((mod) => (
+        {moduleCards
+          // Procurement Committee accounts are review logins, not staff accounts:
+          // they never use HR (leave is applied for from the member's own login).
+          .filter((mod) => !(hasRole('PROCUREMENT_COMMITTEE') && mod.path === '/hr'))
+          .map((mod) => (
           <Grid item xs={6} sm={4} md={3} key={mod.title}>
             <Card
               elevation={0}

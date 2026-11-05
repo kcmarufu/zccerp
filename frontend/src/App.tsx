@@ -5,7 +5,7 @@
  */
 
 import React, { Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastContainer } from 'react-toastify';
@@ -46,6 +46,7 @@ import PurchaseRequestDetail from './pages/procurement/PurchaseRequestDetail';
 import VendorDatabase from './pages/procurement/VendorDatabase';
 import ProcurementApprovalsPage from './pages/procurement/ProcurementApprovalsPage';
 import ProcurementReportsPage from './pages/procurement/ProcurementReportsPage';
+import RejectionInsightsPage from './pages/RejectionInsightsPage';
 
 // Admin Pages (lazy load)
 const UserManagementPage = React.lazy(() => import('./pages/admin/UserManagementPage'));
@@ -146,6 +147,8 @@ const ALL_FINANCE_ROLES: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEA
 // (own vs department vs organisation) is enforced by the API, not here.
 const HR_MANAGERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'];
 const HR_APPROVERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS'];
+// Rejection Insights: the reviewing desks (the API applies the same list).
+const INSIGHT_ROLES: UserRole[] = ['ADMIN', 'FINANCE_CLERK', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'PROCUREMENT_OFFICER'];
 
 /**
  * The request form is reachable from two routes and for any request id. React
@@ -157,6 +160,16 @@ const HR_APPROVERS: UserRole[] = ['ADMIN', 'HEAD_OF_PROGRAMS'];
 const VendorRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const user = useAuthStore((state) => state.user);
   return canViewVendorDatabase(user) ? <>{children}</> : <Navigate to="/unauthorized" replace />;
+};
+
+/**
+ * Procurement Committee logins are review accounts, not staff accounts: the
+ * members apply for leave from their own staff login, so the HR module is
+ * closed to them (the API refuses their leave requests too).
+ */
+const NoCommitteeRoute: React.FC = () => {
+  const user = useAuthStore((state) => state.user);
+  return user?.role === 'PROCUREMENT_COMMITTEE' ? <Navigate to="/unauthorized" replace /> : <Outlet />;
 };
 
 const KeyedRequestForm: React.FC = () => {
@@ -198,7 +211,8 @@ const App: React.FC = () => {
                       <Route path="/assets" element={<ComingSoonPage module="Asset Management" />} />
                       <Route path="/assets/*" element={<ComingSoonPage module="Asset Management" />} />
 
-                      {/* HR MODULE */}
+                      {/* HR MODULE — closed to Procurement Committee accounts */}
+                      <Route element={<NoCommitteeRoute />}>
                       <Route path="/hr" element={<Suspense fallback={<div>Loading...</div>}><HRDashboardPage /></Suspense>} />
                       <Route path="/hr/dashboard" element={<Suspense fallback={<div>Loading...</div>}><HRDashboardPage /></Suspense>} />
                       {/* Every user reaches Leave — the page itself shows "My Leave" to
@@ -221,6 +235,7 @@ const App: React.FC = () => {
                       <Route path="/hr/training" element={<ComingSoonPage module="Training & Development" />} />
                       <Route path="/hr/disciplinary" element={<ComingSoonPage module="Disciplinary Records" />} />
                       <Route path="/hr/*" element={<Navigate to="/hr/dashboard" replace />} />
+                      </Route>
 
                       {/* TIMESHEET MODULE
                           Everyone reaches My Timesheets and their own grid; the API
@@ -262,6 +277,8 @@ const App: React.FC = () => {
                           reports; the server narrows the figures per role. */}
                       <Route path="/procurement/reports" element={<ProcurementReportsPage />} />
                       <Route path="/reports/procurement" element={<ProcurementReportsPage />} />
+                      <Route path="/reports/rejection-insights" element={<ProtectedRoute allowedRoles={INSIGHT_ROLES}><RejectionInsightsPage /></ProtectedRoute>} />
+                      <Route path="/procurement/rejection-insights" element={<ProtectedRoute allowedRoles={INSIGHT_ROLES}><RejectionInsightsPage /></ProtectedRoute>} />
                       <Route path="/procurement/vendors" element={<ProtectedRoute allowedRoles={['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'] as UserRole[]}><VendorRoute><VendorDatabase /></VendorRoute></ProtectedRoute>} />
 
                       <Route path="/grants" element={<ComingSoonPage module="Grants & Partners" />} />

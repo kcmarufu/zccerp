@@ -41,6 +41,27 @@ export interface OverdueFinanceReconciliation {
 }
 
 /** Shape of GET /reconciliations/finance-desk-backlog. */
+export interface RejectedReconItem {
+  request_id: number;
+  request_code: string;
+  reconciliation_id: number;
+  rejected_at: string;
+  working_days_since_rejection: number;
+}
+
+/** GET /reconciliations/overdue-check */
+export interface ReconRequestBlock {
+  overdueCount: number;
+  overdueLimit: number;
+  overdueBlocked: boolean;
+  staleRejectedCount: number;
+  staleRejectedDays: number;
+  staleRejectedItems: RejectedReconItem[];
+  staleRejectedBlocked: boolean;
+  rejectedAwaitingItems: RejectedReconItem[];
+  isBlocked: boolean;
+}
+
 export interface FinanceDeskBacklog {
   items: OverdueFinanceReconciliation[];
   staleCount: number;
@@ -204,10 +225,11 @@ export const reconciliationService = {
   },
 
   /**
-   * Check if the current user has 2+ overdue unsubmitted reconciliations.
-   * Returns { overdueCount, isBlocked }
+   * Whether the current user may raise new requests: blocked by 2+ overdue
+   * unsubmitted reconciliations, or by a rejected reconciliation left
+   * uncorrected for more than `staleRejectedDays` working days.
    */
-  async getOverdueCheck(): Promise<{ overdueCount: number; isBlocked: boolean }> {
+  async getOverdueCheck(): Promise<ReconRequestBlock> {
     const response = await api.get('/reconciliations/overdue-check');
     return response.data.data;
   },

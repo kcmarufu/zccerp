@@ -360,20 +360,15 @@ class ReconciliationController {
   }
 
   /**
-   * Check if current user has 2+ overdue unsubmitted reconciliations
+   * Whether the current user is barred from raising new requests by their
+   * reconciliations: 2+ overdue unsubmitted ones, or a rejected one left
+   * uncorrected for more than 3 working days.
    * GET /api/reconciliations/overdue-check
    */
   async getOverdueCheck(req, res) {
     try {
-      const userId = req.user.id;
-      const count = await reconciliationService.getOverdueCount(userId);
-      res.json({
-        success: true,
-        data: {
-          overdueCount: count,
-          isBlocked: count >= reconciliationService.OVERDUE_RECON_LIMIT
-        }
-      });
+      const block = await reconciliationService.getRequestBlock(req.user.id);
+      res.json({ success: true, data: block });
     } catch (error) {
       console.error('Error checking overdue reconciliations:', error);
       res.status(500).json({

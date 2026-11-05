@@ -46,7 +46,6 @@ import {
   AttachFile as FileIcon,
   Close as CloseIcon,
   FlightTakeoff as TripIcon,
-  Warning as WarningIcon,
   Event as ActivityIcon,
   OpenInNew as OpenInNewIcon
 } from '@mui/icons-material';
@@ -65,7 +64,10 @@ import donorService, { Donor } from '../../services/donorService';
 import projectService from '../../services/projectService';
 import attachmentService from '../../services/attachmentService';
 import perDiemService from '../../services/perDiemService';
-import { reconciliationService } from '../../services/reconciliationService';
+import { reconciliationService, ReconRequestBlock } from '../../services/reconciliationService';
+import ReconBlockAlert from '../common/ReconBlockAlert';
+import RequestHints from '../common/RequestHints';
+import { FloatDraft } from '../../services/insightsService';
 import TravelClaimSection from './TravelClaimSection';
 import { useAuthStore } from '../../store/authStore';
 import { toDateInputValue, toTimeInputValue } from '../../utils/datetime';
@@ -139,7 +141,7 @@ const RequestForm: React.FC = () => {
   const [existingStatus, setExistingStatus] = useState<string | null>(null);
   const [crossDeptWarning, setCrossDeptWarning] = useState<string | null>(null);
   const [overdueBlocked, setOverdueBlocked] = useState(false);
-  const [overdueCount, setOverdueCount] = useState(0);
+  const [reconBlock, setReconBlock] = useState<ReconRequestBlock | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingProjectId = useRef<number | null>(null);
 
@@ -178,6 +180,9 @@ const RequestForm: React.FC = () => {
   const watchedCurrency = watch('currency');
   const watchedIsAdminRequest = watch('isAdminRequest');
   const watchedIsActivityRequest = watch('isActivityRequest');
+  const watchedJustification = watch('justification');
+  const watchedActivityStart = watch('activityStartDate');
+  const watchedActivityEnd = watch('activityEndDate');
 
   // Fetch active donors + per diem rates on mount
   useEffect(() => {
@@ -197,7 +202,7 @@ const RequestForm: React.FC = () => {
   useEffect(() => {
     reconciliationService.getOverdueCheck()
       .then(res => {
-        setOverdueCount(res.overdueCount);
+        setReconBlock(res);
         setOverdueBlocked(res.isBlocked);
       })
       .catch(() => { /* server still enforces the rule on submit */ });
@@ -773,18 +778,11 @@ const RequestForm: React.FC = () => {
 
   return (
     <Box>
-      {overdueBlocked && existingStatus !== 'REJECTED' && (
-        <Alert severity="error" sx={{ mb: 2 }} icon={<WarningIcon />}>
-          <Typography variant="subtitle2" fontWeight={700}>
-            Float Request Blocked — Overdue Reconciliations
-          </Typography>
-          <Typography variant="body2">
-            You have <strong>{overdueCount}</strong> overdue reconciliation{overdueCount !== 1 ? 's' : ''} that have not been submitted for approval.
-            You must submit your overdue reconciliations before creating a new float request.
-            Go to the <strong>Reconciliation</strong> module to submit them.
-          </Typography>
-        </Alert>
-      )}
+      {/* Resubmitting a rejected request is never blocked, so only warn then. */}
+      <ReconBlockAlert
+        block={existingStatus === 'REJECTED' && reconBlock ? { ...reconBlock, isBlocked: false, overdueBlocked: false, staleRejectedItems: [] } : reconBlock}
+        subject="float requests"
+      />
       <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
         <Typography variant="h5" gutterBottom>
           {isEditMode ? (existingStatus === 'REJECTED' ? 'Edit & Resubmit Float Request' : 'Edit Float Request') : 'Create Float Request'}
@@ -1451,6 +1449,23 @@ const RequestForm: React.FC = () => {
             rates={perDiemRates}
           />
         )}
+
+        {/* Hints learned from past rejections — advisory, never blocks submitting */}
+        <RequestHints
+          module="float"
+          draft={{
+            isActivityRequest: Boolean(watchedIsActivityRequest),
+            justification: watchedJustification || '',
+            hasPerDiemClaim,
+            activityStartDate: watchedActivityStart || '',
+            activityEndDate: watchedActivityEnd || '',
+            items: (watchedItems || []).map(i => ({ category: i.category, description: i.itemDescription })),
+            attachments: [
+              ...existingAttachments.map((a: any) => ({ name: a.original_name || a.file_name || '', type: a.attachment_type })),
+              ...uploadedFiles.map(f => ({ name: f.name }))
+            ]
+          } as FloatDraft}
+        />
 
         <Paper elevation={2} sx={{ p: 3 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center">

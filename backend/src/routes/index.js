@@ -24,6 +24,7 @@ const projectController = require('../controllers/project.controller');
 const procurementController = require('../controllers/procurement.controller');
 const timesheetController = require('../controllers/timesheet.controller');
 const timesheetExportController = require('../controllers/timesheetExport.controller');
+const insightsController = require('../controllers/insights.controller');
 const notificationService = require('../services/notification.service');
 
 // Middleware
@@ -157,6 +158,10 @@ router.get('/reconciliations/pending-lead', authenticateToken, reconciliationCon
 router.get('/reconciliations/lead-approved', authenticateToken, reconciliationController.getLeadApprovedReconciliations.bind(reconciliationController));
 router.get('/reconciliations/history', authenticateToken, reconciliationController.getReconciliationHistory.bind(reconciliationController));
 router.get('/reconciliations/finance-review-history', authenticateToken, reconciliationController.getFinanceReviewHistory.bind(reconciliationController));
+// Rejection insights: common mistakes, and hints while a request is drafted
+router.get('/insights/rejections', authenticateToken, insightsController.getRejectionAnalysis.bind(insightsController));
+router.post('/insights/request-hints', authenticateToken, insightsController.getRequestHints.bind(insightsController));
+
 router.get('/reconciliations/overdue-check', authenticateToken, reconciliationController.getOverdueCheck.bind(reconciliationController));
 router.get('/reconciliations/lead-desk-backlog', authenticateToken, reconciliationController.getLeadDeskBacklog.bind(reconciliationController));
 router.get('/reconciliations/finance-desk-backlog', authenticateToken, reconciliationController.getFinanceDeskBacklog.bind(reconciliationController));

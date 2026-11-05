@@ -65,6 +65,28 @@ class HRController {
     return rows.length > 0 ? rows[0].id : null;
   }
 
+  /**
+   * Procurement Committee logins are shared review accounts, not staff
+   * accounts: the members apply for leave from their own staff login. Returns
+   * the refusal message when this request would put leave on such an account.
+   */
+  async committeeLeaveRefusal(user, employeeId = null) {
+    const message = 'Procurement Committee accounts cannot be used to apply for leave. ' +
+      'Please log in with your own staff account to apply.';
+    if (user.role === ROLES.PROCUREMENT_COMMITTEE) return message;
+    if (employeeId) {
+      const rows = await query(
+        `SELECT r.role_name FROM hr_employees e
+           JOIN users u ON u.id = e.user_id
+           JOIN roles r ON r.id = u.role_id
+          WHERE e.id = ?`,
+        [employeeId]
+      );
+      if (rows[0]?.role_name === ROLES.PROCUREMENT_COMMITTEE) return message;
+    }
+    return null;
+  }
+
   async getDepartmentEmployeeIds(departmentId) {
     const rows = await query('SELECT id FROM hr_employees WHERE department_id = ?', [departmentId]);
     return rows.map((r) => r.id);
@@ -317,6 +339,11 @@ class HRController {
         }
       }
 
+      const committeeRefusal = await this.committeeLeaveRefusal(req.user, body.employee_id);
+      if (committeeRefusal) {
+        return res.status(403).json({ success: false, error: committeeRefusal });
+      }
+
       const result = await hrService.createLeaveRequest(body, req.user.id);
       workflowEmail.leaveSubmitted(result.id).catch((err) => console.error('Leave email error:', err.message));
       res.status(201).json({ success: true, message: 'Leave request submitted', data: result });
@@ -343,6 +370,11 @@ class HRController {
         }));
       }
       if (body.leave_type_id) body.leave_type_id = Number(body.leave_type_id);
+
+      const committeeRefusal = await this.committeeLeaveRefusal(req.user);
+      if (committeeRefusal) {
+        return res.status(403).json({ success: false, error: committeeRefusal });
+      }
 
       const result = await hrService.updateLeaveRequest(req.params.leaveId, body, {
         id: req.user.id,

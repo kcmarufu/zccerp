@@ -261,7 +261,8 @@ const DeskAge: React.FC<{ days?: number | null; staleAfter: number }> = ({ days,
 
 /**
  * How long a reconciliation has been waiting on the Finance desk, from the
- * moment it reached Finance. Past `thresholdDays` it is overdue, and while any
+ * moment it reached Finance, in weekday hours (the server skips Saturday and
+ * Sunday). Past `thresholdDays` working days it is overdue, and while any
  * reconciliation is overdue Finance Clerks cannot approve floats.
  */
 const FinanceDeskAge: React.FC<{ hours?: number | string | null; thresholdDays: number }> = ({ hours, thresholdDays }) => {
@@ -275,7 +276,7 @@ const FinanceDeskAge: React.FC<{ hours?: number | string | null; thresholdDays: 
       variant={overdue ? 'filled' : 'outlined'}
       color={overdue ? 'error' : h >= (thresholdDays - 1) * 24 ? 'warning' : 'default'}
       icon={overdue ? <WarningIcon /> : undefined}
-      label={days >= 1 ? `${days} day${days !== 1 ? 's' : ''}` : `${h} hour${h !== 1 ? 's' : ''}`}
+      label={days >= 1 ? `${days} working day${days !== 1 ? 's' : ''}` : `${h} working hour${h !== 1 ? 's' : ''}`}
     />
   );
 };
@@ -588,6 +589,10 @@ ${buildDigitalStamp('')}
   // Tab 1 — My Reconciliations filters
   const [myReconStatusFilter, setMyReconStatusFilter] = useState('');
   const [myReconTimeliness, setMyReconTimeliness] = useState('');
+  const [myReconSearch, setMyReconSearch] = useState('');
+  const [myReconProject, setMyReconProject] = useState('');
+  const [myReconFrom, setMyReconFrom] = useState('');
+  const [myReconTo, setMyReconTo] = useState('');
   const [myRequests, setMyRequests] = useState<any[]>([]);
   const [myReconciliations, setMyReconciliations] = useState<any[]>([]);
   const [pendingLeadReviews, setPendingLeadReviews] = useState<any[]>([]);
@@ -1618,16 +1623,26 @@ ${buildDigitalStamp('')}
       {activeTab === tabIndex('myRecons') && (
         <Paper elevation={0} sx={{ border: `1px solid ${theme.palette.divider}` }}>
           {/* Filter bar */}
-          <Box px={2} pt={2} pb={1} display="flex" gap={2} flexWrap="wrap">
+          <Box px={2} pt={2} pb={1} display="flex" gap={2} flexWrap="wrap" alignItems="center">
             <TextField
-              select label="Status" size="small" sx={{ minWidth: 200 }}
+              size="small" sx={{ minWidth: 260, flex: '1 1 260px' }}
+              placeholder="Search request #, purpose, comments, reviewer..."
+              value={myReconSearch}
+              onChange={e => { setMyReconSearch(e.target.value); setPage(0); }}
+              InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+            />
+            <TextField
+              select label="Status" size="small" sx={{ minWidth: 220 }}
               value={myReconStatusFilter}
               onChange={e => { setMyReconStatusFilter(e.target.value); setPage(0); }}
             >
               <MenuItem value="">All Statuses</MenuItem>
               <MenuItem value="SUBMITTED">Pending Review</MenuItem>
               <MenuItem value="APPROVED">Approved</MenuItem>
-              <MenuItem value="REJECTED">Rejected</MenuItem>
+              <MenuItem value="REJECTED">Rejected (all)</MenuItem>
+              <MenuItem value="NEEDS_ACTION">Rejected — waiting for you to amend</MenuItem>
+              <MenuItem value="REJECTED_LEAD">Rejected by Department Lead / HOD</MenuItem>
+              <MenuItem value="REJECTED_FINANCE">Rejected by Finance</MenuItem>
             </TextField>
             <TextField
               select label="Timeliness" size="small" sx={{ minWidth: 160 }}
@@ -1638,16 +1653,79 @@ ${buildDigitalStamp('')}
               <MenuItem value="ON_TIME">On Time</MenuItem>
               <MenuItem value="LATE">Late</MenuItem>
             </TextField>
+            <TextField
+              select label="Project" size="small" sx={{ minWidth: 200 }}
+              value={myReconProject}
+              onChange={e => { setMyReconProject(e.target.value); setPage(0); }}
+            >
+              <MenuItem value="">All Projects</MenuItem>
+              {Array.from(new Map(myReconciliations
+                .filter((r: any) => r.project_id)
+                .map((r: any) => [String(r.project_id), `${r.project_code || ''}${r.project_name ? ` — ${r.project_name}` : ''}`])
+              ).entries()).map(([pid, label]) => (
+                <MenuItem key={pid} value={pid}>{label}</MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label="Submitted from" type="date" size="small" sx={{ width: 170 }}
+              InputLabelProps={{ shrink: true }}
+              value={myReconFrom}
+              onChange={e => { setMyReconFrom(e.target.value); setPage(0); }}
+            />
+            <TextField
+              label="Submitted to" type="date" size="small" sx={{ width: 170 }}
+              InputLabelProps={{ shrink: true }}
+              value={myReconTo}
+              onChange={e => { setMyReconTo(e.target.value); setPage(0); }}
+            />
+            {(myReconSearch || myReconStatusFilter || myReconTimeliness || myReconProject || myReconFrom || myReconTo) && (
+              <Button size="small" onClick={() => {
+                setMyReconSearch(''); setMyReconStatusFilter(''); setMyReconTimeliness('');
+                setMyReconProject(''); setMyReconFrom(''); setMyReconTo(''); setPage(0);
+              }}>
+                Clear filters
+              </Button>
+            )}
           </Box>
           {(() => {
-            const filteredMyRecons = myReconciliations.filter(r =>
-              (!myReconStatusFilter || r.status === myReconStatusFilter) &&
-              (!myReconTimeliness || (r as any).submission_timeliness === myReconTimeliness)
-            );
+            const words = myReconSearch.toLowerCase().split(/\s+/).filter(Boolean);
+            // Compared as yyyy-MM-dd strings, in local time, so "to" includes that whole day.
+            const submittedDay = (r: any) => r.created_at ? format(new Date(r.created_at), 'yyyy-MM-dd') : '';
+            const filteredMyRecons = myReconciliations.filter((r: any) => {
+              if (myReconStatusFilter === 'NEEDS_ACTION') {
+                if (!(r.status === 'REJECTED' && r.request_status === 'DISPATCHED')) return false;
+              } else if (myReconStatusFilter === 'REJECTED_LEAD') {
+                if (!(r.status === 'REJECTED' && rejectionStageLabel(r).startsWith('Department'))) return false;
+              } else if (myReconStatusFilter === 'REJECTED_FINANCE') {
+                if (!(r.status === 'REJECTED' && rejectionStageLabel(r) === 'Finance')) return false;
+              } else if (myReconStatusFilter && r.status !== myReconStatusFilter) {
+                return false;
+              }
+              if (myReconTimeliness && r.submission_timeliness !== myReconTimeliness) return false;
+              if (myReconProject && String(r.project_id) !== myReconProject) return false;
+              if (myReconFrom && submittedDay(r) < myReconFrom) return false;
+              if (myReconTo && submittedDay(r) > myReconTo) return false;
+              if (words.length > 0) {
+                const haystack = [
+                  r.request_code, r.request_justification, r.project_code, r.project_name,
+                  r.department_code, r.department_name, r.notes, r.overspend_notes,
+                  r.lead_comments, r.finance_comments, r.rejection_comments,
+                  r.lead_reviewer_name, r.finance_reviewer_name, r.rejected_by_name,
+                  r.total_spent, r.request_amount
+                ].filter(v => v != null && v !== '').join(' ').toLowerCase();
+                if (!words.every(w => haystack.includes(w))) return false;
+              }
+              return true;
+            });
+            const anyMyReconFilter = Boolean(myReconSearch || myReconStatusFilter || myReconTimeliness || myReconProject || myReconFrom || myReconTo);
             return filteredMyRecons.length === 0 ? (
             <Box py={6} textAlign="center">
               <MyReconsIcon sx={{ fontSize: 64, color: 'text.disabled', mb: 2 }} />
-              <Typography color="text.secondary">No reconciliations submitted yet</Typography>
+              <Typography color="text.secondary">
+                {anyMyReconFilter && myReconciliations.length > 0
+                  ? 'No reconciliations match these filters'
+                  : 'No reconciliations submitted yet'}
+              </Typography>
             </Box>
           ) : (
             <>
@@ -2089,7 +2167,7 @@ ${buildDigitalStamp('')}
             <Alert severity={financeBacklog.isBlocked ? 'error' : 'warning'} icon={<WarningIcon />} sx={{ m: 2, mb: 0 }}>
               <Typography variant="subtitle2" fontWeight={700} gutterBottom>
                 {financeBacklog.staleCount} reconciliation{financeBacklog.staleCount === 1 ? ' has' : 's have'} been
-                waiting on the Finance desk for more than {financeBacklog.thresholdDays} days
+                waiting on the Finance desk for more than {financeBacklog.thresholdDays} working days (Mon–Fri)
               </Typography>
               <Typography variant="body2">
                 {financeBacklog.isBlocked

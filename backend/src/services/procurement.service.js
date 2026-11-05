@@ -8,6 +8,8 @@ const { query, transaction } = require('../config/database');
 const { ROLES, isAdminHrManager, isFinanceManager, FINANCE_DEPT_CODE, isGsTrackRole } = require('../config/roles');
 const notificationService = require('./notification.service');
 const workflowEmail = require('./workflowEmail.service');
+const reconciliationService = require('./reconciliation.service');
+const { resolveProcItemCategory, inferProcItemCategory } = require('../config/procItemCategories');
 
 const PROC_STATUS = {
   DRAFT: 'DRAFT',
@@ -323,12 +325,13 @@ class ProcurementService {
         for (const item of data.items) {
           await conn.execute(
             `INSERT INTO proc_request_items 
-              (request_id, budget_line_id, item_description, specifications, quantity, 
+              (request_id, budget_line_id, category, item_description, specifications, quantity, 
                unit_of_measure, estimated_unit_price, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               requestId,
               item.budget_line_id || null,
+              resolveProcItemCategory(item, data.title),
               item.item_description,
               item.specifications || null,
               item.quantity || 1,
@@ -590,9 +593,11 @@ class ProcurementService {
         for (const item of data.items) {
           await conn.execute(
             `INSERT INTO proc_request_items 
-              (request_id, budget_line_id, item_description, specifications, quantity, unit_of_measure, estimated_unit_price, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [requestId, item.budget_line_id || null, item.item_description, item.specifications || null,
+              (request_id, budget_line_id, category, item_description, specifications, quantity, unit_of_measure, estimated_unit_price, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [requestId, item.budget_line_id || null,
+             resolveProcItemCategory(item, data.title || existing.title),
+             item.item_description, item.specifications || null,
              item.quantity || 1, item.unit_of_measure || 'unit', item.estimated_unit_price || 0, item.notes || null]
           );
         }
@@ -658,6 +663,13 @@ class ProcurementService {
     }
 
     const isResubmission = existing.status === 'REJECTED';
+
+    // Same reconciliation gate as float requests: 2+ overdue reconciliations,
+    // or a rejected one left uncorrected for more than 3 working days, bars a
+    // NEW request. Resubmitting a rejected request stays open.
+    if (!isResubmission) {
+      await reconciliationService.assertCanRaiseRequest(existing.requester_id);
+    }
 
     return transaction(async (conn) => {
       await this._validateDonorAndProject(conn, existing.donor_id, existing.project_id);
@@ -2612,22 +2624,38 @@ class ProcurementService {
     );
 
     // ── 6. What is actually being bought ─────────────────────────────────────
-    // Grouped by the budget line's category, which is the only classification
-    // procurement items carry; items with no budget line fall under
-    // 'Uncategorised' rather than being dropped from the totals.
-    const categorySummary = await query(
-      `SELECT COALESCE(bl.category, 'Uncategorised') AS category,
-              COUNT(DISTINCT pr.id) AS request_count,
-              COUNT(pri.id)         AS item_count,
-              COALESCE(SUM(pri.quantity * pri.estimated_unit_price), 0) AS total_value
+    // Grouped by the item's own category (proc_request_items.category). This
+    // used to group by budget_lines.category, a field almost nobody fills in,
+    // so most of the money read "Uncategorised". An item saved before the
+    // category existed (or by an old client) is classified from its
+    // description on the fly, so nothing can fall back into "Uncategorised".
+    const categoryItems = await query(
+      `SELECT pr.id AS request_id, pr.title,
+              pri.category, pri.item_description, pri.specifications,
+              COALESCE(pri.quantity * pri.estimated_unit_price, 0) AS line_value
          FROM proc_requests pr
          JOIN proc_request_items pri ON pri.request_id = pr.id
-         LEFT JOIN budget_lines bl   ON bl.id = pri.budget_line_id
-         ${where}
-        GROUP BY COALESCE(bl.category, 'Uncategorised')
-        ORDER BY total_value DESC`,
+         ${where}`,
       P()
     );
+    const byCategory = new Map();
+    for (const it of categoryItems) {
+      const category = (it.category && String(it.category).trim())
+        || inferProcItemCategory(it.item_description, it.specifications, it.title);
+      let g = byCategory.get(category);
+      if (!g) { g = { category, requests: new Set(), item_count: 0, total_value: 0 }; byCategory.set(category, g); }
+      g.requests.add(it.request_id);
+      g.item_count += 1;
+      g.total_value += Number(it.line_value) || 0;
+    }
+    const categorySummary = [...byCategory.values()]
+      .map(g => ({
+        category: g.category,
+        request_count: g.requests.size,
+        item_count: g.item_count,
+        total_value: Math.round(g.total_value * 100) / 100
+      }))
+      .sort((a, b) => b.total_value - a.total_value);
 
     // ── 7. Vendor performance ────────────────────────────────────────────────
     // Win rate is the point of this table: how often a vendor that is asked for

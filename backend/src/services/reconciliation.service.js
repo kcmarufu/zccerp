@@ -268,6 +268,19 @@ const workingDaysBetweenSql = (from, to) => `
 const STALE_LEAD_RECON_WORKING_DAYS = 4;
 const STALE_LEAD_RECON_LIMIT = 2;
 
+/**
+ * A rejected reconciliation goes back to the requester to amend. Left
+ * unattended for more than this many working days (Mon-Fri) after the
+ * rejection, it bars the requester from raising new float or purchase
+ * requests until they amend and resubmit it. One such reconciliation is
+ * enough. Closes the gap where a late reconciliation was submitted just to
+ * get off the overdue list, rejected, and then abandoned.
+ */
+const STALE_REJECTED_RECON_WORKING_DAYS = 3;
+
+/** 2+ overdue, unsubmitted reconciliations bar a requester from new requests. */
+const OVERDUE_RECON_LIMIT = 2;
+
 /** Only these roles hold a lead-review desk, so only they can build a backlog. */
 const LEAD_DESK_ROLES = [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
 
@@ -282,8 +295,45 @@ const LEAD_DESK_ROLES = [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
  * clock starts when the reconciliation reached Finance — the last time the
  * request moved to RECON_PENDING_FINANCE — not when the requester submitted
  * it, so time spent with the Lead/HOD is not charged to Finance.
+ *
+ * The 48 hours are WORKING hours: only Monday to Friday counts, so a
+ * reconciliation that lands on Friday afternoon is not overdue on Sunday.
+ * See weekdayHoursBetween().
  */
 const FINANCE_DESK_STALE_HOURS = 48;
+
+/** Zimbabwe is UTC+2 all year (no daylight saving); weekends are judged in local time. */
+const LOCAL_UTC_OFFSET_MS = 2 * 60 * 60 * 1000;
+
+/** A DATETIME from the driver (a UTC Date, or a 'YYYY-MM-DD HH:MM:SS' UTC string) as epoch ms. */
+function toEpochMs(value) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'string' && !/[zZ]|[+-]\d\d:?\d\d$/.test(value)) {
+    return new Date(value.replace(' ', 'T') + 'Z').getTime();
+  }
+  return new Date(value).getTime();
+}
+
+/**
+ * Whole hours between `from` and `to` that fall on a weekday (Mon-Fri, local
+ * time). Saturday and Sunday contribute nothing, so the clock pauses from
+ * Friday midnight to Monday midnight. Public holidays are not excluded.
+ */
+function weekdayHoursBetween(from, to = new Date()) {
+  let cursor = toEpochMs(from) + LOCAL_UTC_OFFSET_MS;
+  const end = toEpochMs(to) + LOCAL_UTC_OFFSET_MS;
+  if (!Number.isFinite(cursor) || !Number.isFinite(end) || end <= cursor) return 0;
+  let ms = 0;
+  while (cursor < end) {
+    const d = new Date(cursor);
+    const nextMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+    const segmentEnd = Math.min(nextMidnight, end);
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6) ms += segmentEnd - cursor;
+    cursor = segmentEnd;
+  }
+  return Math.floor(ms / 3600000);
+}
 
 /** When the reconciliation on request `r` / reconciliation `rec` reached Finance. */
 const FINANCE_DESK_SINCE_SQL = `COALESCE(
@@ -1352,27 +1402,31 @@ class ReconciliationService {
       ? async (sql, params) => (await connection.execute(sql, params))[0]
       : query;
 
-    const items = await run(
-      `SELECT t.* FROM (
-         SELECT r.id AS request_id,
-                r.request_code,
-                r.total_amount,
-                d.department_code,
-                CONCAT(u.first_name, ' ', u.last_name) AS requester_name,
-                ${FINANCE_DESK_SINCE_SQL} AS finance_desk_since
-         FROM requests r
-         JOIN users u ON r.requester_id = u.id
-         JOIN departments d ON r.department_id = d.id
-         JOIN reconciliations rec ON rec.request_id = r.id AND rec.status = 'SUBMITTED'
-         WHERE r.status = ?
-       ) t
-       WHERE TIMESTAMPDIFF(HOUR, t.finance_desk_since, NOW()) >= ?
-       ORDER BY t.finance_desk_since ASC`,
-      [REQUEST_STATUS.RECON_PENDING_FINANCE, FINANCE_DESK_STALE_HOURS]
+    // Every reconciliation on the desk is fetched and aged here rather than in
+    // SQL, because the age counts weekday hours only (weekdayHoursBetween).
+    const onDesk = await run(
+      `SELECT r.id AS request_id,
+              r.request_code,
+              r.total_amount,
+              d.department_code,
+              CONCAT(u.first_name, ' ', u.last_name) AS requester_name,
+              ${FINANCE_DESK_SINCE_SQL} AS finance_desk_since
+       FROM requests r
+       JOIN users u ON r.requester_id = u.id
+       JOIN departments d ON r.department_id = d.id
+       JOIN reconciliations rec ON rec.request_id = r.id AND rec.status = 'SUBMITTED'
+       WHERE r.status = ?
+       ORDER BY finance_desk_since ASC`,
+      [REQUEST_STATUS.RECON_PENDING_FINANCE]
     );
-    const now = Date.now();
-    for (const item of items) {
-      item.days_on_desk = Math.floor((now - new Date(item.finance_desk_since).getTime()) / 86400000);
+    const now = new Date();
+    const items = [];
+    for (const item of onDesk) {
+      const hours = weekdayHoursBetween(item.finance_desk_since, now);
+      if (hours < FINANCE_DESK_STALE_HOURS) continue;
+      item.hours_on_finance_desk = hours;
+      item.days_on_desk = Math.floor(hours / 24);   // working days
+      items.push(item);
     }
     return {
       items,
@@ -1407,7 +1461,7 @@ class ReconciliationService {
     const err = new Error(
       `Float approvals are on hold for Finance Clerks: ${backlog.staleCount} reconciliation` +
       `${backlog.staleCount === 1 ? ' has' : 's have'} been on the Finance desk for more than ` +
-      `${backlog.thresholdDays} days (${shown}${rest > 0 ? ` and ${rest} more` : ''}). ` +
+      `${backlog.thresholdDays} working days, Monday to Friday (${shown}${rest > 0 ? ` and ${rest} more` : ''}). ` +
       `You can still reject and dispatch. Approve or reject those reconciliations to restore approvals — ` +
       `until then only the Finance Lead / Head of Department can approve floats.`
     );
@@ -1639,8 +1693,8 @@ class ReconciliationService {
     const statuses = [REQUEST_STATUS.RECON_PENDING_FINANCE];
     const placeholders = statuses.map(() => '?').join(', ');
 
-    return await query(
-      `SELECT r.*, 
+    const rows = await query(
+      `SELECT r.*,
               u.first_name as requester_first_name,
               u.last_name as requester_last_name,
               d.department_name, d.department_code,
@@ -1651,9 +1705,8 @@ class ReconciliationService {
               rec.created_at as reconciliation_submitted_at,
               rec.submission_timeliness,
               rec.working_days_taken,
-              -- "Waiting on you": when it reached the Finance desk, and for how long
-              ${FINANCE_DESK_SINCE_SQL} AS finance_desk_since,
-              TIMESTAMPDIFF(HOUR, ${FINANCE_DESK_SINCE_SQL}, NOW()) AS hours_on_finance_desk
+              -- "Waiting on you": when it reached the Finance desk
+              ${FINANCE_DESK_SINCE_SQL} AS finance_desk_since
        FROM requests r
        JOIN users u ON r.requester_id = u.id
        JOIN departments d ON r.department_id = d.id
@@ -1662,6 +1715,12 @@ class ReconciliationService {
        ORDER BY rec.created_at DESC`,
       statuses
     );
+    // ...and for how long, in weekday hours — the same clock the approval block uses.
+    const now = new Date();
+    for (const row of rows) {
+      row.hours_on_finance_desk = row.finance_desk_since ? weekdayHoursBetween(row.finance_desk_since, now) : null;
+    }
+    return rows;
   }
 
   /**
@@ -1707,6 +1766,9 @@ class ReconciliationService {
               r.request_code,
               r.status AS request_status,
               r.total_amount as request_amount,
+              r.justification AS request_justification,
+              r.project_id, p.project_code, p.project_name,
+              r.dispatched_at,
               -- How many times this reconciliation has been submitted; every
               -- submission logs SUBMITTED out of DISPATCHED and nothing else does.
               (SELECT COUNT(*) FROM approval_logs sal
@@ -1763,6 +1825,7 @@ class ReconciliationService {
        FROM reconciliations rec
        JOIN requests r ON rec.request_id = r.id
        JOIN departments d ON r.department_id = d.id
+       LEFT JOIN projects p ON p.id = r.project_id
        LEFT JOIN users fr ON rec.finance_reviewer_id = fr.id
        WHERE rec.reconciled_by = ?
          -- One row per request. A resubmission now amends the request's own
@@ -1886,6 +1949,94 @@ class ReconciliationService {
       [userId]
     );
     return rows[0] ? Number(rows[0].cnt) : 0;
+  }
+
+  /**
+   * This requester's reconciliations that were rejected and are still waiting
+   * to be amended, with the working days elapsed since the rejection. A
+   * rejection returns the request to DISPATCHED with the reconciliation marked
+   * REJECTED; resubmitting flips it back to SUBMITTED, which is what takes it
+   * off this list. Past STALE_REJECTED_RECON_WORKING_DAYS one is "stale".
+   */
+  async getRejectedReconciliationsAwaitingAmendment(userId, connection = null) {
+    const run = connection
+      ? async (sql, params) => (await connection.execute(sql, params))[0]
+      : query;
+    const daysSince = workingDaysBetweenSql('DATE(rj.rejected_at)', 'CURDATE()');
+    return await run(
+      `SELECT r.id AS request_id,
+              r.request_code,
+              rec.id AS reconciliation_id,
+              rj.rejected_at,
+              ${daysSince} AS working_days_since_rejection
+         FROM requests r
+         JOIN reconciliations rec
+           ON rec.request_id = r.id
+          AND rec.id = (SELECT MAX(r3.id) FROM reconciliations r3 WHERE r3.request_id = r.id)
+         JOIN (SELECT al.request_id, MAX(al.created_at) AS rejected_at
+                 FROM approval_logs al
+                WHERE al.action = 'REJECTED' AND al.new_status = 'DISPATCHED'
+                GROUP BY al.request_id) rj ON rj.request_id = r.id
+        WHERE r.requester_id = ?
+          AND r.status = 'DISPATCHED'
+          AND rec.status = 'REJECTED'
+        ORDER BY rj.rejected_at ASC`,
+      [userId]
+    );
+  }
+
+  /**
+   * Everything that bars this user from raising a new request because of their
+   * reconciliations: 2+ overdue unsubmitted ones, or any rejected one left
+   * unattended too long. One summary, so the UI warning, the float submit gate
+   * and the purchase-request submit gate all apply the same rule.
+   */
+  async getRequestBlock(userId, connection = null) {
+    // Sequential: both may run on the caller's transaction connection.
+    const overdueCount = await this.getOverdueCount(userId, connection);
+    const rejected = await this.getRejectedReconciliationsAwaitingAmendment(userId, connection);
+    const staleRejected = rejected.filter(
+      i => Number(i.working_days_since_rejection) > STALE_REJECTED_RECON_WORKING_DAYS
+    );
+    // Rejected but still inside the window: warned, not yet blocked.
+    const rejectedAwaiting = rejected.filter(
+      i => Number(i.working_days_since_rejection) <= STALE_REJECTED_RECON_WORKING_DAYS
+    );
+    const overdueBlocked = overdueCount >= OVERDUE_RECON_LIMIT;
+    const staleRejectedBlocked = staleRejected.length > 0;
+    return {
+      overdueCount,
+      overdueLimit: OVERDUE_RECON_LIMIT,
+      overdueBlocked,
+      staleRejectedCount: staleRejected.length,
+      staleRejectedDays: STALE_REJECTED_RECON_WORKING_DAYS,
+      staleRejectedItems: staleRejected,
+      staleRejectedBlocked,
+      rejectedAwaitingItems: rejectedAwaiting,
+      isBlocked: overdueBlocked || staleRejectedBlocked
+    };
+  }
+
+  /** Throws the reason a new request may not be submitted, if there is one. */
+  async assertCanRaiseRequest(userId, connection = null) {
+    const block = await this.getRequestBlock(userId, connection);
+    if (block.overdueBlocked) {
+      throw new Error(
+        `You have ${block.overdueCount} overdue reconciliations that have not been submitted ` +
+        `for approval. Submit them before raising a new request.`
+      );
+    }
+    if (block.staleRejectedBlocked) {
+      const codes = block.staleRejectedItems.slice(0, 3).map(i => i.request_code).join(', ');
+      const rest = block.staleRejectedCount - 3;
+      throw new Error(
+        `You have ${block.staleRejectedCount} rejected reconciliation${block.staleRejectedCount === 1 ? '' : 's'} ` +
+        `that ${block.staleRejectedCount === 1 ? 'has' : 'have'} not been corrected for more than ` +
+        `${block.staleRejectedDays} working days (${codes}${rest > 0 ? ` and ${rest} more` : ''}). ` +
+        `Amend and resubmit ${block.staleRejectedCount === 1 ? 'it' : 'them'} in the Reconciliation module before raising a new request.`
+      );
+    }
+    return block;
   }
 
   /**
@@ -2123,7 +2274,8 @@ module.exports = new ReconciliationService();
 // raising new requests. Shared by the /reconciliations/overdue-check endpoint
 // (which drives the UI warning) and the server-side submit gate, so the warning
 // the user sees and the rule that is enforced can never drift apart.
-module.exports.OVERDUE_RECON_LIMIT = 2;
+module.exports.OVERDUE_RECON_LIMIT = OVERDUE_RECON_LIMIT;
+module.exports.STALE_REJECTED_RECON_WORKING_DAYS = STALE_REJECTED_RECON_WORKING_DAYS;
 
 // Lead-review desk rule, exported for the controller (which reports it to the UI)
 // and the approval gate (which enforces it), so the figure a reviewer is warned

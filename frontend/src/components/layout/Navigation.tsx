@@ -299,6 +299,13 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           label: 'Procurement Reports',
           icon: <AnalyticsIcon />,
           permission: 'view_reports'
+        },
+        {
+          // Common reasons purchase requests are rejected, learned from reviewers' comments
+          path: '/procurement/rejection-insights',
+          label: 'Rejection Insights',
+          icon: <AnalyticsIcon />,
+          roles: ['PROCUREMENT_OFFICER', 'ADMIN', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD', 'FINANCE_CLERK'] as UserRole[]
         }
       ]
     },
@@ -443,6 +450,13 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           path: '/reports/procurement',
           label: 'Procurement Reports',
           icon: <ProcurementIcon />
+        },
+        {
+          // Common reasons float and purchase requests are rejected
+          path: '/reports/rejection-insights',
+          label: 'Rejection Insights',
+          icon: <AnalyticsIcon />,
+          roles: ['ADMIN', 'FINANCE_CLERK', 'HEAD_OF_PROGRAMS', 'PROGRAM_LEAD'] as UserRole[]
         }
       ]
     },
@@ -924,7 +938,7 @@ const Navigation: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       <Divider />
       <Box sx={{ p: 1.5 }}>
         <Typography variant="caption" color="text.disabled" textAlign="center" display="block">
-          ERP Connect v2.0.0
+          ERP Connect v2.1.0
         </Typography>
       </Box>
     </Box>

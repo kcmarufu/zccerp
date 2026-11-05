@@ -220,7 +220,7 @@ const BudgetManagement: React.FC = () => {
       );
 
       if (response.success) {
-        toast.success(`Budget topped up. New balance: $${response.data?.newBalance?.toLocaleString()}`);
+        toast.success(response.message || 'Budget adjusted');
         setIsTopUpDialogOpen(false);
         setTopUpAmount('');
         setTopUpDescription('');
@@ -835,7 +835,14 @@ const BudgetManagement: React.FC = () => {
               {topUpAmount && parseFloat(topUpAmount) !== 0 && (
                 <Alert severity={parseFloat(topUpAmount) > 0 ? 'success' : 'warning'} sx={{ mt: 2 }}>
                   {parseFloat(topUpAmount) > 0 ? 'Top Up' : 'Deduction'}: <strong>${Math.abs(parseFloat(topUpAmount || '0')).toLocaleString()}</strong><br />
-                  New Balance: <strong>${(Number(selectedBudget.balance || 0) + parseFloat(topUpAmount || '0')).toLocaleString()}</strong>
+                  {(() => {
+                    // A deduction bigger than the balance is allowed and shows as a minus.
+                    const next = Number(selectedBudget.balance || 0) + parseFloat(topUpAmount || '0');
+                    const abs = Math.abs(next).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    return (
+                      <>New Balance: <strong style={{ color: next < 0 ? '#c62828' : undefined }}>{next < 0 ? `-$${abs}` : `$${abs}`}</strong></>
+                    );
+                  })()}
                 </Alert>
               )}
             </Box>

@@ -20,7 +20,6 @@ const {
   isGsTrackRole
 } = require('../config/roles');
 
-const { OVERDUE_RECON_LIMIT } = reconciliationService;
 
 class ApprovalService {
   
@@ -67,25 +66,18 @@ class ApprovalService {
 
       const isResubmission = request.status === REQUEST_STATUS.REJECTED;
 
-      // ── Overdue reconciliation gate ──────────────────────────────────────
-      // A user with 2+ overdue unsubmitted reconciliations may not put a new
-      // request into the approval pipeline. This has to be enforced server-side:
-      // the UI only disables the submit button on the create screen, so saving a
-      // draft and submitting it later bypassed the rule completely.
+      // ── Reconciliation gate ──────────────────────────────────────────────
+      // A user with 2+ overdue unsubmitted reconciliations, or with a rejected
+      // reconciliation left uncorrected for more than 3 working days, may not
+      // put a new request into the approval pipeline. This has to be enforced
+      // server-side: the UI only disables the submit button on the create
+      // screen, so saving a draft and submitting it later bypassed the rule.
       //
       // Resubmissions are deliberately exempt — a rejected request predates the
       // block, and refusing to let the user act on reviewer feedback would leave
       // it permanently stuck.
       if (!isResubmission) {
-        const overdueCount = await reconciliationService.getOverdueCount(
-          request.requester_id, connection
-        );
-        if (overdueCount >= OVERDUE_RECON_LIMIT) {
-          throw new Error(
-            `You have ${overdueCount} overdue reconciliations that have not been submitted ` +
-            `for approval. Submit them before raising a new request.`
-          );
-        }
+        await reconciliationService.assertCanRaiseRequest(request.requester_id, connection);
       }
 
       const [requesterRows] = await connection.execute(
