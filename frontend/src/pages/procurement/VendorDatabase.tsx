@@ -8,7 +8,7 @@ import {
   Box, Paper, Typography, TextField, Button, Grid, Chip, IconButton, Table,
   TableHead, TableRow, TableCell, TableBody, TableContainer, TablePagination, Dialog,
   DialogTitle, DialogContent, DialogActions, Stack, Avatar, Switch,
-  FormControl, FormLabel, Radio, RadioGroup, FormControlLabel, InputAdornment, Alert, CircularProgress, Rating,
+  FormControl, FormLabel, Radio, RadioGroup, FormControlLabel, InputAdornment, Alert, CircularProgress,
   Tooltip, MenuItem, alpha, useTheme
 } from '@mui/material';
 import {
@@ -38,6 +38,7 @@ import {
 } from '../../utils/vendorRegister';
 import { formatDate } from '../../utils/datetime';
 import { stickyActionCell, stickyActionHeadCell } from '../../utils/tableStyles';
+import { RatingSummary, VendorRatingsDialog } from '../../components/procurement/SupplierRatings';
 
 const emptyVendor = (): Partial<ProcVendor> => ({
   company_name: '', contact_person: '', email: '', phone: '', address: '',
@@ -56,6 +57,7 @@ const VendorDatabase: React.FC = () => {
   const [antiTerrorFilter, setAntiTerrorFilter] = useState('');
   const [ratingFilter, setRatingFilter] = useState('');
   const [dialog, setDialog] = useState<null | 'create' | 'edit'>(null);
+  const [ratingsVendorId, setRatingsVendorId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Partial<ProcVendor> | null>(null);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState<Partial<ProcVendor>>(emptyVendor());
@@ -320,18 +322,11 @@ const VendorDatabase: React.FC = () => {
                   </Stack>
                 </TableCell>
                 <TableCell>
-                  {/* The API sends the rating as a decimal string ("4.0"), which
-                      the Rating control does not read — hence empty stars. */}
-                  {Number(vendor.rating) > 0 ? (
-                    <Tooltip title={`${Number(vendor.rating).toFixed(1)} / 5 — ${Number(vendor.rating) >= 4 ? 'Good' : Number(vendor.rating) >= 2.5 ? 'Average' : 'Poor'}`}>
-                      <Box display="flex" alignItems="center" gap={0.5}>
-                        <Rating value={Number(vendor.rating)} readOnly size="small" precision={0.5} />
-                        <Typography variant="caption" color="text.secondary">{Number(vendor.rating).toFixed(1)}</Typography>
-                      </Box>
-                    </Tooltip>
-                  ) : (
-                    <Typography variant="caption" color="text.disabled">Not rated</Typography>
-                  )}
+                  {/* The rating is the average of the ratings given on paid
+                      purchase requests; click through to read them. */}
+                  <Box sx={{ cursor: 'pointer', display: 'inline-block' }} onClick={() => setRatingsVendorId(vendor.id)}>
+                    <RatingSummary rating={vendor.rating} count={vendor.rating_count} />
+                  </Box>
                 </TableCell>
                 <TableCell>
                   <Chip label={vendor.quotation_count ?? 0} size="small" variant="outlined" />
@@ -443,21 +438,10 @@ const VendorDatabase: React.FC = () => {
             )}
             <Grid item xs={12} md={6}>
               <FormLabel sx={{ display: 'block', fontSize: '0.8rem' }}>Supplier rating</FormLabel>
-              <Box display="flex" alignItems="center" gap={1}>
-                <Rating
-                  value={Number(formData.rating) || null}
-                  precision={0.5}
-                  onChange={(_, v) => setFormData(f => ({ ...f, rating: v ?? undefined }))}
-                />
-                <Typography variant="caption" color="text.secondary">
-                  {Number(formData.rating) > 0 ? `${Number(formData.rating).toFixed(1)} / 5` : 'Not rated'}
-                </Typography>
-                {Number(formData.rating) > 0 && (
-                  <Button size="small" onClick={() => setFormData(f => ({ ...f, rating: 0 }))}>Clear</Button>
-                )}
-              </Box>
-              <Typography variant="caption" color="text.secondary">
-                Procurement's assessment of quality, price and delivery. 4–5 stars is good.
+              <RatingSummary rating={formData.rating} count={formData.rating_count} />
+              <Typography variant="caption" color="text.secondary" display="block">
+                Worked out from the ratings given on paid purchase requests by the person who raised each one
+                and by the Procurement team. It cannot be typed in here.
               </Typography>
             </Grid>
             <Grid item xs={12}>
@@ -473,6 +457,7 @@ const VendorDatabase: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+      <VendorRatingsDialog vendorId={ratingsVendorId} onClose={() => setRatingsVendorId(null)} />
     </Box>
   );
 };

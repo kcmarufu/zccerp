@@ -256,6 +256,25 @@ class ProcurementController {
     }
   }
 
+  // ===== SUPPLIER RATINGS =====
+
+  async getSupplierRatings(req, res) {
+    try {
+      res.json({ success: true, data: await procurementService.getSupplierRatings(req.params.id, req.user) });
+    } catch (err) {
+      res.status(err.message === 'Request not found' ? 404 : 500).json({ success: false, error: err.message });
+    }
+  }
+
+  async rateSupplier(req, res) {
+    try {
+      const data = await procurementService.rateSupplier(req.params.id, req.params.vendorId, req.body || {}, req.user);
+      res.json({ success: true, data, message: 'Thank you — your rating has been saved' });
+    } catch (err) {
+      res.status(err.message === 'Request not found' ? 404 : 400).json({ success: false, error: err.message });
+    }
+  }
+
   async getPaymentBatches(req, res) {
     try {
       res.json({ success: true, data: await procurementService.getPaymentBatches(req.params.id) });

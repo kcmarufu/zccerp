@@ -12,6 +12,21 @@ const DEFAULT_FROM = 'ZCC ERP <notifications@erpconnectzw.com>';
 const DEFAULT_APP_URL = 'https://erp.erpconnectzw.com';
 const RETRY_DELAY_MS = 1500;
 
+// The Resend plan allows 50,000 emails a month. The caps stop well short of
+// it, so a fault (a loop, a bulk job) cannot use up the month's allowance.
+// Both can be changed in .env without a code change.
+const DEFAULT_MONTHLY_CAP = 45000;
+const DEFAULT_DAILY_CAP = 3000;
+// The same subject to the same person within this window is a double click or
+// a repeated step, not news: it is not sent twice.
+const DUPLICATE_WINDOW_MINUTES = 10;
+// Resend refuses bursts; messages leave one at a time with this gap.
+const MIN_GAP_MS = 600;
+// Domains whose mailboxes do not receive mail. zcc-eco.org mailboxes are not
+// working; gmail.org is a mistyped gmail.com. Override with EMAIL_SKIP_DOMAINS.
+const DEFAULT_SKIP_DOMAINS = 'zcc-eco.org,gmail.org';
+const ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const TONES = {
   action: { label: 'ACTION NEEDED', background: '#fef3c7', color: '#92400e' },
   approved: { label: 'APPROVED', background: '#dcfce7', color: '#166534' },
@@ -26,7 +41,69 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;');
 
+const listFromEnv = (name, fallback) => String(process.env[name] ?? fallback)
+  .split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+
 class EmailService {
+
+  constructor() {
+    this._queue = Promise.resolve();
+    this._lastSentAt = 0;
+  }
+
+  /** Why this address gets no mail, or null when it may be sent to. */
+  _skipReason(to) {
+    const address = String(to || '').trim().toLowerCase();
+    if (!ADDRESS_PATTERN.test(address)) return 'invalid address';
+    const domain = address.split('@')[1];
+    if (listFromEnv('EMAIL_SKIP_DOMAINS', DEFAULT_SKIP_DOMAINS).includes(domain)) return `domain ${domain} is skipped`;
+    if (listFromEnv('EMAIL_SKIP_ADDRESSES', '').includes(address)) return 'address is skipped';
+    return null;
+  }
+
+  /** Every attempt is recorded; a missing log table must not stop mail. */
+  async _log(to, subject, status, detail = null) {
+    try {
+      const { query } = require('../config/database');
+      await query(
+        'INSERT INTO email_log (to_email, subject, status, detail) VALUES (?, ?, ?, ?)',
+        [String(to).slice(0, 255), String(subject).slice(0, 255), status, detail ? String(detail).slice(0, 500) : null]
+      );
+    } catch (err) {
+      console.error(`[EmailService] Could not log email: ${err.message}`);
+    }
+  }
+
+  /** Null when sending is allowed; otherwise why it is held back. */
+  async _quotaRefusal(to, subject) {
+    try {
+      const { query } = require('../config/database');
+      const [row] = await query(
+        `SELECT COUNT(*) AS month_sent,
+                COALESCE(SUM(created_at >= CURDATE()), 0) AS day_sent,
+                COALESCE(SUM(to_email = ? AND subject = ? AND created_at >= NOW() - INTERVAL ${DUPLICATE_WINDOW_MINUTES} MINUTE), 0) AS duplicates
+           FROM email_log
+          WHERE status = 'SENT' AND created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')`,
+        [String(to).slice(0, 255), String(subject).slice(0, 255)]
+      );
+      const monthlyCap = Number(process.env.EMAIL_MONTHLY_CAP) || DEFAULT_MONTHLY_CAP;
+      const dailyCap = Number(process.env.EMAIL_DAILY_CAP) || DEFAULT_DAILY_CAP;
+      if (Number(row.duplicates) > 0) return { status: 'DUPLICATE', detail: `already sent within ${DUPLICATE_WINDOW_MINUTES} minutes` };
+      if (Number(row.month_sent) >= monthlyCap) return { status: 'CAPPED', detail: `monthly cap of ${monthlyCap} reached` };
+      if (Number(row.day_sent) >= dailyCap) return { status: 'CAPPED', detail: `daily cap of ${dailyCap} reached` };
+      return null;
+    } catch (err) {
+      console.error(`[EmailService] Could not check the sending caps: ${err.message}`);
+      return null;
+    }
+  }
+
+  /** Messages leave one at a time, spaced out, in the order they were asked for. */
+  send(mail) {
+    const run = this._queue.then(() => this._send(mail));
+    this._queue = run.catch(() => {});
+    return run;
+  }
 
   /**
    * @param {object}   mail
@@ -38,13 +115,28 @@ class EmailService {
    * @param {string}   mail.link     path inside the app, e.g. /finance/approvals
    * @param {string}   mail.tone     badge above the heading: action, approved, rejected or info
    */
-  async send({ to, subject, heading, intro, details = [], link = null, tone = 'info' }) {
+  async _send({ to, subject, heading, intro, details = [], link = null, tone = 'info' }) {
     if (!to) return false;
+    const skip = this._skipReason(to);
+    if (skip) {
+      console.log(`[EmailService] Skipped (${skip}) to=${to} subject="${subject}"`);
+      await this._log(to, subject, 'SKIPPED', skip);
+      return false;
+    }
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
       console.log(`[EmailService] Not sent (no RESEND_API_KEY) to=${to} subject="${subject}"`);
+      await this._log(to, subject, 'NO_KEY');
       return false;
     }
+    const refusal = await this._quotaRefusal(to, subject);
+    if (refusal) {
+      console.log(`[EmailService] Not sent (${refusal.detail}) to=${to} subject="${subject}"`);
+      await this._log(to, subject, refusal.status, refusal.detail);
+      return false;
+    }
+    const wait = this._lastSentAt + MIN_GAP_MS - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
 
     const body = JSON.stringify({
       from: process.env.EMAIL_FROM || DEFAULT_FROM,
@@ -53,6 +145,7 @@ class EmailService {
       html: this._render({ heading, intro, details, link, tone })
     });
 
+    let lastError = null;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
         const res = await fetch(RESEND_URL, {
@@ -61,18 +154,22 @@ class EmailService {
           body,
           signal: AbortSignal.timeout(15000)
         });
+        this._lastSentAt = Date.now();
         if (res.ok) {
           console.log(`[EmailService] Sent to=${to} subject="${subject}"`);
+          await this._log(to, subject, 'SENT');
           return true;
         }
-        const detail = await res.text();
-        console.error(`[EmailService] Resend ${res.status} to=${to} subject="${subject}": ${detail}`);
-        if (res.status !== 429 && res.status < 500) return false;
+        lastError = `Resend ${res.status}: ${await res.text()}`;
+        console.error(`[EmailService] ${lastError} to=${to} subject="${subject}"`);
+        if (res.status !== 429 && res.status < 500) break;
       } catch (err) {
+        lastError = err.message;
         console.error(`[EmailService] Failed to=${to} subject="${subject}": ${err.message}`);
       }
       if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     }
+    await this._log(to, subject, 'FAILED', lastError);
     return false;
   }
 

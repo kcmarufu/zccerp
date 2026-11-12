@@ -1,36 +1,46 @@
 /**
  * Workflow Email Service
- * Who is emailed when. Email is reserved for approvals that involve the Heads
- * of Department and the General Secretary:
+ * Who is emailed when. Emails go to the people who must act on a request, and
+ * to the person who raised it when it is decided. The in-app notifications
+ * reach wider audiences; email deliberately does not, to keep within the
+ * monthly sending allowance (see email.service for the caps).
  *
- *   A Head of Department's float, purchase request, leave or reconciliation
- *     - submitted               → General Secretary
- *     - General Secretary approves → the Head of Department, and Finance's Head
- *                                 of Department for a float or reconciliation
- *     - resubmitted to Finance after Finance rejected it → Finance's Head of Department
- *     - reaches Finance's final approval (purchase request) → Finance's Head of Department
- *     - final approval or rejection → the Head of Department who raised it
+ * Approvers — "a request is on your desk"
+ *   - Float, reconciliation, purchase request or purchase award waiting at the
+ *     department stage → the Department Lead(s) and Head of Department of the
+ *     department that owns it (the project's department for cross-department work)
+ *   - Leave → whoever the leave routing names (Lead/HOD of the department, or
+ *     the General Secretary)
+ *   - A Head of Department's work → the General Secretary, then Finance's HOD
+ *   - High-value purchase requests → the General Secretary and Finance's HOD
+ *   The Finance and Procurement desks keep in-app notifications only.
  *
- *   A high-value purchase request, whoever raised it
- *     - awaiting approval       → General Secretary and Finance's Head of Department
- *     - one of them approves    → the other
- *     - one of them rejects     → the other
- *     - both approve            → Finance's Head of Department
+ * Requesters — "your request was decided"
+ *   - Float: finally approved, rejected, dispatched, or auto-rejected unpaid
+ *   - Reconciliation: approved or rejected
+ *   - Leave: approved or rejected
+ *   - Purchase request: rejected / returned, approved for payment, paid
  *
- * Everyone else keeps the in-app notifications only. Nobody is asked to act on
- * a request they raised or told about a decision they just made themselves.
+ * Nobody is asked to act on a request they raised or told about a decision
+ * they just made themselves.
  */
 
 const { query } = require('../config/database');
 const { ROLES, FINANCE_DEPT_CODE, isGsTrackRole } = require('../config/roles');
+const leaveApproval = require('./leaveApproval.service');
 const emailService = require('./email.service');
 
 const GS_JOB_TITLE = 'General Secretary';
 const HIGH_VALUE = 'PENDING_HIGH_VALUE_APPROVAL';
+const DEPT_DESK_ROLES = [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS];
+
+// Float statuses at which the department (Lead / HOD) holds the request.
+const FLOAT_DEPT_DESK = ['PENDING_LEAD_APPROVAL', 'PENDING_ADMIN_APPROVAL', 'PENDING_HOP_APPROVAL'];
+const RECON_DEPT_DESK = ['RECON_PENDING_LEAD'];
 
 const KINDS = {
-  float: { label: 'float request', approvalsLink: '/finance/approvals', requesterLink: '/finance/requests' },
-  reconciliation: { label: 'reconciliation', approvalsLink: '/finance/reconciliation', requesterLink: '/finance/reconciliation' }
+  float: { label: 'float request', approvalsLink: '/finance/approvals', requesterLink: (id) => `/finance/requests/${id}` },
+  reconciliation: { label: 'reconciliation', approvalsLink: '/finance/reconciliation', requesterLink: () => '/finance/reconciliation' }
 };
 
 const money = (amount) => `USD ${Number(amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -71,9 +81,21 @@ class WorkflowEmailService {
     return rows;
   }
 
+  /** Active users of a department holding one of the given roles. */
+  async _departmentDesk(departmentId, roles = DEPT_DESK_ROLES) {
+    if (!departmentId || !roles.length) return [];
+    return query(
+      `SELECT u.id, u.first_name, u.last_name, u.email
+         FROM users u JOIN roles r ON u.role_id = r.id
+        WHERE u.department_id = ? AND r.role_name IN (${roles.map(() => '?').join(', ')}) AND u.is_active = 1`,
+      [departmentId, ...roles]
+    );
+  }
+
   async _loadFloat(requestId) {
     const rows = await query(
-      `SELECT r.request_code AS code, r.total_amount AS amount, r.justification AS purpose,
+      `SELECT r.id, r.request_code AS code, r.total_amount AS amount, r.justification AS purpose,
+              r.status, r.department_id, r.routing_department_id, r.source_proc_request_id,
               u.id AS requester_id, u.first_name, u.last_name, u.email, rr.role_name AS requester_role,
               d.department_name
          FROM requests r
@@ -88,10 +110,12 @@ class WorkflowEmailService {
 
   async _loadProcurement(requestId) {
     const rows = await query(
-      `SELECT pr.request_code AS code, pr.total_estimated_amount AS amount, pr.title AS purpose,
-              pr.status, pr.rejection_reason,
+      `SELECT pr.id, pr.request_code AS code, pr.total_estimated_amount AS amount, pr.title AS purpose,
+              pr.status, pr.rejection_reason, pr.returned_to, pr.department_id, pr.routing_department_id,
               (SELECT SUM(COALESCE(q.awarded_amount, q.total_amount)) FROM proc_quotations q
                 WHERE q.request_id = pr.id AND q.is_selected = 1) AS awarded_amount,
+              (SELECT GROUP_CONCAT(DISTINCT q.vendor_name ORDER BY q.vendor_name SEPARATOR ', ') FROM proc_quotations q
+                WHERE q.request_id = pr.id AND q.is_selected = 1) AS suppliers,
               u.id AS requester_id, u.first_name, u.last_name, u.email, rr.role_name AS requester_role,
               d.department_name
          FROM proc_requests pr
@@ -109,6 +133,7 @@ class WorkflowEmailService {
       `SELECT lr.status, lr.days_requested, lr.rejection_reason, lt.leave_name,
               DATE_FORMAT(lr.start_date, '%d %b %Y') AS start_date,
               DATE_FORMAT(lr.end_date, '%d %b %Y') AS end_date,
+              e.department_id AS employee_department_id,
               u.id AS requester_id, u.first_name, u.last_name, u.email, rr.role_name AS requester_role,
               d.department_name,
               CONCAT(a.first_name, ' ', a.last_name) AS approver_name
@@ -136,9 +161,12 @@ class WorkflowEmailService {
     ];
   }
 
+  /** One email per person, however many of the lists they appear on. */
   async _sendToAll(recipients, mail, excludeIds = []) {
+    const seen = new Set(excludeIds.filter(Boolean).map(Number));
     for (const person of recipients) {
-      if (excludeIds.includes(person.id)) continue;
+      if (seen.has(Number(person.id))) continue;
+      seen.add(Number(person.id));
       await emailService.send({ ...mail, to: person.email });
     }
   }
@@ -157,6 +185,28 @@ class WorkflowEmailService {
       heading: `A ${copy.label} needs your attention`,
       tone: 'action',
       intro: `${fullName(record)} has submitted a ${copy.label} that seeks your attention. Please review it, then approve or reject it.`,
+      details: this._baseDetails(record, copy.label),
+      link: copy.approvalsLink
+    }, [record.requester_id]);
+  }
+
+  /**
+   * A staff member's float or reconciliation is waiting at the department
+   * stage: its Lead(s) and Head of Department are asked to act. Read after the
+   * submission commits, so the status says which desk really holds it.
+   */
+  async floatAtDepartmentDesk(kind, requestId) {
+    const copy = KINDS[kind];
+    const record = await this._loadFloat(requestId);
+    if (!record || record.source_proc_request_id || isGsTrackRole(record.requester_role)) return;
+    const deskStatuses = kind === 'reconciliation' ? RECON_DEPT_DESK : FLOAT_DEPT_DESK;
+    if (!deskStatuses.includes(record.status)) return;
+    const desk = await this._departmentDesk(record.routing_department_id || record.department_id);
+    await this._sendToAll(desk, {
+      subject: `For your approval: ${copy.label} ${record.code} from ${fullName(record)}`,
+      heading: `A ${copy.label} is on your desk`,
+      tone: 'action',
+      intro: `${fullName(record)} has submitted a ${copy.label} that is waiting for your department's approval. Please review it, then approve or reject it.`,
       details: this._baseDetails(record, copy.label),
       link: copy.approvalsLink
     }, [record.requester_id]);
@@ -182,7 +232,7 @@ class WorkflowEmailService {
       tone: 'approved',
       intro: `${approverName} approved your ${copy.label}. It is now with Finance.`,
       details: this._baseDetails(record, copy.label),
-      link: copy.requesterLink
+      link: copy.requesterLink(requestId)
     });
   }
 
@@ -201,20 +251,58 @@ class WorkflowEmailService {
     }, [record.requester_id]);
   }
 
-  /** Final decision, or a rejection at any stage: the Head of Department who raised it is told. */
+  /** Final approval, or a rejection at any stage: whoever raised it is told. */
   async floatDecided(kind, requestId, { approved, decidedBy, reason = null }) {
     const copy = KINDS[kind];
     const record = await this._loadFloat(requestId);
-    if (!record || !isGsTrackRole(record.requester_role)) return;
+    // A float generated from a purchase request is reported through the purchase request.
+    if (!record || record.source_proc_request_id) return;
     const outcome = approved ? 'approved' : 'rejected';
+    const next = !approved
+      ? (kind === 'reconciliation'
+        ? ' Please correct it and resubmit it. A rejected reconciliation left uncorrected for more than 3 working days blocks new float and purchase requests.'
+        : ' You can amend it and resubmit it.')
+      : (kind === 'float' ? ' Finance will dispatch it shortly.' : ' The process is complete.');
     await emailService.send({
       to: record.email,
       subject: `Your ${copy.label} ${record.code} was ${outcome}`,
       heading: `${capitalise(copy.label)} ${outcome}`,
       tone: approved ? 'approved' : 'rejected',
-      intro: `${decidedBy} ${outcome} your ${copy.label}.`,
+      intro: `${decidedBy} ${outcome} your ${copy.label}.${next}`,
       details: [...this._baseDetails(record, copy.label), ['Reason', reason]],
-      link: copy.requesterLink
+      link: copy.requesterLink(requestId)
+    });
+  }
+
+  /** Finance dispatched the float: the requester is told, with the reconciliation deadline. */
+  async floatDispatched(requestId) {
+    const record = await this._loadFloat(requestId);
+    if (!record || record.source_proc_request_id) return;
+    await emailService.send({
+      to: record.email,
+      subject: `Your float ${record.code} has been dispatched`,
+      heading: 'Float dispatched',
+      tone: 'info',
+      intro: 'Finance has dispatched your float. Please submit your reconciliation within 5 working days.',
+      details: this._baseDetails(record, 'float request'),
+      link: '/finance/reconciliation'
+    });
+  }
+
+  /** An approved float or purchase request was not paid in time and was rejected automatically. */
+  async reservationExpired(kind, requestId) {
+    const isProc = kind === 'proc_request';
+    const record = isProc ? await this._loadProcurement(requestId) : await this._loadFloat(requestId);
+    if (!record || (!isProc && record.source_proc_request_id)) return;
+    const label = isProc ? 'purchase request' : 'float request';
+    await emailService.send({
+      to: record.email,
+      subject: `Your ${label} ${record.code} was rejected automatically`,
+      heading: `${capitalise(label)} rejected automatically`,
+      tone: 'rejected',
+      intro: `Your ${label} was approved but not ${isProc ? 'paid' : 'dispatched'} within 10 working days, so it was rejected automatically and its reserved funds were released. You can amend it and resubmit it.`,
+      details: this._baseDetails(record, label),
+      link: isProc ? `/procurement/requests/${requestId}` : `/finance/requests/${requestId}`
     });
   }
 
@@ -232,14 +320,26 @@ class WorkflowEmailService {
     ];
   }
 
+  /** Whoever the leave routing names as approver: department Lead/HOD, or the General Secretary. */
+  async _leaveApprovers(record) {
+    if (isGsTrackRole(record.requester_role)) return this._generalSecretary();
+    const target = await leaveApproval.resolveApprover({
+      userId: record.requester_id,
+      role: record.requester_role,
+      departmentId: record.employee_department_id
+    });
+    if (target.approverDepartmentId) return this._departmentDesk(target.approverDepartmentId, target.approverRoles);
+    return target.approverRoles.includes(ROLES.ADMIN) ? this._generalSecretary() : [];
+  }
+
   async leaveSubmitted(leaveRequestId) {
     const record = await this._loadLeave(leaveRequestId);
-    if (!record || !isGsTrackRole(record.requester_role)) return;
-    await this._sendToAll(await this._generalSecretary(), {
+    if (!record) return;
+    await this._sendToAll(await this._leaveApprovers(record), {
       subject: `For your approval: leave request from ${fullName(record)}`,
-      heading: 'A leave request needs your attention',
+      heading: 'A leave request is on your desk',
       tone: 'action',
-      intro: `${fullName(record)} has submitted a leave request that seeks your attention. Please review it, then approve or reject it.`,
+      intro: `${fullName(record)} has submitted a leave request that is waiting for your approval. Please review it, then approve or reject it.`,
       details: this._leaveDetails(record),
       link: '/hr/leave'
     }, [record.requester_id]);
@@ -247,14 +347,14 @@ class WorkflowEmailService {
 
   async leaveDecided(leaveRequestId) {
     const record = await this._loadLeave(leaveRequestId);
-    if (!record || !isGsTrackRole(record.requester_role)) return;
+    if (!record || !['APPROVED', 'REJECTED'].includes(record.status)) return;
     const outcome = record.status === 'APPROVED' ? 'approved' : 'rejected';
     await emailService.send({
       to: record.email,
       subject: `Your leave request was ${outcome}`,
       heading: `Leave request ${outcome}`,
       tone: record.status === 'APPROVED' ? 'approved' : 'rejected',
-      intro: `${record.approver_name} ${outcome} your leave request.`,
+      intro: `${record.approver_name || 'Your approver'} ${outcome} your leave request.`,
       details: [...this._leaveDetails(record), ['Reason', record.rejection_reason]],
       link: '/hr/leave'
     });
@@ -284,9 +384,13 @@ class WorkflowEmailService {
     const wasHighValue = previousStatus === HIGH_VALUE;
     const label = wasHighValue || record.status === HIGH_VALUE ? 'high-value purchase request' : 'purchase request';
     const link = `/procurement/requests/${requestId}`;
+    const ownerDeptId = record.routing_department_id || record.department_id;
     // Once a supplier is chosen the awarded value is the real amount; a split
     // award has several selected quotations, already summed by _loadProcurement.
-    const details = this._baseDetails({ ...record, amount: record.awarded_amount ?? record.amount }, label);
+    const details = [
+      ...this._baseDetails({ ...record, amount: record.awarded_amount ?? record.amount }, label),
+      ['Supplier', record.suppliers]
+    ];
 
     if (record.status === HIGH_VALUE && wasHighValue) {
       if (lastStep?.action === 'HIGH_VALUE_APPROVED') await this._highValueSeatApproved(requestId, record, actorName, actorId, details, link);
@@ -295,6 +399,16 @@ class WorkflowEmailService {
     if (record.status === previousStatus) return;
 
     switch (record.status) {
+      case 'PENDING_DEPT_APPROVAL':
+        await this._sendToAll(await this._departmentDesk(ownerDeptId), {
+          subject: `For your approval: purchase request ${record.code} from ${fullName(record)}`,
+          heading: 'A purchase request is on your desk',
+          tone: 'action',
+          intro: `${fullName(record)} has submitted a purchase request that is waiting for your department's approval. Please review it, then approve or reject it.`,
+          details, link
+        }, [record.requester_id]);
+        break;
+
       case 'PENDING_GS_APPROVAL':
         await this._sendToAll(await this._generalSecretary(), {
           subject: `For your approval: purchase request ${record.code} from ${fullName(record)}`,
@@ -316,6 +430,16 @@ class WorkflowEmailService {
             details, link
           });
         }
+        break;
+
+      case 'PENDING_DEPT_CONFIRMATION':
+        await this._sendToAll(hodRequest ? await this._generalSecretary() : await this._departmentDesk(ownerDeptId), {
+          subject: `Confirm the purchase award: ${record.code}`,
+          heading: 'A purchase award is waiting for your confirmation',
+          tone: 'action',
+          intro: 'Procurement has awarded this purchase request. Please check the award against what was requested, then confirm it or send it back.',
+          details, link
+        }, [record.requester_id, actorId]);
         break;
 
       case HIGH_VALUE: {
@@ -354,21 +478,37 @@ class WorkflowEmailService {
         }
         break;
 
-      case 'COMPLETED':
-        if (hodRequest) {
+      case 'PENDING_PAYMENT':
+        if (previousStatus === 'PENDING_FINAL_FINANCE') {
           await emailService.send({
             to: record.email,
-            subject: `Your purchase request ${record.code} was approved`,
-            heading: 'Purchase request approved',
+            subject: `Your purchase request ${record.code} was approved for payment`,
+            heading: 'Approved for payment',
             tone: 'approved',
-            intro: `${actorName} gave final approval to your purchase request.`,
+            intro: `${actorName} approved your purchase request for payment. Finance will now pay the supplier.`,
             details, link
           });
         }
         break;
 
+      case 'COMPLETED':
+        await emailService.send({
+          to: record.email,
+          subject: previousStatus === 'PENDING_PAYMENT'
+            ? `Your purchase request ${record.code} has been paid`
+            : `Your purchase request ${record.code} was approved and paid`,
+          heading: previousStatus === 'PENDING_PAYMENT' ? 'Supplier paid' : 'Purchase request approved',
+          tone: 'approved',
+          intro: (previousStatus === 'PENDING_PAYMENT'
+            ? 'Finance has completed payment for your purchase request.'
+            : `${actorName} gave final approval to your purchase request and the supplier has been paid.`)
+            + ' Once you have received the goods or service, please rate the supplier on the request page.',
+          details, link
+        });
+        break;
+
       case 'REJECTED':
-        await this._procurementRejected(record, { actorId, actorName, wasHighValue, hodRequest, details, link });
+        await this._procurementRejected(record, { actorId, actorName, wasHighValue, details, link });
         break;
 
       default:
@@ -391,7 +531,7 @@ class WorkflowEmailService {
     }, [actorId, record.requester_id]);
   }
 
-  async _procurementRejected(record, { actorId, actorName, wasHighValue, hodRequest, details, link }) {
+  async _procurementRejected(record, { actorId, actorName, wasHighValue, details, link }) {
     const withReason = [...details, ['Reason', record.rejection_reason]];
     if (wasHighValue) {
       const seats = [...await this._generalSecretary(), ...await this._financeHod()];
@@ -403,16 +543,20 @@ class WorkflowEmailService {
         details: withReason, link
       }, [actorId, record.requester_id]);
     }
-    if (hodRequest) {
-      await emailService.send({
-        to: record.email,
-        subject: `Your purchase request ${record.code} was rejected`,
-        heading: 'Purchase request rejected',
-        tone: 'rejected',
-        intro: `${actorName} rejected your purchase request.`,
-        details: withReason, link
-      });
-    }
+    if (Number(actorId) === Number(record.requester_id)) return;
+    const returned = record.returned_to === 'REQUESTER';
+    await emailService.send({
+      to: record.email,
+      subject: returned
+        ? `Your purchase request ${record.code} was returned to you`
+        : `Your purchase request ${record.code} was rejected`,
+      heading: returned ? 'Purchase request returned for amendment' : 'Purchase request rejected',
+      tone: 'rejected',
+      intro: returned
+        ? `${actorName} sent your purchase request back to you to amend. Once you resubmit it, it returns to the same stage.`
+        : `${actorName} rejected your purchase request. You can amend it and resubmit it.`,
+      details: withReason, link
+    });
   }
 }
 

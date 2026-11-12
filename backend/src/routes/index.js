@@ -233,6 +233,8 @@ router.get('/procurement/requests/:id/high-value-approvals', authenticateToken, 
 router.post('/procurement/requests/:id/final-approve', authenticateToken, uploadMultiple, handleUploadError, procurementController.finalFinanceApproval.bind(procurementController));
 router.post('/procurement/requests/:id/confirm-dept', authenticateToken, procurementController.confirmDepartment.bind(procurementController));
 router.post('/procurement/requests/:id/resubmit-from-procurement', authenticateToken, procurementController.resubmitFromProcurement.bind(procurementController));
+router.get('/procurement/requests/:id/supplier-ratings', authenticateToken, procurementController.getSupplierRatings.bind(procurementController));
+router.post('/procurement/requests/:id/supplier-ratings/:vendorId', authenticateToken, procurementController.rateSupplier.bind(procurementController));
 router.get('/procurement/requests/:id/payments', authenticateToken, procurementController.getPaymentBatches.bind(procurementController));
 router.post('/procurement/requests/:id/payments', authenticateToken, uploadMultiple, handleUploadError, procurementController.recordPaymentBatch.bind(procurementController));
 router.post('/procurement/requests/:id/payments/:batchId/reverse', authenticateToken, procurementController.reversePaymentBatch.bind(procurementController));

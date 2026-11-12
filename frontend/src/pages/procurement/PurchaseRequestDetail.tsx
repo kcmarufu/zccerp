@@ -85,6 +85,7 @@ import {
 import { ProcQuotation, ProcQuotationItem, ProcRequestItem, ProcVendor } from '../../types';
 import VendorPicker from '../../components/procurement/VendorPicker';
 import VendorQuickDialog from '../../components/procurement/VendorQuickDialog';
+import { SupplierRatingPanel } from '../../components/procurement/SupplierRatings';
 import {
   AwardComparison, PaymentsPanel, ReturnToSelector, BudgetImpactPanel, fundsShort,
   FinanceApprovalNotice, ReservationNotice, PopDeadlineNotice, PopObligationsAlert
@@ -1549,6 +1550,9 @@ ${allCommitteeApproved ? `
           in place of a departmental approval. It then continues to Procurement as normal.
         </Alert>
       )}
+
+      {/* Once approved for payment, the requester and Procurement rate the supplier. */}
+      <SupplierRatingPanel requestId={request.id} status={request.status} />
 
       <Grid container spacing={3}>
         {/* ── Main column ─────────────────────────────────────────────── */}

@@ -83,6 +83,7 @@ class NotificationService {
     } catch (err) {
       console.error('[NotificationService] onRequestSubmitted error:', err.message);
     }
+    this._email(workflowEmail.floatAtDepartmentDesk('float', requestId));
   }
 
   /**
@@ -225,6 +226,7 @@ class NotificationService {
       `Float request ${requestCode} has been dispatched to the requester.`,
       'info', 'request', requestId, `/finance/approvals`, requesterId
     );
+    this._email(workflowEmail.floatDispatched(requestId));
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -258,6 +260,7 @@ class NotificationService {
       ['HEAD_OF_PROGRAMS', 'FINANCE_CLERK', 'ADMIN'],
       title, message, type, 'request', requestId, link, requesterId
     );
+    this._email(workflowEmail.floatAtDepartmentDesk('reconciliation', requestId));
   }
 
   /** Lead approved reconciliation — notify requester + Finance */
@@ -529,6 +532,7 @@ class NotificationService {
     } catch (err) {
       console.error('[NotificationService] onReservationExpired error:', err.message);
     }
+    this._email(workflowEmail.reservationExpired(kind, requestId));
   }
 
   // ─────────────────────────────────────────────────────────────────

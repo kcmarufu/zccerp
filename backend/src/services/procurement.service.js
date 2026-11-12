@@ -36,6 +36,10 @@ const PROC_STATUS = {
   CANCELLED: 'CANCELLED'
 };
 
+// A purchase request's suppliers can be rated from the moment Finance approves
+// it for payment (part-paid) through to completion.
+const SUPPLIER_RATING_STATUSES = ['PENDING_PAYMENT', 'COMPLETED'];
+
 // ── High-value procurement rule ──────────────────────────────────────────────
 // When the SELECTED quotation is at or above this USD amount, the Procurement
 // Committee does not decide the request — it recommends it. The request then
@@ -3667,14 +3671,6 @@ class ProcurementService {
     return { name, verified: [true, 1, '1'].includes(data.antiterror_verified) ? 1 : 0 };
   }
 
-  /** A star rating from 0.5 to 5 in half stars, or null for "not rated". */
-  _parseRating(value) {
-    if (value === undefined || value === null || value === '') return null;
-    const n = Number(value);
-    if (!Number.isFinite(n) || n < 0 || n > 5) throw new Error('A rating must be between 0 and 5 stars');
-    return n === 0 ? null : Math.round(n * 2) / 2;
-  }
-
   async createVendor(data, user) {
     const { name, verified } = await this._assertVendorComplete(data);
 
@@ -3687,7 +3683,7 @@ class ProcurementService {
         (vendor_code, company_name, contact_person, email, phone, address, tin_number,
          registration_number, category, is_prequalified, prequalification_expiry, notes,
          antiterror_verified, antiterror_checked_by, antiterror_checked_at, created_by, rating, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, NOW())`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, NULL, NOW())`,
       [
         vendorCode,
         name,
@@ -3703,8 +3699,7 @@ class ProcurementService {
         data.notes || null,
         verified,
         user.id,
-        user.id,
-        this._parseRating(data.rating)
+        user.id
       ]
     );
 
@@ -3721,7 +3716,7 @@ class ProcurementService {
       `UPDATE proc_vendors SET
         company_name=?, contact_person=?, email=?, phone=?, address=?, tin_number=?,
         registration_number=?, category=?, is_prequalified=?, prequalification_expiry=?,
-        notes=?, is_active=?, antiterror_verified=?, rating=?,
+        notes=?, is_active=?, antiterror_verified=?,
         antiterror_checked_by=IF(?, ?, antiterror_checked_by),
         antiterror_checked_at=IF(?, NOW(), antiterror_checked_at),
         updated_at=NOW()
@@ -3740,7 +3735,6 @@ class ProcurementService {
         data.notes || null,
         data.is_active !== undefined ? (data.is_active ? 1 : 0) : 1,
         verified,
-        this._parseRating(data.rating),
         checkChanged, user.id,
         checkChanged,
         vendorId
@@ -3763,7 +3757,126 @@ class ProcurementService {
        WHERE v.id = ?`,
       [vendorId]
     );
-    return vendors[0] || null;
+    if (!vendors[0]) return null;
+    vendors[0].ratings = await query(
+      `SELECT sr.quality_rating, sr.delivery_rating, sr.comment, sr.rater_type, sr.updated_at,
+              pr.id AS request_id, pr.request_code, pr.title AS request_title,
+              CONCAT(u.first_name, ' ', u.last_name) AS rated_by_name
+         FROM proc_supplier_ratings sr
+         JOIN proc_requests pr ON pr.id = sr.request_id
+         JOIN users u ON u.id = sr.rated_by
+        WHERE sr.vendor_id = ?
+        ORDER BY sr.updated_at DESC
+        LIMIT 50`,
+      [vendorId]
+    );
+    return vendors[0];
+  }
+
+  // ============================================================
+  // SUPPLIER RATINGS
+  // ============================================================
+
+  /**
+   * Once a purchase request is approved for payment, the person who raised it
+   * and the Procurement team each rate every supplier awarded part of it, on
+   * quality and on delivery. Returns the request's suppliers, their ratings,
+   * and whether this user may rate (and as whom).
+   */
+  async getSupplierRatings(requestId, user) {
+    const [req] = await query('SELECT id, requester_id, status FROM proc_requests WHERE id = ?', [requestId]);
+    if (!req) throw new Error('Request not found');
+    const raterType = this._raterType(req, user);
+    const open = SUPPLIER_RATING_STATUSES.includes(req.status);
+    const suppliers = await query(
+      `SELECT DISTINCT v.id AS vendor_id, v.company_name, v.rating AS overall_rating, v.rating_count
+         FROM proc_quotations q JOIN proc_vendors v ON v.id = q.vendor_id
+        WHERE q.request_id = ? AND q.is_selected = 1
+        ORDER BY v.company_name`,
+      [requestId]
+    );
+    const ratings = await query(
+      `SELECT sr.vendor_id, sr.rated_by, sr.rater_type, sr.quality_rating, sr.delivery_rating, sr.comment, sr.updated_at,
+              CONCAT(u.first_name, ' ', u.last_name) AS rated_by_name
+         FROM proc_supplier_ratings sr JOIN users u ON u.id = sr.rated_by
+        WHERE sr.request_id = ?
+        ORDER BY sr.updated_at`,
+      [requestId]
+    );
+    return {
+      open,
+      can_rate: Boolean(open && raterType && suppliers.length),
+      rater_type: raterType,
+      suppliers: suppliers.map((sup) => {
+        const forSupplier = ratings.filter((r) => r.vendor_id === sup.vendor_id);
+        return {
+          ...sup,
+          ratings: forSupplier,
+          my_rating: forSupplier.find((r) => Number(r.rated_by) === Number(user.id)) || null
+        };
+      })
+    };
+  }
+
+  /** REQUESTER, PROCUREMENT, or null when this user does not rate this request. */
+  _raterType(req, user) {
+    if (Number(req.requester_id) === Number(user.id)) return 'REQUESTER';
+    if (user.role === ROLES.PROCUREMENT_OFFICER) return 'PROCUREMENT';
+    return null;
+  }
+
+  async rateSupplier(requestId, vendorId, data, user) {
+    const [req] = await query('SELECT id, requester_id, status FROM proc_requests WHERE id = ?', [requestId]);
+    if (!req) throw new Error('Request not found');
+    if (!SUPPLIER_RATING_STATUSES.includes(req.status)) {
+      throw new Error('Suppliers can be rated once the purchase request is approved for payment');
+    }
+    const raterType = this._raterType(req, user);
+    if (!raterType) {
+      throw new Error('Only the person who raised this purchase request and the Procurement team can rate its suppliers');
+    }
+    const [awarded] = await query(
+      'SELECT 1 FROM proc_quotations WHERE request_id = ? AND vendor_id = ? AND is_selected = 1 LIMIT 1',
+      [requestId, vendorId]
+    );
+    if (!awarded) throw new Error('That supplier was not awarded this purchase request');
+
+    const stars = (value, what) => {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1 || n > 5) throw new Error(`Give ${what} a rating from 1 to 5 stars`);
+      return n;
+    };
+    const quality = stars(data.quality_rating, 'quality');
+    const delivery = stars(data.delivery_rating, 'delivery');
+    const comment = String(data.comment || '').trim().slice(0, 1000) || null;
+    if ((quality <= 2 || delivery <= 2) && !comment) {
+      throw new Error('Please say what went wrong when you give 2 stars or fewer');
+    }
+
+    await transaction(async (conn) => {
+      await conn.execute(
+        `INSERT INTO proc_supplier_ratings
+           (request_id, vendor_id, rated_by, rater_type, quality_rating, delivery_rating, comment)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE rater_type = VALUES(rater_type), quality_rating = VALUES(quality_rating),
+           delivery_rating = VALUES(delivery_rating), comment = VALUES(comment), updated_at = NOW()`,
+        [requestId, vendorId, user.id, raterType, quality, delivery, comment]
+      );
+      await this._refreshVendorRating(conn, vendorId);
+    });
+    return this.getSupplierRatings(requestId, user);
+  }
+
+  /** A supplier's rating is the average of every rating it has received. */
+  async _refreshVendorRating(conn, vendorId) {
+    await conn.execute(
+      `UPDATE proc_vendors v
+          JOIN (SELECT COUNT(*) AS n, ROUND(AVG((quality_rating + delivery_rating) / 2), 1) AS avg_rating
+                  FROM proc_supplier_ratings WHERE vendor_id = ?) agg
+          SET v.rating = IF(agg.n = 0, NULL, agg.avg_rating), v.rating_count = agg.n
+        WHERE v.id = ?`,
+      [vendorId, vendorId]
+    );
   }
 
   async deleteVendor(vendorId, user) {
@@ -4249,7 +4362,11 @@ class ProcurementService {
 // transaction and cannot undo a step that has been committed.
 for (const action of [
   'submitPurchaseRequest', 'approveDeptLevel', 'rejectRequest', 'submitToCommittee',
-  'committeeDecision', 'highValueDecision', 'finalFinanceApproval'
+  'committeeDecision', 'highValueDecision', 'finalFinanceApproval',
+  // Workflow v2 steps: department confirmation, Procurement's resubmissions
+  // and payment batches move a request to stages that are emailed as well.
+  'confirmDepartment', 'resubmitFromProcurement', 'resubmitToCommittee',
+  'recordPaymentBatch', 'approveFinanceLevel'
 ]) {
   const step = ProcurementService.prototype[action];
   ProcurementService.prototype[action] = async function emailingStep(requestId, ...args) {

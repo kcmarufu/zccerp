@@ -523,12 +523,13 @@ exports.addProjectFunds = async (req, res) => {
     const maxAllowed = donorCommitted - otherTotal;
     const newTotal = parseFloat(project.total_budget || 0) + amount;
 
-    if (newTotal > maxAllowed) {
+    if (newTotal > maxAllowed + 0.005) {
       return res.status(400).json({
         success: false,
-        error: `Adding ${amount} would exceed the donor's available committed funds. ` +
-               `Donor committed: ${donorCommitted}, allocated to other projects: ${otherTotal}, ` +
-               `max this project can hold: ${maxAllowed}, requested new total: ${newTotal}.`
+        error: `The partner does not have enough uncommitted funds to add USD ${amount.toFixed(2)} to this project. ` +
+               `You can add at most USD ${Math.max(0, maxAllowed - parseFloat(project.total_budget || 0)).toFixed(2)}. ` +
+               `Partner committed: USD ${donorCommitted.toFixed(2)}; other projects hold: USD ${otherTotal.toFixed(2)}; ` +
+               `this project holds: USD ${parseFloat(project.total_budget || 0).toFixed(2)}. Add funds to the partner first.`
       });
     }
 

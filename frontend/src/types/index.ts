@@ -1411,7 +1411,9 @@ export interface ProcVendor {
   /** 1 verified, 0 not verified, null when nobody has recorded the check yet. */
   antiterror_verified?: boolean | number | null;
   is_active: boolean;
-  rating?: number;
+  /** Average of the ratings in proc_supplier_ratings; null when nobody has rated the supplier. */
+  rating?: number | string | null;
+  rating_count?: number;
   quotation_count?: number;  // used in VendorDatabase page
   created_at?: string;
   updated_at?: string;

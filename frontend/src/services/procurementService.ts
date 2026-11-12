@@ -599,3 +599,50 @@ export const PROC_WORKFLOW_STEPS_V2 = [
   { label: 'Payment', status: 'PENDING_PAYMENT' },
   { label: 'Completed', status: 'COMPLETED' }
 ];
+
+// ============================================================================
+// SUPPLIER RATINGS
+// ============================================================================
+export interface SupplierRatingEntry {
+  vendor_id?: number;
+  rated_by?: number;
+  rater_type: 'REQUESTER' | 'PROCUREMENT';
+  quality_rating: number;
+  delivery_rating: number;
+  comment?: string | null;
+  updated_at: string;
+  rated_by_name: string;
+  request_id?: number;
+  request_code?: string;
+  request_title?: string;
+}
+
+export interface RequestSupplierRatings {
+  open: boolean;
+  can_rate: boolean;
+  rater_type: 'REQUESTER' | 'PROCUREMENT' | null;
+  suppliers: Array<{
+    vendor_id: number;
+    company_name: string;
+    overall_rating: number | string | null;
+    rating_count: number;
+    ratings: SupplierRatingEntry[];
+    my_rating: SupplierRatingEntry | null;
+  }>;
+}
+
+export const getSupplierRatings = async (requestId: number | string): Promise<RequestSupplierRatings> => {
+  const res = await api.get<ApiResponse<RequestSupplierRatings>>(`${BASE}/requests/${requestId}/supplier-ratings`);
+  return res.data.data!;
+};
+
+export const rateSupplier = async (
+  requestId: number | string,
+  vendorId: number,
+  payload: { quality_rating: number; delivery_rating: number; comment?: string }
+): Promise<RequestSupplierRatings> => {
+  const res = await api.post<ApiResponse<RequestSupplierRatings>>(
+    `${BASE}/requests/${requestId}/supplier-ratings/${vendorId}`, payload
+  );
+  return res.data.data!;
+};

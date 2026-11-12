@@ -495,6 +495,21 @@ exports.removeFunds = async (req, res) => {
         throw new Error(`Cannot reduce committed below allocated amount (${totalAllocated.toFixed(2)}). Reduce budget allocations first.`);
       }
 
+      // The partner's projects draw on its committed funds too. Removing more
+      // than is free of them leaves a project holding money the partner no
+      // longer has, and every later project top-up is then refused by the gap.
+      const [projectRows] = await connection.execute(
+        'SELECT COALESCE(SUM(total_budget), 0) AS projects_total FROM projects WHERE donor_id = ?',
+        [donorId]
+      );
+      const projectsTotal = parseFloat(projectRows[0].projects_total || 0);
+      if (newCommitted < projectsTotal - 0.005) {
+        throw new Error(
+          `Cannot reduce committed funds to ${newCommitted.toFixed(2)}: this partner's projects hold ${projectsTotal.toFixed(2)}. ` +
+          `The most you can remove is ${Math.max(0, currentCommitted - projectsTotal).toFixed(2)}, or deduct funds from a project first.`
+        );
+      }
+
       // Update donor
       await connection.execute(
         'UPDATE donors SET total_committed = ?, updated_at = NOW() WHERE id = ?',

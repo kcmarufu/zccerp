@@ -375,12 +375,17 @@ class BudgetController {
             );
             const otherTotal = parseFloat(otherLines[0].other_total || 0);
             const maxAllowed = projectBudget - otherTotal;
-            if (newAllocated > maxAllowed) {
-              throw new Error(
-                `Top-up would push budget line to ${newAllocated}, exceeding the project's available budget. ` +
-                `Project total: ${projectBudget}, other lines allocated: ${otherTotal}, ` +
-                `max this line can hold: ${maxAllowed}.`
+            if (newAllocated > maxAllowed + 0.005) {
+              const m = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+              const room = Math.max(0, maxAllowed - currentAllocated);
+              const err = new Error(
+                `The project does not have enough unallocated funds for this top-up. ` +
+                `You can add at most USD ${m(room)} to this line. ` +
+                `Project total: USD ${m(projectBudget)}; already allocated to its budget lines: USD ${m(otherTotal + currentAllocated)}. ` +
+                `Add funds to the project first, then top up the line.`
               );
+              err.status = 400;
+              throw err;
             }
           }
         }
@@ -425,7 +430,7 @@ class BudgetController {
       });
     } catch (error) {
       console.error('Error topping up budget:', error);
-      res.status(error.message.includes('not found') ? 404 : 500).json({
+      res.status(error.status || (error.message.includes('not found') ? 404 : 500)).json({
         success: false,
         error: error.message || 'Failed to top up budget'
       });
