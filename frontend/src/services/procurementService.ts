@@ -11,7 +11,8 @@ import {
   ProcDashboardStats,
   ProcCommitteeReview,
   CreateProcRequestPayload,
-  ApiResponse
+  ApiResponse,
+  PopObligations
 } from '../types';
 
 const BASE = '/procurement';
@@ -99,8 +100,65 @@ export const approveFinanceLevel = async (id: number | string, comments?: string
   await api.post(`${BASE}/requests/${id}/finance-approve`, { comments });
 };
 
-export const rejectProcurementRequest = async (id: number | string, comments: string): Promise<void> => {
-  await api.post(`${BASE}/requests/${id}/reject`, { comments });
+/**
+ * Who amends a request sent back after the Committee (workflow v2). Once
+ * resubmitted it returns to the stage that sent it back.
+ */
+export type ReturnTo = 'PROCUREMENT' | 'REQUESTER';
+
+export const rejectProcurementRequest = async (
+  id: number | string, comments: string, returnTo?: ReturnTo | null
+): Promise<{ status?: string; message?: string }> => {
+  const res = await api.post(`${BASE}/requests/${id}/reject`, { comments, return_to: returnTo || undefined });
+  return res.data.data || {};
+};
+
+// ── Workflow v2: purchase request → float requisition ───────────────────────
+
+/** Stages after the Committee where a rejection asks who amends the request. */
+export const POST_COMMITTEE_STAGES = ['PENDING_HIGH_VALUE_APPROVAL', 'PENDING_DEPT_CONFIRMATION', 'PENDING_FINAL_FINANCE'];
+
+export const isWorkflowV2 = (r?: { workflow_version?: number } | null) => Number(r?.workflow_version) === 2;
+
+/** The department confirms the Committee's award and sends it to Finance. */
+export const confirmDepartment = async (id: number | string, comments?: string): Promise<void> => {
+  await api.post(`${BASE}/requests/${id}/confirm-dept`, { comments });
+};
+
+/** Procurement sends an amended request back to the stage that returned it. */
+export const resubmitFromProcurement = async (
+  id: number | string, selectedQuotationId: number | null, comments?: string, awards?: ItemAward[] | null
+): Promise<{ status: string; message: string }> => {
+  const res = await api.post(`${BASE}/requests/${id}/resubmit-from-procurement`, {
+    selected_quotation_id: selectedQuotationId, comments, awards: awards || undefined
+  });
+  return res.data.data;
+};
+
+/** Record a further payment batch, with its proof of payment. */
+/** The signed-in Finance user's proof-of-payment deadlines (5 working days after approving). */
+export const getPopObligations = async (): Promise<PopObligations> => {
+  const res = await api.get(`${BASE}/pop-obligations`);
+  return res.data.data;
+};
+
+export const recordPaymentBatch = async (id: number | string, formData: FormData) => {
+  const res = await api.post(`${BASE}/requests/${id}/payments`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+  return res.data as { data: { outstanding_amount: number; completed: boolean }; message: string };
+};
+
+/** Finance reverses one payment batch; its amount goes back to the budget. */
+export const reversePaymentBatch = async (id: number | string, batchId: number, reason: string) => {
+  const res = await api.post(`${BASE}/requests/${id}/payments/${batchId}/reverse`, { reason });
+  return res.data as { message: string };
+};
+
+/** The current user's open purchase requests on a project — for the float form. */
+export const getOpenPurchaseRequestsForProject = async (projectId: number | string) => {
+  const res = await api.get(`${BASE}/requests/open-for-project`, { params: { project_id: projectId } });
+  return (res.data.data || []) as { id: number; request_code: string; title: string; status: string }[];
 };
 
 /**
@@ -150,10 +208,16 @@ export const getCommitteeVotes = async (requestId: number | string) => {
   return res.data.data || [];
 };
 
-export const finalFinanceApproval = async (id: number | string, formData: FormData): Promise<void> => {
-  await api.post(`${BASE}/requests/${id}/final-approve`, formData, {
+/**
+ * Finance approval. On a v2 request the form also carries payment_mode
+ * (FULL | BATCH), amount, payment_date and payment_reference, and the reply
+ * names the float requisition generated from it.
+ */
+export const finalFinanceApproval = async (id: number | string, formData: FormData): Promise<{ message?: string; data?: any }> => {
+  const res = await api.post(`${BASE}/requests/${id}/final-approve`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   });
+  return res.data || {};
 };
 
 export const getApprovalTrail = async (id: number | string) => {
@@ -187,9 +251,10 @@ export const getHighValueApprovals = async (id: number | string): Promise<HighVa
 export const highValueDecision = async (
   id: number | string,
   decision: 'APPROVED' | 'REJECTED',
-  comments?: string
+  comments?: string,
+  returnTo?: ReturnTo | null
 ): Promise<{ status: string; message: string }> => {
-  const res = await api.post(`${BASE}/requests/${id}/high-value-decision`, { decision, comments });
+  const res = await api.post(`${BASE}/requests/${id}/high-value-decision`, { decision, comments, return_to: returnTo || undefined });
   return res.data.data || res.data;
 };
 
@@ -207,6 +272,8 @@ export interface ProofOfPayment {
   first_name?: string;
   last_name?: string;
   created_at: string;
+  /** Workflow v2: the payment batch this document proves. */
+  batch_id?: number | null;
 }
 
 export const getProofOfPayments = async (requestId: number | string): Promise<ProofOfPayment[]> => {
@@ -215,11 +282,13 @@ export const getProofOfPayments = async (requestId: number | string): Promise<Pr
 };
 
 export const addProofOfPayments = async (
-  requestId: number | string, files: File[], note?: string
+  requestId: number | string, files: File[], note?: string, batchId?: number
 ): Promise<void> => {
   const formData = new FormData();
   files.forEach(f => formData.append('files', f));
   if (note) formData.append('note', note);
+  // Workflow v2: a further document for a payment batch already recorded.
+  if (batchId) formData.append('batch_id', String(batchId));
   await api.post(`${BASE}/requests/${requestId}/pops`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   });
@@ -323,6 +392,9 @@ export const getVendors = async (params?: {
   search?: string;
   category?: string;
   is_prequalified?: string;
+  /** good (4–5 stars), average (2.5–3.5), poor (below 2.5) or unrated. */
+  rating?: string;
+  sort?: 'rating';
 }): Promise<ProcVendor[]> => {
   const res = await api.get<ApiResponse<ProcVendor[]>>(`${BASE}/vendors`, { params });
   return res.data.data || [];
@@ -475,8 +547,11 @@ export const PROC_STATUS_LABELS: Record<string, string> = {
   PENDING_FINANCE_APPROVAL: 'Pending Finance Approval',
   PENDING_PROCUREMENT: 'In Procurement',
   PENDING_COMMITTEE: 'Pending Committee',
-  PENDING_HIGH_VALUE_APPROVAL: 'Pending Super Admin & Finance Lead Approval',
+  PENDING_HIGH_VALUE_APPROVAL: 'Pending Super Admin & Finance HOD Approval',
+  PENDING_DEPT_CONFIRMATION: 'Pending Dept. Confirmation',
   PENDING_FINAL_FINANCE: 'Pending Final Approval',
+  RETURNED_TO_PROCUREMENT: 'Returned to Procurement',
+  PENDING_PAYMENT: 'Approved — Awaiting Payment',
   COMPLETED: 'Completed',
   REJECTED: 'Rejected',
   CANCELLED: 'Cancelled'
@@ -490,7 +565,10 @@ export const PROC_STATUS_COLORS: Record<string, string> = {
   PENDING_PROCUREMENT: 'info',
   PENDING_COMMITTEE: 'secondary',
   PENDING_HIGH_VALUE_APPROVAL: 'secondary',
+  PENDING_DEPT_CONFIRMATION: 'warning',
   PENDING_FINAL_FINANCE: 'warning',
+  RETURNED_TO_PROCUREMENT: 'error',
+  PENDING_PAYMENT: 'info',
   COMPLETED: 'success',
   REJECTED: 'error',
   CANCELLED: 'error'
@@ -501,7 +579,23 @@ export const PROC_WORKFLOW_STEPS = [
   { label: 'Dept. Approval', status: 'PENDING_DEPT_APPROVAL' },
   { label: 'Procurement', status: 'PENDING_PROCUREMENT' },
   { label: 'Committee', status: 'PENDING_COMMITTEE' },
-  { label: 'Super Admin + Finance Lead', status: 'PENDING_HIGH_VALUE_APPROVAL' },
+  { label: 'Super Admin + Finance HOD', status: 'PENDING_HIGH_VALUE_APPROVAL' },
   { label: 'Final Finance', status: 'PENDING_FINAL_FINANCE' },
+  { label: 'Completed', status: 'COMPLETED' }
+];
+
+/**
+ * Workflow v2: the department confirms the award before Finance, and Finance's
+ * approval generates the float requisition and pays it in one or more batches.
+ */
+export const PROC_WORKFLOW_STEPS_V2 = [
+  { label: 'Submit Request', status: 'DRAFT' },
+  { label: 'Supervisor Approval', status: 'PENDING_DEPT_APPROVAL' },
+  { label: 'Procurement', status: 'PENDING_PROCUREMENT' },
+  { label: 'Committee', status: 'PENDING_COMMITTEE' },
+  { label: 'Super Admin + Finance HOD', status: 'PENDING_HIGH_VALUE_APPROVAL' },
+  { label: 'Department Confirmation', status: 'PENDING_DEPT_CONFIRMATION' },
+  { label: 'Finance Approval', status: 'PENDING_FINAL_FINANCE' },
+  { label: 'Payment', status: 'PENDING_PAYMENT' },
   { label: 'Completed', status: 'COMPLETED' }
 ];

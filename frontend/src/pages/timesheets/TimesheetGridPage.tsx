@@ -372,7 +372,7 @@ const TimesheetGridPage: React.FC = () => {
         </Alert>
       )}
 
-      {sheet.is_locked && (
+      {Boolean(Number(sheet.is_locked)) && (
         <Alert severity="success" sx={{ mb: 2 }}>
           Approved{sheet.locked_by_name ? ` by ${sheet.locked_by_name}` : ''} and locked.
           {sheet.can_reopen && ' The HR Office can reopen it if an amendment is needed.'}

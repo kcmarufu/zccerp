@@ -377,6 +377,16 @@ const DashboardPage: React.FC = () => {
             <Typography variant="body2" sx={{ opacity: 0.85, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
               {user?.department_name} &bull; {formatRoleLabel(user?.role, (user as any)?.job_title)}
             </Typography>
+            <Box
+              component="span"
+              sx={{
+                display: 'inline-block', mt: 1, px: 1, py: 0.25, borderRadius: 1,
+                fontSize: '0.7rem', fontWeight: 700, letterSpacing: 0.5,
+                bgcolor: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.35)'
+              }}
+            >
+              Version 3.0
+            </Box>
           </Box>
           <Box display="flex" gap={1} flexWrap="wrap">
             {hasRole('GENERAL_USER') && (

@@ -9,6 +9,68 @@ const { query } = require('../config/database');
 const approvalService = require('../services/approval.service');
 const { formatRoleLabel } = require('../config/roleLabels');
 const notificationService = require('../services/notification.service');
+const reservations = require('../services/budgetReservation.service');
+
+/** Spell out characters the PDF's built-in Helvetica cannot draw. */
+const pdfSafe = (text) => (text == null ? text : String(text).replace(/→/g, '->').replace(/←/g, '<-'));
+
+/**
+ * One approval-trail row, as tall as its longest cell. Rows used to be a fixed
+ * 18pt, so a long comment ran over the rows beneath it. Returns the next y.
+ * Entries copied from a purchase request (PR_…) read as "PR · ACTION".
+ */
+function drawTrailRow(doc, a, idx, y, pageW) {
+  // The PDF's built-in Helvetica has no arrow glyphs ("→" printed as "!'").
+  const action = String(a.action || '').startsWith('PR_')
+    ? `PR · ${String(a.action).slice(3)}`.replace(/_/g, ' ')
+    : String(a.action || '').replace(/_/g, ' ');
+  const who = `${a.approver_first_name || ''} ${a.approver_last_name || ''}`.trim() || '—';
+  const role = formatRoleLabel(a.approver_role, a.actor_job_title);
+  const comments = pdfSafe(a.comments) || '—';
+  doc.fontSize(8);
+  const h = Math.max(
+    doc.font('Helvetica-Bold').heightOfString(action, { width: 60 }),
+    doc.font('Helvetica').heightOfString(who, { width: 135 }),
+    doc.heightOfString(role, { width: 105 }),
+    doc.heightOfString(comments, { width: 95 })
+  ) + 8;
+  if (y + h > doc.page.height - 60) { doc.addPage(); y = 50; }
+  doc.rect(50, y, pageW, h).fill(idx % 2 === 0 ? '#f7f7f7' : 'white');
+  const base = String(a.action || '').replace(/^PR_/, '');
+  const actionColor = /APPROVED|CONFIRMED|PAID/.test(base) ? '#2e7d32' : /REJECTED|REVERSED/.test(base) ? '#c62828' : '#1a1a1a';
+  doc.font('Helvetica-Bold').fillColor(actionColor).text(action, 55, y + 4, { width: 60 });
+  doc.font('Helvetica').fillColor('#1a1a1a');
+  doc.text(who, 120, y + 4, { width: 135 });
+  doc.text(role, 260, y + 4, { width: 105 });
+  doc.text(comments, 370, y + 4, { width: 95 });
+  doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
+  return y + h;
+}
+
+/**
+ * Green PAID stamp in the top-right corner of page one, for a RECONCILED
+ * request — it has been paid and closed. Drawn last so it sits over the header.
+ */
+function drawPaidStamp(doc, request) {
+  if (String(request.status || '').toUpperCase() !== 'RECONCILED') return;
+  const paidOn = request.completed_at || request.updated_at;
+  const w = 136, h = paidOn ? 56 : 48;
+  const x = doc.page.width - 50 - w - 6, y = 108;
+  doc.save();
+  doc.rotate(-12, { origin: [x + w / 2, y + h / 2] });
+  // Ink only, no fill — like a rubber stamp, the text beneath stays readable.
+  doc.opacity(0.85);
+  doc.roundedRect(x, y, w, h, 6).lineWidth(3).strokeColor('#2e7d32').stroke();
+  doc.roundedRect(x + 4, y + 4, w - 8, h - 8, 4).lineWidth(0.8).strokeColor('#2e7d32').stroke();
+  doc.fillColor('#2e7d32').font('Helvetica-Bold').fontSize(24).text('PAID', x, y + 8, { width: w, align: 'center', characterSpacing: 4 });
+  doc.fontSize(6.5).text('ERP CONNECT · RECONCILED', x, y + 35, { width: w, align: 'center', characterSpacing: 0.4 });
+  if (paidOn) {
+    const d = new Date(paidOn).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    doc.text(d, x, y + 44, { width: w, align: 'center' });
+  }
+  doc.restore();
+  doc.fillColor('#1a1a1a').opacity(1);
+}
 
 class ExportController {
 
@@ -32,12 +94,14 @@ class ExportController {
                 dn.donor_name as partner_name,
                 dn.donor_code as partner_code,
                 p.project_name,
-                p.project_code
+                p.project_code,
+                spr.request_code as source_proc_request_code
          FROM requests r
          JOIN users u ON r.requester_id = u.id
          JOIN departments d ON r.department_id = d.id
          LEFT JOIN donors dn ON r.donor_id = dn.id
          LEFT JOIN projects p ON r.project_id = p.id
+         LEFT JOIN proc_requests spr ON spr.id = r.source_proc_request_id
          WHERE r.id = ?`,
         [requestId]
       );
@@ -47,6 +111,7 @@ class ExportController {
       }
 
       const request = requests[0];
+      request.justification = pdfSafe(request.justification);
 
       // Get items
       const items = await query(
@@ -61,7 +126,7 @@ class ExportController {
       const approvalTrail = await approvalService.getApprovalTrail(requestId);
 
       // Create text-based PDF document
-      const doc = new PDFDocument({ margin: 50, size: 'A4' });
+      const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename=float-requisition-${request.request_code}.pdf`);
@@ -104,6 +169,12 @@ class ExportController {
       drawField('Total Amount', `$${parseFloat(request.total_amount || 0).toFixed(2)}`, col1, y);
       drawField('Email', request.requester_email || '—', col2, y);
       y += 34;
+      if (request.source_proc_request_code) {
+        // Dual reference: the purchase request this float was generated from.
+        drawField('Purchase Request Ref.', request.source_proc_request_code, col1, y);
+        drawField('Payment', 'Paid through the purchase request — no reconciliation', col2, y);
+        y += 34;
+      }
 
       // ── Activity Request fields ───────────────────────────────────────────────
       if (request.is_activity_request) {
@@ -185,18 +256,7 @@ class ExportController {
         y += 16;
 
         approvalTrail.forEach((a, idx) => {
-          if (y > 700) { doc.addPage(); y = 50; }
-          const bg = idx % 2 === 0 ? '#f7f7f7' : 'white';
-          doc.rect(50, y, pageW, 18).fill(bg);
-          doc.fontSize(8).font('Helvetica').fillColor('#1a1a1a');
-          const actionColor = a.action === 'APPROVED' ? '#2e7d32' : a.action === 'REJECTED' ? '#c62828' : '#1a1a1a';
-          doc.font('Helvetica-Bold').fillColor(actionColor).text(a.action, 55, y + 4, { width: 60 });
-          doc.font('Helvetica').fillColor('#1a1a1a');
-          doc.text(`${a.approver_first_name} ${a.approver_last_name}`, 120, y + 4, { width: 135 });
-          doc.text(formatRoleLabel(a.approver_role, a.actor_job_title), 260, y + 4, { width: 105 });
-          doc.text(a.comments || '—', 370, y + 4, { width: 95 });
-          doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
-          y += 18;
+          y = drawTrailRow(doc, a, idx, y, pageW);
         });
         y += 10;
       }
@@ -207,6 +267,10 @@ class ExportController {
       y += 6;
       doc.fontSize(7).font('Helvetica').fillColor('#999');
       doc.text(`Generated: ${new Date().toLocaleString('en-GB')}  |  ERP Connect — Zimbabwe Council of Churches  |  CONFIDENTIAL`, 50, y);
+
+      // A reconciled (paid) request carries the PAID stamp on page one.
+      doc.switchToPage(0);
+      drawPaidStamp(doc, request);
 
       doc.end();
 
@@ -278,7 +342,7 @@ class ExportController {
       // Fetch approval trail
       const approvalTrail = await approvalService.getApprovalTrail(requestId);
 
-      const doc = new PDFDocument({ margin: 50, size: 'A4' });
+      const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename=reconciliation-${request.request_code}.pdf`);
       doc.pipe(res);
@@ -415,18 +479,7 @@ class ExportController {
         y += 16;
 
         approvalTrail.forEach((a, idx) => {
-          if (y > 700) { doc.addPage(); y = 50; }
-          const bg = idx % 2 === 0 ? '#f7f7f7' : 'white';
-          doc.rect(50, y, pageW, 18).fill(bg);
-          doc.fontSize(8).font('Helvetica').fillColor('#1a1a1a');
-          const actionColor = a.action === 'APPROVED' ? '#2e7d32' : a.action === 'REJECTED' ? '#c62828' : '#1a1a1a';
-          doc.font('Helvetica-Bold').fillColor(actionColor).text(a.action, 55, y + 4, { width: 60 });
-          doc.font('Helvetica').fillColor('#1a1a1a');
-          doc.text(`${a.approver_first_name} ${a.approver_last_name}`, 120, y + 4, { width: 135 });
-          doc.text(formatRoleLabel(a.approver_role, a.actor_job_title), 260, y + 4, { width: 105 });
-          doc.text(a.comments || '—', 370, y + 4, { width: 95 });
-          doc.text(a.created_at ? new Date(a.created_at).toLocaleDateString('en-GB') : '—', 470, y + 4, { width: 75 });
-          y += 18;
+          y = drawTrailRow(doc, a, idx, y, pageW);
         });
         y += 10;
       }
@@ -437,6 +490,10 @@ class ExportController {
       y += 6;
       doc.fontSize(7).font('Helvetica').fillColor('#999');
       doc.text(`Generated: ${new Date().toLocaleString('en-GB')}  |  ERP Connect — Zimbabwe Council of Churches  |  CONFIDENTIAL`, 50, y);
+
+      // A reconciled (paid) request carries the PAID stamp on page one.
+      doc.switchToPage(0);
+      drawPaidStamp(doc, request);
 
       doc.end();
 
@@ -731,6 +788,10 @@ class ExportController {
 
         const request = requests[0];
 
+        if (request.source_proc_request_id) {
+          throw new Error('This float requisition was generated from a purchase request and is paid in batches from that request. Record its payments on the purchase request.');
+        }
+
         if (request.status !== 'APPROVED') {
           throw new Error(`Cannot mark as dispatched. Current status: ${request.status}`);
         }
@@ -803,6 +864,9 @@ class ExportController {
            VALUES (?, ?, ?, 'DISPATCHED', 'APPROVED', 'DISPATCHED', 'Request dispatched', ?)`,
           [requestId, userId, req.user.role, ipAddress]
         );
+
+        // The funds held since approval have now been deducted for real.
+        await reservations.releaseFloat(connection, Number(requestId), req.user, req.user.role, 'dispatched', 'CONSUMED');
       });
 
       res.json({
@@ -849,6 +913,10 @@ class ExportController {
         }
 
         const request = requests[0];
+
+        if (request.source_proc_request_id) {
+          throw new Error('This float requisition was generated from a purchase request and is paid in batches from that request. Record its payments on the purchase request.');
+        }
 
         if (request.status !== 'DISPATCHED') {
           throw new Error(
@@ -925,11 +993,15 @@ class ExportController {
            VALUES (?, ?, ?, 'REVERSED', 'DISPATCHED', 'APPROVED', ?, ?)`,
           [requestId, userId, req.user.role, reason || 'Dispatch reversed by Finance', ipAddress]
         );
+
+        // Back to approved and undispatched: hold the funds again, with a fresh
+        // 10-working-day window to dispatch it.
+        await reservations.reserveFloat(connection, request, req.user, req.user.role);
       });
 
       res.json({
         success: true,
-        message: 'Dispatch reversed. Request is back to APPROVED status and budget balances have been restored.'
+        message: 'Dispatch reversed. Request is back to APPROVED status, budget balances have been restored and the funds are reserved again for 10 working days.'
       });
     } catch (error) {
       console.error('Error reversing dispatch:', error);

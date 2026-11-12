@@ -70,6 +70,7 @@ import { useRequestHints, InlineTip } from '../common/RequestHints';
 import { FloatDraft } from '../../services/insightsService';
 import TravelClaimSection from './TravelClaimSection';
 import { useAuthStore } from '../../store/authStore';
+import { getOpenPurchaseRequestsForProject } from '../../services/procurementService';
 import { toDateInputValue, toTimeInputValue } from '../../utils/datetime';
 
 const generateId = () => {
@@ -126,6 +127,9 @@ const RequestForm: React.FC = () => {
   const [selectedDonorId, setSelectedDonorId] = useState<number | ''>('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  // The requester's purchase requests in progress on the selected project.
+  const [openPurchaseRequests, setOpenPurchaseRequests] = useState<{ id: number; request_code: string; title: string }[]>([]);
+  const [notForPurchaseRequest, setNotForPurchaseRequest] = useState(false);
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
   const [loadingBudgetLines, setLoadingBudgetLines] = useState(false);
@@ -315,6 +319,16 @@ const RequestForm: React.FC = () => {
       .catch(() => toast.error('Failed to load budget lines'))
       .finally(() => setLoadingBudgetLines(false));
   }, [selectedProject, user?.department_id]);
+
+  useEffect(() => {
+    setNotForPurchaseRequest(false);
+    if (!selectedProject?.id) { setOpenPurchaseRequests([]); return; }
+    let cancelled = false;
+    getOpenPurchaseRequestsForProject(selectedProject.id)
+      .then(rows => { if (!cancelled) setOpenPurchaseRequests(rows); })
+      .catch(() => { if (!cancelled) setOpenPurchaseRequests([]); });
+    return () => { cancelled = true; };
+  }, [selectedProject?.id]);
 
   // When projects load in edit mode, auto-select the pending project
   useEffect(() => {
@@ -642,6 +656,10 @@ const RequestForm: React.FC = () => {
       budgetErrors.forEach(message => toast.error(message));
       return;
     }
+    // Purchase requests in progress on this project appeared after the form loaded.
+    if (error?.response?.data?.openPurchaseRequests && selectedProject?.id) {
+      getOpenPurchaseRequestsForProject(selectedProject.id).then(setOpenPurchaseRequests).catch(() => {});
+    }
     toast.error(error?.response?.data?.error || fallback);
   };
 
@@ -649,6 +667,13 @@ const RequestForm: React.FC = () => {
   // buttons are already disabled while a line is overdrawn; this covers the
   // form being submitted by keyboard before the recalculation lands.
   const blockedByBudget = () => {
+    if (!isEditMode && openPurchaseRequests.length > 0 && !notForPurchaseRequest) {
+      toast.error(
+        `Purchase request ${openPurchaseRequests.map(p => p.request_code).join(', ')} is in progress on this project — ` +
+        'its float is generated automatically. Tick the confirmation if this float is for something else.'
+      );
+      return true;
+    }
     if (overBudgetLines.length === 0) return false;
     overBudgetLines.forEach(line => {
       toast.error(
@@ -666,6 +691,7 @@ const RequestForm: React.FC = () => {
     is_activity_request: data.isActivityRequest ? 1 : 0,
     activity_start_date: data.isActivityRequest ? (data.activityStartDate || null) : null,
     activity_end_date:   data.isActivityRequest ? (data.activityEndDate   || null) : null,
+    confirm_not_purchase_request: notForPurchaseRequest || undefined,
     items: data.items.map(item => ({
       itemDescription: item.itemDescription,
       category: item.category || 'PROCUREMENT',
@@ -871,6 +897,37 @@ const RequestForm: React.FC = () => {
                 noOptionsText={selectedDonorId ? 'No projects found for this partner' : 'Select a partner first'}
               />
             </Grid>
+
+            {/* A purchase already going through a purchase request gets its
+                float generated automatically — do not raise a second one. */}
+            {!isEditMode && openPurchaseRequests.length > 0 && (
+              <Grid item xs={12}>
+                <Alert severity="warning">
+                  <Typography variant="subtitle2" fontWeight={700}>
+                    You have purchase request{openPurchaseRequests.length === 1 ? '' : 's'} in progress on this project
+                  </Typography>
+                  <Box component="ul" sx={{ my: 0.5, pl: 2.5 }}>
+                    {openPurchaseRequests.map(pr => (
+                      <li key={pr.id}>
+                        <Button size="small" sx={{ p: 0, minWidth: 0, textTransform: 'none' }}
+                          onClick={() => navigate(`/procurement/requests/${pr.id}`)}>
+                          {pr.request_code}
+                        </Button>{' '}— {pr.title}
+                      </li>
+                    ))}
+                  </Box>
+                  <Typography variant="body2">
+                    The float requisition for a purchase request is generated automatically when Finance approves it.
+                    Do not raise a separate float for those items.
+                  </Typography>
+                  <FormControlLabel
+                    sx={{ mt: 0.5 }}
+                    control={<Checkbox size="small" checked={notForPurchaseRequest} onChange={e => setNotForPurchaseRequest(e.target.checked)} />}
+                    label="This float is for something else, not the items on these purchase requests"
+                  />
+                </Alert>
+              </Grid>
+            )}
 
             {/* Cross-department routing warning */}
             {crossDeptWarning && (
@@ -1270,7 +1327,8 @@ const RequestForm: React.FC = () => {
                                         {bl.donor_code ? `[${bl.donor_code}] ` : ''}{bl.budget_code}
                                       </Typography>
                                       <Typography variant="caption" color="text.secondary">
-                                        {bl.budget_name} | Bal: {getCurrencySymbol()}{bl.balance?.toLocaleString()}
+                                        {bl.budget_name} | Available: {getCurrencySymbol()}{Number(bl.balance || 0).toLocaleString()}
+                                        {Number(bl.reserved_amount || 0) > 0 && ` (${getCurrencySymbol()}${Number(bl.reserved_amount).toLocaleString()} reserved for approved requests)`}
                                       </Typography>
                                     </Box>
                                   </li>

@@ -145,9 +145,9 @@ class ProcurementController {
         return res.status(400).json({ success: false, error: 'Rejection reason is required' });
       }
       const result = await procurementService.rejectRequest(
-        req.params.id, req.user, req.body.comments
+        req.params.id, req.user, req.body.comments, req.body.return_to || null
       );
-      res.json({ success: true, data: result, message: 'Request rejected' });
+      res.json({ success: true, data: result, message: result.message || 'Request rejected' });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
     }
@@ -209,11 +209,103 @@ class ProcurementController {
       // single-file field is still honoured so older clients keep working).
       const popFiles = req.files && req.files.length ? req.files : (req.file ? [req.file] : []);
       const result = await procurementService.finalFinanceApproval(
-        req.params.id, req.user, req.body.comments || '', popFiles
+        req.params.id, req.user, req.body.comments || '', popFiles,
+        {
+          payment_mode: req.body.payment_mode,
+          amount: req.body.amount,
+          payment_date: req.body.payment_date,
+          payment_reference: req.body.payment_reference,
+          payment_method: req.body.payment_method,
+          bank_name: req.body.bank_name
+        }
       );
-      res.json({ success: true, data: result, message: 'Final finance approval granted. Procurement completed.' });
+      const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+      const message = result && result.float_request_code
+        ? (result.completed
+            ? `Approved and paid in full. Float requisition ${result.float_request_code} generated.`
+            : result.batch_no
+              ? `Approved. Float requisition ${result.float_request_code} generated — $${Number(result.outstanding_amount).toFixed(2)} still to be paid.`
+              : `Approved for payment. Funds reserved until ${day(result.reserved_until)}; attach the proof of payment by ${day(result.pop_due_at)}.`)
+        : 'Final finance approval granted. Procurement completed.';
+      res.json({ success: true, data: result, message });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  // ===== WORKFLOW V2 =====
+
+  async confirmDepartment(req, res) {
+    try {
+      const result = await procurementService.confirmDepartment(req.params.id, req.user, req.body.comments || '');
+      res.json({ success: true, data: result, message: 'Award confirmed — forwarded to Finance' });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async resubmitFromProcurement(req, res) {
+    try {
+      const result = await procurementService.resubmitFromProcurement(
+        req.params.id, req.body.selected_quotation_id || null, req.user, req.body.comments || '',
+        req.body.awards || null
+      );
+      res.json({ success: true, data: result, message: result.message });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async getPaymentBatches(req, res) {
+    try {
+      res.json({ success: true, data: await procurementService.getPaymentBatches(req.params.id) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  async recordPaymentBatch(req, res) {
+    try {
+      const popFiles = req.files && req.files.length ? req.files : (req.file ? [req.file] : []);
+      const result = await procurementService.recordPaymentBatch(req.params.id, req.user, {
+        amount: req.body.amount,
+        payment_date: req.body.payment_date,
+        payment_reference: req.body.payment_reference,
+        payment_method: req.body.payment_method,
+        bank_name: req.body.bank_name,
+        notes: req.body.notes
+      }, popFiles);
+      res.json({
+        success: true, data: result,
+        message: result.completed
+          ? 'Payment recorded — the request is paid in full'
+          : `Payment recorded — $${Number(result.outstanding_amount).toFixed(2)} still to be paid`
+      });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async reversePaymentBatch(req, res) {
+    try {
+      const result = await procurementService.reversePaymentBatch(
+        req.params.id, req.params.batchId, req.user, req.body.reason || ''
+      );
+      res.json({
+        success: true, data: result,
+        message: `Payment batch ${result.batch_no} reversed — $${Number(result.amount).toFixed(2)} returned to the budget`
+      });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async getOpenRequestsForProject(req, res) {
+    try {
+      const rows = await procurementService.getOpenRequestsForProject(req.user, Number(req.query.project_id) || null);
+      res.json({ success: true, data: rows });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
     }
   }
 
@@ -222,7 +314,7 @@ class ProcurementController {
   async highValueDecision(req, res) {
     try {
       const result = await procurementService.highValueDecision(
-        req.params.id, req.body.decision, req.user, req.body.comments || ''
+        req.params.id, req.body.decision, req.user, req.body.comments || '', req.body.return_to || null
       );
       res.json({ success: true, data: result, message: result.message });
     } catch (err) {
@@ -250,11 +342,21 @@ class ProcurementController {
     }
   }
 
+  /** The signed-in user's proof-of-payment deadlines, and whether they block approvals. */
+  async getPopObligations(req, res) {
+    try {
+      const data = await procurementService.getPopObligations(req.user);
+      res.json({ success: true, data });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
   async addProofOfPayment(req, res) {
     try {
       const files = req.files && req.files.length ? req.files : (req.file ? [req.file] : []);
       const result = await procurementService.addProofOfPayment(
-        req.params.id, req.user, files, req.body.note
+        req.params.id, req.user, files, req.body.note, req.body.batch_id || null
       );
       res.json({
         success: true, data: result,

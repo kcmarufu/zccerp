@@ -9,167 +9,9 @@ const { REQUEST_STATUS, REQUESTER_EDITABLE_STATUSES, ROLES, isFinanceManager } =
 const approvalService = require('../services/approval.service');
 const requestRouting = require('../services/requestRouting.service');
 const notificationService = require('../services/notification.service');
+const reservations = require('../services/budgetReservation.service');
 
-/** Strip a code down to the characters that are safe inside a reference number. */
-const normalizeCodeSegment = (value, fallback) => {
-  const cleaned = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return cleaned || fallback;
-};
-
-/**
- * Build a request's reference number from the partner and project it is
- * charged to: DONORCODE-PROJECTCODE-0000001, where the sequence is the
- * project's own counter. Falls back to REQ-YYYY-000001 when there is no
- * donor/project pair to build from.
- *
- * Shared by create and edit. It used to exist only inside createRequest, which
- * is why re-assigning a rejected request to a different partner or project left
- * the old partner's code on it: the reference is derived data, but nothing
- * re-derived it once the request existed. Anyone reading the reference — the
- * requester, an approver, Finance reconciling against the partner's ledger —
- * was then looking at a code that named the wrong partner.
- *
- * Increments the project's counter as a side effect, so call it exactly once
- * per code issued, inside the caller's transaction.
- */
-async function generateRequestCode(connection, donorId, projectId) {
-  if (donorId && projectId) {
-    const [donorResult] = await connection.execute(
-      'SELECT donor_code FROM donors WHERE id = ?', [donorId]
-    );
-    const [projectResult] = await connection.execute(
-      'SELECT project_code FROM projects WHERE id = ?', [projectId]
-    );
-
-    if (donorResult.length > 0 && projectResult.length > 0) {
-      const donorCode = normalizeCodeSegment(donorResult[0].donor_code, 'DON');
-      const projCode = normalizeCodeSegment(projectResult[0].project_code, 'PRJ');
-
-      // Atomically increment the per-project sequence counter
-      await connection.execute(
-        'UPDATE projects SET last_request_seq = last_request_seq + 1 WHERE id = ?',
-        [projectId]
-      );
-      const [seqRow] = await connection.execute(
-        'SELECT last_request_seq FROM projects WHERE id = ?', [projectId]
-      );
-      const seq = String(seqRow[0].last_request_seq).padStart(7, '0');
-
-      return `${donorCode}-${projCode}-${seq}`;
-    }
-  }
-
-  const year = new Date().getFullYear();
-  const [countResult] = await connection.execute(
-    'SELECT COUNT(*) + 1 as seq FROM requests WHERE YEAR(created_at) = ?', [year]
-  );
-  return `REQ-${year}-${String(countResult[0].seq).padStart(6, '0')}`;
-}
-
-/** Money comparisons are done in cents so repeated float addition cannot make a
- *  request that exactly fills a budget line read as one cent over it. */
-const toCents = (value) => Math.round((Number(value) || 0) * 100);
-
-const formatMoney = (cents) =>
-  (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-/**
- * Validate a request's items against the budget lines they are charged to.
- *
- * Two rules, both of which used to be enforced nowhere on the server:
- *
- *  1. Every budget line must belong to the project the request is charged to.
- *     Without this, reassigning a rejected request to a different partner left
- *     the item rows pointing at the *old* project's lines — the request named
- *     one partner in its header and spent another partner's money.
- *
- *  2. The request's total draw on each budget line must fit that line's
- *     remaining balance. The old client-side check compared each item to the
- *     balance on its own, so a 500 line accepted a 400 item and a 200 item on
- *     the same line: each passed, the pair overspent by 100. Items are summed
- *     per budget line here, which is the only comparison that means anything
- *     when several items share a line.
- *
- * This is a check at request time, not a reservation: `spent_amount` moves only
- * on final approval, so an approver remains the authority on what is actually
- * committed. It stops the requester from asking for money the line plainly does
- * not have, and says by how much.
- *
- * Balances are therefore read without FOR UPDATE. Locking would buy nothing —
- * nothing here writes `spent_amount`, so two requests racing for the same line
- * would both pass the check either way — while adding a lock on `budget_lines`
- * that the approval path (which does write those rows) would have to contend
- * with. Two requests can still be raised against one balance; catching that is
- * the approver's job, and the balance is re-checked when the money moves.
- */
-async function assertItemsFitBudget(connection, items, projectId) {
-  if (!Array.isArray(items) || items.length === 0) return;
-
-  // Sum the request's own draw per budget line before comparing to anything.
-  const drawByLine = new Map();
-  for (const item of items) {
-    const lineId = Number(item.budgetLineId) || 0;
-    if (!lineId) continue;
-    const cents = toCents((item.quantity || 1) * (item.unitPrice || 0));
-    drawByLine.set(lineId, (drawByLine.get(lineId) || 0) + cents);
-  }
-  if (drawByLine.size === 0) return;
-
-  const lineIds = [...drawByLine.keys()];
-  const placeholders = lineIds.map(() => '?').join(',');
-  const [lines] = await connection.execute(
-    `SELECT id, budget_code, budget_name, project_id, is_active,
-            allocated_amount, spent_amount,
-            (allocated_amount - spent_amount) AS balance
-       FROM budget_lines
-      WHERE id IN (${placeholders})`,
-    lineIds
-  );
-
-  const byId = new Map(lines.map((l) => [Number(l.id), l]));
-  const problems = [];
-
-  for (const lineId of lineIds) {
-    const line = byId.get(lineId);
-    const requested = drawByLine.get(lineId);
-
-    if (!line) {
-      problems.push(`Budget line #${lineId} no longer exists. Please choose a current budget line.`);
-      continue;
-    }
-    if (!line.is_active) {
-      problems.push(`Budget line ${line.budget_code} is no longer active and cannot be charged.`);
-      continue;
-    }
-    // Rule 1 — the line must belong to this request's project.
-    if (projectId && Number(line.project_id) !== Number(projectId)) {
-      problems.push(
-        `Budget line ${line.budget_code} belongs to a different project. ` +
-        `After changing the partner or project you must re-select a budget line for every item.`
-      );
-      continue;
-    }
-    // Rule 2 — the request's whole draw on this line must fit the balance.
-    const balance = toCents(line.balance);
-    if (requested > balance) {
-      problems.push(
-        `Budget line ${line.budget_code} (${line.budget_name}) has ${formatMoney(balance)} available, ` +
-        `but this request charges ${formatMoney(requested)} to it — ` +
-        `${formatMoney(requested - balance)} over. Reduce the items on this budget line or split them across another line.`
-      );
-    }
-  }
-
-  if (problems.length > 0) {
-    const error = new Error(
-      problems.length === 1
-        ? problems[0]
-        : `This request exceeds the available budget:\n• ${problems.join('\n• ')}`
-    );
-    error.budgetValidation = problems;
-    throw error;
-  }
-}
+const { generateRequestCode, assertItemsFitBudget } = require('../services/floatRules');
 
 class RequestController {
 
@@ -219,6 +61,28 @@ class RequestController {
           );
           if (projCheck.length > 0) {
             validProjectId = requestedProjectId;
+          }
+        }
+
+        // A purchase already going through a purchase request gets its float
+        // generated automatically when Finance approves it. Raising a separate
+        // float for it would pay — and charge the budget — twice, so the
+        // requester must say this float is for something else.
+        if (validProjectId && !req.body.confirm_not_purchase_request) {
+          const [openPrs] = await connection.execute(
+            `SELECT request_code FROM proc_requests
+              WHERE requester_id = ? AND project_id = ? AND workflow_version = 2
+                AND status NOT IN ('COMPLETED', 'CANCELLED', 'DRAFT')`,
+            [userId, validProjectId]
+          );
+          if (openPrs.length) {
+            const err = new Error(
+              `You have purchase request${openPrs.length === 1 ? '' : 's'} ${openPrs.map((r) => r.request_code).join(', ')} `
+              + 'in progress on this project. Their float requisition is generated automatically once Finance approves them — '
+              + 'do not raise a separate float for those items. If this float is for something else, confirm that on the form.'
+            );
+            err.openPurchaseRequests = openPrs.map((r) => r.request_code);
+            throw err;
           }
         }
 
@@ -327,6 +191,13 @@ class RequestController {
           budgetErrors: error.budgetValidation
         });
       }
+      if (error.openPurchaseRequests) {
+        return res.status(409).json({
+          success: false,
+          error: error.message,
+          openPurchaseRequests: error.openPurchaseRequests
+        });
+      }
       res.status(500).json({
         success: false,
         error: 'Failed to create request'
@@ -355,8 +226,10 @@ class RequestController {
                 p.project_name,
                 p.project_code,
                 rd.department_name as routing_department_name,
-                rd.department_code as routing_department_code
+                rd.department_code as routing_department_code,
+                spr.request_code as source_proc_request_code
          FROM requests r
+         LEFT JOIN proc_requests spr ON spr.id = r.source_proc_request_id
          JOIN users u ON r.requester_id = u.id
          JOIN departments d ON r.department_id = d.id
          LEFT JOIN donors dn ON r.donor_id = dn.id
@@ -390,7 +263,8 @@ class RequestController {
         `SELECT ri.*, 
                 bl.budget_code,
                 bl.budget_name,
-                (bl.allocated_amount - bl.spent_amount) as budget_balance
+                (bl.allocated_amount - bl.spent_amount
+                  - ${reservations.reservedSql('bl', { type: 'FLOAT', id: Number(requestId) })}) as budget_balance
          FROM request_items ri
          LEFT JOIN budget_lines bl ON ri.budget_line_id = bl.id
          WHERE ri.request_id = ?`,
@@ -400,13 +274,17 @@ class RequestController {
       // Get approval trail
       const approvalTrail = await approvalService.getApprovalTrail(requestId);
 
+      // Funds held for this float between Finance approval and dispatch.
+      const reservation = await reservations.getReservation('FLOAT', Number(requestId));
+
       res.json({
         success: true,
         data: {
           ...request,
           has_per_diem_claim: Boolean(request.has_per_diem_claim),
           items,
-          approvalTrail
+          approvalTrail,
+          reservation
         }
       });
     } catch (error) {
@@ -554,6 +432,10 @@ class RequestController {
 
         if (requests.length === 0) {
           throw new Error('Request not found');
+        }
+
+        if (requests[0].source_proc_request_id) {
+          throw new Error('This float requisition was generated from a purchase request — change the purchase request instead');
         }
 
         if (requests[0].requester_id !== userId) {
@@ -868,6 +750,10 @@ class RequestController {
 
         if (requests.length === 0) {
           throw new Error('Request not found');
+        }
+
+        if (requests[0].source_proc_request_id) {
+          throw new Error('This float requisition was generated from a purchase request and cannot be deleted');
         }
 
         if (requests[0].requester_id !== userId) {

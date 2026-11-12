@@ -374,18 +374,76 @@ class NotificationService {
    * The second seat used to follow the department that owned the project, so
    * the owning department id is no longer read.
    */
+  /**
+   * The Committee's award is in; the department that owns the project confirms
+   * it before Finance. A Head of Department's request goes to the General
+   * Secretary instead.
+   */
+  async onProcurementAwaitingDeptConfirmation(requestId, requestCode, requesterId, departmentId, gsTrack = false) {
+    const link = `/procurement/requests/${requestId}`;
+    const title = `Confirm Purchase Award: ${requestCode}`;
+    const message = 'Procurement has awarded this purchase request. Check the award against what was requested and confirm it, or send it back.';
+    try {
+      if (gsTrack) {
+        await this._notifyByRole(['ADMIN'], title, message, 'approval_pending', 'proc_request', requestId, link);
+        return;
+      }
+      const approvers = await query(
+        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id
+          WHERE r.role_name IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS') AND u.department_id = ? AND u.is_active = 1 AND u.id != ?`,
+        [departmentId, requesterId]
+      );
+      for (const u of approvers) {
+        await this._create(u.id, title, message, 'approval_pending', 'proc_request', requestId, link);
+      }
+    } catch (err) {
+      console.error('[NotificationService] onProcurementAwaitingDeptConfirmation error:', err.message);
+    }
+  }
+
+  /** A request sent back after the Committee, to Procurement or to its requester. */
+  async onProcurementReturned(requestId, requestCode, requesterId, toProcurement, stage, reason) {
+    const link = `/procurement/requests/${requestId}`;
+    const title = `Purchase Request Returned: ${requestCode}`;
+    const message = `Returned at ${stage} for amendment: ${String(reason || '').slice(0, 200)}. `
+      + `Once resubmitted it comes back to ${stage}.`;
+    try {
+      if (toProcurement) {
+        await this._notifyByRole(['PROCUREMENT_OFFICER'], title, message, 'request_rejected', 'proc_request', requestId, link);
+      } else {
+        await this._create(requesterId, title, message, 'request_rejected', 'proc_request', requestId, link);
+      }
+    } catch (err) {
+      console.error('[NotificationService] onProcurementReturned error:', err.message);
+    }
+  }
+
+  /** Finance has paid (part of) a purchase request; its float requisition is generated. */
+  async onProcurementPaid(requestId, requestCode, requesterId, floatCode, completed) {
+    const link = `/procurement/requests/${requestId}`;
+    const title = completed ? `Purchase Request Paid: ${requestCode}` : `Payment Recorded: ${requestCode}`;
+    const message = completed
+      ? `Payment is complete. Float requisition ${floatCode || ''} has been generated and closed — no reconciliation is needed.`
+      : `A payment batch has been recorded against float requisition ${floatCode || ''}. The balance will be paid in further batches.`;
+    try {
+      await this._create(requesterId, title, message, 'request_approved', 'proc_request', requestId, link);
+    } catch (err) {
+      console.error('[NotificationService] onProcurementPaid error:', err.message);
+    }
+  }
+
   async onProcurementHighValuePending(requestId, requestCode, amount) {
     const link = `/procurement/requests/${requestId}`;
     const title = `High-Value Approval Needed: ${requestCode}`;
     const message = `The Procurement Committee has recommended this USD ${Number(amount || 0).toFixed(2)} request. ` +
-                    `It needs approval from both the Super Admin and the Finance Department Lead / Head of Department.`;
+                    `It needs approval from both the Super Admin and the Finance Head of Department.`;
     try {
       await this._notifyByRole(['ADMIN'], title, message, 'approval_pending', 'proc_request', requestId, link);
       const financeApprovers = await query(
         `SELECT u.id FROM users u
            JOIN roles r ON u.role_id = r.id
            JOIN departments d ON u.department_id = d.id
-          WHERE r.role_name IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS')
+          WHERE r.role_name = 'HEAD_OF_PROGRAMS'
             AND d.department_code = ? AND u.is_active = 1`,
         [FINANCE_DEPT_CODE]
       );
@@ -394,6 +452,82 @@ class NotificationService {
       }
     } catch (err) {
       console.error('[NotificationService] onProcurementHighValuePending error:', err.message);
+    }
+  }
+
+  /**
+   * The requester changed a purchase request while it waits at the first
+   * approval desk. The desk is told so it re-checks before approving.
+   */
+  async onProcurementAmended(requestId, requestCode, requesterId, departmentId, routingDepartmentId = null, gsOnly = false) {
+    const link = `/procurement/requests/${requestId}`;
+    const title = `Purchase Request Amended: ${requestCode}`;
+    const message = 'The requester has changed this purchase request while it is awaiting your approval. Please re-check the details before approving.';
+    try {
+      if (gsOnly) {
+        await this._notifyByRole(['ADMIN'], title, message, 'approval_pending', 'proc_request', requestId, link, requesterId);
+        return;
+      }
+      const notifyDeptId = routingDepartmentId || departmentId;
+      const managers = await query(
+        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id
+          WHERE r.role_name IN ('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS') AND u.department_id = ? AND u.is_active = 1 AND u.id != ?`,
+        [notifyDeptId, requesterId]
+      );
+      for (const u of managers) {
+        await this._create(u.id, title, message, 'approval_pending', 'proc_request', requestId, link);
+      }
+    } catch (err) {
+      console.error('[NotificationService] onProcurementAmended error:', err.message);
+    }
+  }
+
+  /**
+   * Finance approved a purchase request for payment. The requester learns the
+   * funds are reserved; the approver is reminded the proof of payment is due.
+   */
+  async onProcurementApprovedForPayment(requestId, requestCode, requesterId, approverId, popDueAt, reservedUntil) {
+    const link = `/procurement/requests/${requestId}`;
+    const due = (d) => new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    try {
+      await this._create(
+        requesterId, `Approved for Payment: ${requestCode}`,
+        `Finance has approved your purchase request. The funds are reserved on the budget until ${due(reservedUntil)} while Finance processes the payment.`,
+        'request_approved', 'proc_request', requestId, link
+      );
+      if (approverId && Number(approverId) !== Number(requesterId)) {
+        await this._create(
+          approverId, `Proof of Payment Due: ${requestCode}`,
+          `You approved this purchase request. Attach the proof of payment by ${due(popDueAt)} (5 working days) — until you do, you cannot approve other purchase requests after that date.`,
+          'approval_pending', 'proc_request', requestId, link
+        );
+      }
+    } catch (err) {
+      console.error('[NotificationService] onProcurementApprovedForPayment error:', err.message);
+    }
+  }
+
+  /**
+   * An approved request was not dispatched / paid within its 10-working-day
+   * reservation: it was rejected automatically and the funds released.
+   * kind = 'request' (float) or 'proc_request'.
+   */
+  async onReservationExpired(requestId, requestCode, requesterId, kind = 'request', approverId = null) {
+    const link = kind === 'proc_request' ? `/procurement/requests/${requestId}` : `/finance/requests/${requestId}`;
+    const what = kind === 'proc_request' ? 'purchase request' : 'float requisition';
+    const title = `Automatically Rejected: ${requestCode}`;
+    const message = `Your ${what} was approved but not ${kind === 'proc_request' ? 'paid' : 'dispatched'} within 10 working days, so it was rejected automatically and its reserved funds were released. You can amend and resubmit it.`;
+    try {
+      await this._create(requesterId, title, message, 'request_rejected', kind, requestId, link);
+      if (approverId && Number(approverId) !== Number(requesterId)) {
+        await this._create(
+          approverId, title,
+          `The ${what} you approved was not ${kind === 'proc_request' ? 'paid' : 'dispatched'} within 10 working days. It was rejected automatically and its reserved funds released.`,
+          'request_rejected', kind, requestId, link
+        );
+      }
+    } catch (err) {
+      console.error('[NotificationService] onReservationExpired error:', err.message);
     }
   }
 

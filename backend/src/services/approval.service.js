@@ -8,6 +8,7 @@
 
 const { query, transaction, pool } = require('../config/database');
 const notificationService = require('./notification.service');
+const reservations = require('./budgetReservation.service');
 const workflowEmail = require('./workflowEmail.service');
 const reconciliationService = require('./reconciliation.service');
 const requestRouting = require('./requestRouting.service');
@@ -42,6 +43,9 @@ class ApprovalService {
       }
 
       const request = requests[0];
+      if (request.source_proc_request_id) {
+        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+      }
 
       // Verify ownership
       if (request.requester_id !== userId) {
@@ -263,6 +267,9 @@ class ApprovalService {
       }
 
       const request = requests[0];
+      if (request.source_proc_request_id) {
+        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+      }
 
       // Validate status — Lead can act at PENDING_LEAD_APPROVAL or PENDING_ADMIN_APPROVAL
       const validLeadStatuses = [REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_ADMIN_APPROVAL];
@@ -344,6 +351,9 @@ class ApprovalService {
       }
 
       const request = requests[0];
+      if (request.source_proc_request_id) {
+        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+      }
 
       // HOP can approve at PENDING_ADMIN_APPROVAL, PENDING_LEAD_APPROVAL or PENDING_HOP_APPROVAL
       const validStatuses = [REQUEST_STATUS.PENDING_ADMIN_APPROVAL, REQUEST_STATUS.PENDING_LEAD_APPROVAL, REQUEST_STATUS.PENDING_HOP_APPROVAL];
@@ -420,6 +430,9 @@ class ApprovalService {
       if (requests.length === 0) throw new Error('Request not found');
 
       const request = requests[0];
+      if (request.source_proc_request_id) {
+        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+      }
 
       if (request.version !== expectedVersion) {
         throw new Error('Request has been modified. Please refresh and try again.');
@@ -493,6 +506,9 @@ class ApprovalService {
         [requestId, approverId, ROLES.ADMIN, request.status, REQUEST_STATUS.APPROVED, comments, ipAddress]
       );
 
+      // Approved: hold the funds for up to 10 working days until dispatch.
+      await reservations.reserveFloat(connection, request, { id: approverId, role: ROLES.ADMIN }, ROLES.ADMIN);
+
       return {
         success: true,
         message: 'Request fully approved by Admin — ready for dispatch',
@@ -529,6 +545,9 @@ class ApprovalService {
       if (requests.length === 0) throw new Error('Request not found');
 
       const request = requests[0];
+      if (request.source_proc_request_id) {
+        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+      }
 
       if (request.status !== REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
         throw new Error(`Cannot approve request with status: ${request.status}`);
@@ -559,9 +578,16 @@ class ApprovalService {
          REQUEST_STATUS.APPROVED, comments, ipAddress]
       );
 
+      // Approved: hold the funds for up to 10 working days until dispatch.
+      // Refuses the approval when a budget line cannot cover it after the
+      // money already held for other approved requests.
+      await reservations.reserveFloat(
+        connection, request, { id: approverId, role: approverRole || ROLES.FINANCE_CLERK }, approverRole || ROLES.FINANCE_CLERK
+      );
+
       return {
         success: true,
-        message: 'Request approved by Finance — ready for dispatch',
+        message: 'Request approved by Finance — funds reserved for 10 working days, ready for dispatch',
         newStatus: REQUEST_STATUS.APPROVED,
         _notif: { requestCode: request.request_code, requesterId: request.requester_id, approverId }
       };
@@ -592,6 +618,9 @@ class ApprovalService {
       }
 
       const request = requests[0];
+      if (request.source_proc_request_id) {
+        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+      }
       const previousStatus = request.status;
 
       // Validate can reject from current status
@@ -790,6 +819,7 @@ class ApprovalService {
       LEFT JOIN departments d ON r.department_id = d.id
       LEFT JOIN departments rd ON r.routing_department_id = rd.id
       WHERE ${statusCondition} ${departmentFilter}
+        AND r.source_proc_request_id IS NULL
       ORDER BY
         r.submitted_at DESC, r.created_at DESC
     `;
@@ -832,12 +862,13 @@ class ApprovalService {
         bl.budget_name,
         bl.allocated_amount,
         bl.spent_amount,
-        (bl.allocated_amount - bl.spent_amount) as current_balance,
+        (bl.allocated_amount - bl.spent_amount - ${reservations.reservedSql('bl', { type: 'FLOAT', id: Number(requestId) })}) as current_balance,
+        ${reservations.reservedSql('bl', { type: 'FLOAT', id: Number(requestId) })} as reserved_by_others,
         SUM(ri.quantity * ri.unit_price) as requested_amount
        FROM request_items ri
        JOIN budget_lines bl ON ri.budget_line_id = bl.id
        WHERE ri.request_id = ?
-       GROUP BY ri.budget_line_id, bl.budget_code, bl.budget_name, bl.allocated_amount, bl.spent_amount`,
+       GROUP BY ri.budget_line_id, bl.id, bl.budget_code, bl.budget_name, bl.allocated_amount, bl.spent_amount`,
       [requestId]
     );
 
@@ -868,6 +899,10 @@ class ApprovalService {
       }
 
       const request = requests[0];
+
+      if (request.source_proc_request_id) {
+        throw new Error('This float requisition was generated from a purchase request. Its approvals and payments are managed on the purchase request.');
+      }
       
       // Whose approval may be undone: your own, except for a system
       // administrator, who may undo the most recent approval on the request
@@ -1027,6 +1062,9 @@ class ApprovalService {
         [requestId, approverId, approverRole, request.status, revertToStatus, comments, ipAddress]
       );
 
+      // No longer approved: whatever it held goes back to the budget lines.
+      await reservations.releaseFloat(connection, Number(requestId), { id: approverId }, approverRole, 'approval reversed');
+
       return {
         success: true,
         message: 'Approval reversed successfully',
@@ -1055,6 +1093,10 @@ class ApprovalService {
       }
 
       const request = requests[0];
+
+      if (request.source_proc_request_id) {
+        throw new Error('This float requisition was generated from a purchase request. Its approvals and payments are managed on the purchase request.');
+      }
 
       if (![REQUEST_STATUS.APPROVED, 'DISPATCHED'].includes(request.status)) {
         throw new Error(`Cannot force-reject a request with status: ${request.status}. Only APPROVED or DISPATCHED requests can be force-rejected.`);
@@ -1121,6 +1163,8 @@ class ApprovalService {
          VALUES (?, ?, ?, 'REJECTED', ?, ?, ?, ?)`,
         [requestId, approverId, approverRole, request.status, REQUEST_STATUS.REJECTED, comments, ipAddress]
       );
+
+      await reservations.releaseFloat(connection, Number(requestId), { id: approverId }, approverRole, 'rejected by Finance');
 
       return {
         success: true,

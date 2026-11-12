@@ -54,6 +54,7 @@ const VendorDatabase: React.FC = () => {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [prequalFilter, setPrequalFilter] = useState('');
   const [antiTerrorFilter, setAntiTerrorFilter] = useState('');
+  const [ratingFilter, setRatingFilter] = useState('');
   const [dialog, setDialog] = useState<null | 'create' | 'edit'>(null);
   const [selected, setSelected] = useState<Partial<ProcVendor> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -68,12 +69,15 @@ const VendorDatabase: React.FC = () => {
   const canManage = canManageVendors(user);
 
   const { data: vendors = [], isLoading, error, refetch } = useQuery({
-    queryKey: ['proc-vendors', search, categoryFilter, prequalFilter, antiTerrorFilter],
+    queryKey: ['proc-vendors', search, categoryFilter, prequalFilter, antiTerrorFilter, ratingFilter],
     queryFn: () => getVendors({
       search: search || undefined,
       category: categoryFilter || undefined,
       is_prequalified: prequalFilter || undefined,
-      antiterror: antiTerrorFilter || undefined
+      antiterror: antiTerrorFilter || undefined,
+      rating: ratingFilter || undefined,
+      // Best-rated suppliers first when filtering by rating.
+      sort: ratingFilter ? 'rating' : undefined
     }),
     refetchInterval: 60000
   });
@@ -233,8 +237,16 @@ const VendorDatabase: React.FC = () => {
             <MenuItem value="not_verified">Not verified</MenuItem>
             <MenuItem value="not_recorded">Not yet recorded</MenuItem>
           </TextField>
-          {(search || categoryFilter || prequalFilter || antiTerrorFilter) && (
-            <Button size="small" onClick={() => { setSearch(''); setCategoryFilter(''); setPrequalFilter(''); setAntiTerrorFilter(''); }}>Clear</Button>
+          <TextField select size="small" label="Rating" sx={{ minWidth: 170 }}
+            value={ratingFilter} onChange={e => setRatingFilter(e.target.value)}>
+            <MenuItem value="">All</MenuItem>
+            <MenuItem value="good">Good (4–5 stars)</MenuItem>
+            <MenuItem value="average">Average (2.5–3.5 stars)</MenuItem>
+            <MenuItem value="poor">Poor (under 2.5 stars)</MenuItem>
+            <MenuItem value="unrated">Not rated yet</MenuItem>
+          </TextField>
+          {(search || categoryFilter || prequalFilter || antiTerrorFilter || ratingFilter) && (
+            <Button size="small" onClick={() => { setSearch(''); setCategoryFilter(''); setPrequalFilter(''); setAntiTerrorFilter(''); setRatingFilter(''); }}>Clear</Button>
           )}
         </Stack>
       </Paper>
@@ -299,14 +311,27 @@ const VendorDatabase: React.FC = () => {
                 </TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5}>
-                    {vendor.is_prequalified && (
+                    {/* MySQL sends 0/1: `0 && …` rendered a stray "0" here. */}
+                    {Number(vendor.is_prequalified) === 1 && (
                       <Chip icon={<VerifiedIcon />} label="Prequalified" color="success" size="small" />
                     )}
-                    <Chip label={vendor.is_active ? 'Active' : 'Inactive'} color={vendor.is_active ? 'default' : 'error'} size="small" variant="outlined" />
+                    <Chip label={Number(vendor.is_active) === 1 ? 'Active' : 'Inactive'}
+                      color={Number(vendor.is_active) === 1 ? 'success' : 'error'} size="small" variant="outlined" />
                   </Stack>
                 </TableCell>
                 <TableCell>
-                  <Rating value={vendor.rating || 0} readOnly size="small" precision={0.5} />
+                  {/* The API sends the rating as a decimal string ("4.0"), which
+                      the Rating control does not read — hence empty stars. */}
+                  {Number(vendor.rating) > 0 ? (
+                    <Tooltip title={`${Number(vendor.rating).toFixed(1)} / 5 — ${Number(vendor.rating) >= 4 ? 'Good' : Number(vendor.rating) >= 2.5 ? 'Average' : 'Poor'}`}>
+                      <Box display="flex" alignItems="center" gap={0.5}>
+                        <Rating value={Number(vendor.rating)} readOnly size="small" precision={0.5} />
+                        <Typography variant="caption" color="text.secondary">{Number(vendor.rating).toFixed(1)}</Typography>
+                      </Box>
+                    </Tooltip>
+                  ) : (
+                    <Typography variant="caption" color="text.disabled">Not rated</Typography>
+                  )}
                 </TableCell>
                 <TableCell>
                   <Chip label={vendor.quotation_count ?? 0} size="small" variant="outlined" />
@@ -404,18 +429,37 @@ const VendorDatabase: React.FC = () => {
             </Grid>
             <Grid item xs={12} md={6}>
               <FormControlLabel
-                control={<Switch checked={Boolean(formData.is_prequalified)} onChange={e => setFormData(f => ({ ...f, is_prequalified: e.target.checked }))} />}
+                control={<Switch checked={Number(formData.is_prequalified) === 1 || formData.is_prequalified === true} onChange={e => setFormData(f => ({ ...f, is_prequalified: e.target.checked }))} />}
                 label="Prequalified Vendor"
               />
             </Grid>
             {dialog === 'edit' && (
               <Grid item xs={12} md={6}>
                 <FormControlLabel
-                  control={<Switch checked={Boolean(formData.is_active)} onChange={e => setFormData(f => ({ ...f, is_active: e.target.checked }))} />}
+                  control={<Switch checked={Number(formData.is_active) === 1 || formData.is_active === true} onChange={e => setFormData(f => ({ ...f, is_active: e.target.checked }))} />}
                   label="Active"
                 />
               </Grid>
             )}
+            <Grid item xs={12} md={6}>
+              <FormLabel sx={{ display: 'block', fontSize: '0.8rem' }}>Supplier rating</FormLabel>
+              <Box display="flex" alignItems="center" gap={1}>
+                <Rating
+                  value={Number(formData.rating) || null}
+                  precision={0.5}
+                  onChange={(_, v) => setFormData(f => ({ ...f, rating: v ?? undefined }))}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  {Number(formData.rating) > 0 ? `${Number(formData.rating).toFixed(1)} / 5` : 'Not rated'}
+                </Typography>
+                {Number(formData.rating) > 0 && (
+                  <Button size="small" onClick={() => setFormData(f => ({ ...f, rating: 0 }))}>Clear</Button>
+                )}
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                Procurement's assessment of quality, price and delivery. 4–5 stars is good.
+              </Typography>
+            </Grid>
             <Grid item xs={12}>
               <TextField fullWidth multiline rows={2} label="Notes" value={formData.notes || ''} onChange={field('notes')} />
             </Grid>

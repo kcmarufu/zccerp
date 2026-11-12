@@ -611,7 +611,10 @@ ${buildDigitalStamp('')}
   };
 
   // Filtered counts
-  const approvedCount = requests.filter(r => r.status === 'APPROVED').length;
+  // Floats generated from a purchase request are paid in batches from it,
+  // not dispatched here.
+  const awaitingDispatch = (r: any) => r.status === 'APPROVED' && !r.source_proc_request_id;
+  const approvedCount = requests.filter(awaitingDispatch).length;
   const dispatchedCount = requests.filter(r => r.status === 'DISPATCHED').length;
   const reconciledCount = requests.filter(r =>
     ['PENDING_RECONCILIATION', 'RECONCILED', 'RECON_PENDING_LEAD', 'RECON_PENDING_FINANCE'].includes(r.status)
@@ -636,7 +639,7 @@ ${buildDigitalStamp('')}
     let base: any[];
     switch (activeTab) {
       case 0: base = requests; break; // All
-      case 1: base = requests.filter(r => r.status === 'APPROVED'); break; // Pending Dispatch
+      case 1: base = requests.filter(awaitingDispatch); break; // Pending Dispatch
       case 2: base = requests.filter(r => r.status === 'DISPATCHED'); break; // Dispatched
       case 3: {
         // Include DISPATCHED (awaiting reconciliation) + all reconciliation workflow statuses
@@ -962,7 +965,7 @@ ${buildDigitalStamp('')}
                             <ViewIcon />
                           </IconButton>
                         </Tooltip>
-                        {request.status === 'APPROVED' && (
+                        {awaitingDispatch(request) && (
                           <Tooltip title="Mark as Dispatched">
                             <Button
                               size="small"
@@ -988,7 +991,7 @@ ${buildDigitalStamp('')}
                             </Button>
                           </Tooltip>
                         )}
-                        {canRejectFromDispatch && ['APPROVED', 'DISPATCHED'].includes(request.status) && (
+                        {canRejectFromDispatch && !request.source_proc_request_id && ['APPROVED', 'DISPATCHED'].includes(request.status) && (
                           <Tooltip title="Reject this request and release its budget">
                             <Button
                               size="small"
@@ -1217,7 +1220,7 @@ ${buildDigitalStamp('')}
           ) : null}
         </DialogContent>
         <DialogActions sx={{ p: 2, gap: 1 }}>
-          {detailRequest?.status === 'APPROVED' && (
+          {detailRequest && awaitingDispatch(detailRequest) && (
             <Button variant="contained" startIcon={<DispatchIcon />} onClick={() => { handleMarkDispatched(detailRequest.id); setDetailOpen(false); }}>
               Mark as Dispatched
             </Button>
@@ -1227,7 +1230,7 @@ ${buildDigitalStamp('')}
               Reverse Dispatch
             </Button>
           )}
-          {canRejectFromDispatch && detailRequest && ['APPROVED', 'DISPATCHED'].includes(detailRequest.status) && (
+          {canRejectFromDispatch && detailRequest && !detailRequest.source_proc_request_id && ['APPROVED', 'DISPATCHED'].includes(detailRequest.status) && (
             <Button variant="outlined" color="error" startIcon={<RejectIcon />} onClick={() => { handleRejectFromDispatch(detailRequest.id, detailRequest.request_code); setDetailOpen(false); }}>
               Reject
             </Button>

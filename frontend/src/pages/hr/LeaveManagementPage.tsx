@@ -201,7 +201,7 @@ const BalanceImpact: React.FC<{ request: HRLeaveRequest; dense?: boolean }> = ({
       {/* On a request still awaiting a decision these figures are recomputed
           from the balance as it stands now, not as it stood when the employee
           applied — accruals and manual adjustments since then are included. */}
-      {request.balance_is_live && (
+      {Boolean(Number(request.balance_is_live)) && (
         <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
           Based on the current balance.
         </Typography>

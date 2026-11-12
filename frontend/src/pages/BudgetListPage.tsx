@@ -565,7 +565,7 @@ const BudgetListPage: React.FC = () => {
                 <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }}>Year</TableCell>
                 {isFinanceOrApprover && <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }} align="right">Allocated</TableCell>}
                 <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }} align="right">Spent</TableCell>
-                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }} align="right">Remaining</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }} align="right">Available</TableCell>
                 <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }}>Usage</TableCell>
                 <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }}>Status</TableCell>
                 {canManage && <TableCell sx={{ color: 'white', fontWeight: 700, py: 1, px: 1, fontSize: '0.74rem' }} align="center">Actions</TableCell>}
@@ -653,6 +653,13 @@ const BudgetListPage: React.FC = () => {
                         >
                           {formatCurrency(budget.balance)}
                         </Typography>
+                        {Number(budget.reserved_amount || 0) > 0 && (
+                          <Tooltip title={`${formatCurrency(Number(budget.reserved_amount))} is reserved for approved requests awaiting dispatch or payment (held up to 10 working days). Book balance ${formatCurrency(Number(budget.book_balance ?? (budget.allocated_amount - budget.spent_amount)))}.`}>
+                            <Typography variant="caption" display="block" color="warning.main" sx={{ fontSize: '0.65rem', lineHeight: 1.1 }}>
+                              {formatCurrency(Number(budget.reserved_amount))} reserved
+                            </Typography>
+                          </Tooltip>
+                        )}
                       </TableCell>
                       <TableCell sx={{ py: 0.5, px: 1 }}>
                         <Box display="flex" alignItems="center" gap={0.75}>

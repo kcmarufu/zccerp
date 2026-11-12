@@ -428,7 +428,8 @@ const ReconciliationPage: React.FC = () => {
   .page-footer {margin-top:24px;padding-top:8px;border-top:2px solid #e0e0e0;}
   .footer-left {font-size:10px;color:#999;}
   .bl-name {font-size:10px;color:#666;font-weight:normal;}
-</style></head><body>
+</style></head><body style="position:relative">
+${buildDigitalStamp(req.status, req.completed_at || req.updated_at)}
 <div class="doc-header">
   <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
   <h1>${DOC_TITLE}</h1>

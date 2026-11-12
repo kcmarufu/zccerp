@@ -24,7 +24,10 @@ import {
   NavigateNext as NavIcon,
   FactCheck as ReviewIcon,
   AccountBalance as FinanceIcon,
-  ArrowForward as ArrowIcon
+  ArrowForward as ArrowIcon,
+  VerifiedUser as GavelIcon,
+  TaskAlt as ConfirmIcon,
+  Payments as PaymentIcon
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -33,14 +36,21 @@ import { useAuthStore } from '../../store/authStore';
 import { getProcurementDashboard, PROC_STATUS_LABELS, PROC_STATUS_COLORS } from '../../services/procurementService';
 import { ProcurementStatus } from '../../types';
 
-// Workflow pipeline step definitions
-const PIPELINE_STEPS = [
-  { key: 'PENDING_DEPT_APPROVAL', label: 'Dept\nApproval', icon: <ReviewIcon sx={{ fontSize: 18 }} />, color: '#ed6c02' },
-  { key: 'PENDING_GS_APPROVAL',   label: 'GS\nApproval', icon: <ReviewIcon sx={{ fontSize: 18 }} />, color: '#6a1b9a' },
-  { key: 'PENDING_PROCUREMENT',   label: 'Procurement', icon: <QuotIcon sx={{ fontSize: 18 }} />,   color: '#7b1fa2' },
-  { key: 'PENDING_COMMITTEE',     label: 'Committee',  icon: <CommitteeIcon sx={{ fontSize: 18 }} />, color: '#0288d1' },
-  { key: 'PENDING_FINAL_FINANCE', label: 'Finance\nApproval', icon: <FinanceIcon sx={{ fontSize: 18 }} />, color: '#00695c' },
-  { key: 'COMPLETED',             label: 'Completed',  icon: <DoneIcon sx={{ fontSize: 18 }} />,    color: '#2e7d32' },
+// Workflow pipeline — every stage a purchase request passes through, in order.
+// `keys` lists the statuses counted at a stage (a request returned to
+// Procurement after the Committee is counted with Procurement); `optional`
+// stages are only passed by some requests (Head of Department requests go to
+// the General Secretary; only awards of USD 5,000+ need the high-value pair).
+const PIPELINE_STEPS: { key: string; keys: string[]; label: string; hint: string; icon: React.ReactElement; color: string; optional?: boolean }[] = [
+  { key: 'DEPT', keys: ['PENDING_DEPT_APPROVAL'], label: 'Dept\nApproval', hint: 'Awaiting the Department Lead / Head of Department', icon: <ReviewIcon sx={{ fontSize: 18 }} />, color: '#ed6c02' },
+  { key: 'GS', keys: ['PENDING_GS_APPROVAL'], label: 'GS\nApproval', hint: "A Head of Department's request, awaiting the General Secretary", icon: <ReviewIcon sx={{ fontSize: 18 }} />, color: '#6a1b9a', optional: true },
+  { key: 'PROC', keys: ['PENDING_PROCUREMENT', 'RETURNED_TO_PROCUREMENT'], label: 'Procurement', hint: 'Quotations being collected, or returned to Procurement to amend', icon: <QuotIcon sx={{ fontSize: 18 }} />, color: '#7b1fa2' },
+  { key: 'COMMITTEE', keys: ['PENDING_COMMITTEE'], label: 'Committee', hint: 'Awaiting the Procurement Committee votes', icon: <CommitteeIcon sx={{ fontSize: 18 }} />, color: '#0288d1' },
+  { key: 'HV', keys: ['PENDING_HIGH_VALUE_APPROVAL'], label: 'High-Value\nApproval', hint: 'USD 5,000+: awaiting the Super Admin and the Finance Head of Department', icon: <GavelIcon sx={{ fontSize: 18 }} />, color: '#5e35b1', optional: true },
+  { key: 'CONFIRM', keys: ['PENDING_DEPT_CONFIRMATION'], label: 'Dept\nConfirmation', hint: 'The department confirms the award', icon: <ConfirmIcon sx={{ fontSize: 18 }} />, color: '#f57c00' },
+  { key: 'FINANCE', keys: ['PENDING_FINAL_FINANCE', 'PENDING_FINANCE_APPROVAL'], label: 'Finance\nApproval', hint: 'Awaiting Finance approval', icon: <FinanceIcon sx={{ fontSize: 18 }} />, color: '#00695c' },
+  { key: 'PAYMENT', keys: ['PENDING_PAYMENT'], label: 'Awaiting\nPayment', hint: 'Approved — funds reserved; Finance records the payment and proof of payment', icon: <PaymentIcon sx={{ fontSize: 18 }} />, color: '#0277bd' },
+  { key: 'DONE', keys: ['COMPLETED'], label: 'Completed', hint: 'Paid in full', icon: <DoneIcon sx={{ fontSize: 18 }} />, color: '#2e7d32' },
 ];
 
 const ProcurementDashboard: React.FC = () => {
@@ -65,7 +75,7 @@ const ProcurementDashboard: React.FC = () => {
 
       label: 'Pending Approval',
       sublabel: 'Awaiting dept/finance',
-      value: stats?.totalPending ?? 'â€”',
+      value: stats?.totalPending ?? '—',
       icon: <PendingIcon />,
       gradient: 'linear-gradient(135deg, #e65100 0%, #bf360c 100%)',
       show: canApprove || hasRole('ADMIN')
@@ -73,7 +83,7 @@ const ProcurementDashboard: React.FC = () => {
     {
       label: 'In Procurement',
       sublabel: 'Quotation stage',
-      value: stats?.totalInProcurement ?? 'â€”',
+      value: stats?.totalInProcurement ?? '—',
       icon: <QuotIcon />,
       gradient: 'linear-gradient(135deg, #6a1b9a 0%, #4a148c 100%)',
       show: canManageQuotations || hasRole('ADMIN', 'FINANCE_CLERK') || isAdminHr
@@ -81,7 +91,7 @@ const ProcurementDashboard: React.FC = () => {
     {
       label: 'At Committee',
       sublabel: 'Awaiting all 3 votes',
-      value: stats?.totalAwaitingCommittee ?? 'â€"',
+      value: stats?.totalAwaitingCommittee ?? '—',
       icon: <CommitteeIcon />,
       gradient: 'linear-gradient(135deg, #0277bd 0%, #01579b 100%)',
       show: canCommittee || hasRole('ADMIN', 'FINANCE_CLERK') || isAdminHr
@@ -89,7 +99,7 @@ const ProcurementDashboard: React.FC = () => {
     {
       label: 'Completed',
       sublabel: 'Successfully processed',
-      value: stats?.totalCompleted ?? 'â€”',
+      value: stats?.totalCompleted ?? '—',
       icon: <DoneIcon />,
       gradient: 'linear-gradient(135deg, #2e7d32 0%, #1b5e20 100%)',
       show: true
@@ -97,7 +107,7 @@ const ProcurementDashboard: React.FC = () => {
     {
       label: 'Rejected',
       sublabel: 'Did not proceed',
-      value: stats?.totalRejected ?? 'â€”',
+      value: stats?.totalRejected ?? '—',
       icon: <RejectedIcon />,
       gradient: 'linear-gradient(135deg, #c62828 0%, #b71c1c 100%)',
       show: true
@@ -169,7 +179,7 @@ const ProcurementDashboard: React.FC = () => {
             <Box>
               <Typography variant="h5" fontWeight={800} letterSpacing={-0.5}>Procurement Module</Typography>
               <Typography variant="body2" sx={{ opacity: 0.85, mt: 0.25 }}>
-                Purchase requests Â· Vendor management Â· Committee approvals
+                Purchase requests · Vendor management · Committee approvals
               </Typography>
             </Box>
           </Box>
@@ -223,33 +233,50 @@ const ProcurementDashboard: React.FC = () => {
 
       {/* Workflow Pipeline */}
       <Paper elevation={1} sx={{ p: 2.5, mb: 3, borderRadius: 2 }}>
-        <Typography variant="h6" fontWeight={700} mb={2}>Approval Pipeline</Typography>
-        <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
+        <Box display="flex" alignItems="baseline" justifyContent="space-between" flexWrap="wrap" gap={1} mb={2}>
+          <Typography variant="h6" fontWeight={700}>Approval Pipeline</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {(() => {
+              const open = PIPELINE_STEPS.filter(s => s.key !== 'DONE')
+                .reduce((n, s) => n + s.keys.reduce((m, k) => m + ((stats?.statusSummary as any)?.[k] || 0), 0), 0);
+              const rejected = (stats?.statusSummary as any)?.REJECTED || 0;
+              return `${open} in progress · ${rejected} rejected / awaiting amendment · dashed stages apply to some requests only`;
+            })()}
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 0.5, overflowX: 'auto', pb: 0.5 }}>
           {PIPELINE_STEPS.map((step, idx) => {
-            const count = (stats?.statusSummary as any)?.[step.key] || 0;
+            const summary = (stats?.statusSummary as any) || {};
+            const count = step.keys.reduce((n, k) => n + (summary[k] || 0), 0);
+            const returned = step.key === 'PROC' ? (summary.RETURNED_TO_PROCUREMENT || 0) : 0;
             return (
               <React.Fragment key={step.key}>
-                <Tooltip title={`${count} request${count !== 1 ? 's' : ''} at this stage`}>
+                <Tooltip title={`${step.hint} — ${count} request${count !== 1 ? 's' : ''}`}>
                   <Box sx={{
-                    flex: 1, minWidth: 90, p: 1.5, borderRadius: 1.5, textAlign: 'center', cursor: 'default',
+                    flex: '1 0 92px', minWidth: 92, p: 1.25, borderRadius: 1.5, textAlign: 'center', cursor: 'default',
                     bgcolor: count > 0 ? alpha(step.color, 0.1) : 'grey.50',
-                    border: `2px solid ${count > 0 ? step.color : theme.palette.divider}`,
+                    border: `2px ${step.optional ? 'dashed' : 'solid'} ${count > 0 ? step.color : theme.palette.divider}`,
                     transition: 'all 0.2s',
                     '&:hover': count > 0 ? { bgcolor: alpha(step.color, 0.18) } : {}
                   }}>
-                    <Avatar sx={{ bgcolor: count > 0 ? step.color : 'grey.300', width: 32, height: 32, mx: 'auto', mb: 0.5 }}>
+                    <Avatar sx={{ bgcolor: count > 0 ? step.color : 'grey.300', width: 30, height: 30, mx: 'auto', mb: 0.5 }}>
                       {step.icon}
                     </Avatar>
-                    <Typography variant="caption" fontWeight={700} sx={{ whiteSpace: 'pre-line', display: 'block', lineHeight: 1.2, color: count > 0 ? step.color : 'text.disabled' }}>
+                    <Typography variant="caption" fontWeight={700} sx={{ whiteSpace: 'pre-line', display: 'block', lineHeight: 1.2, minHeight: '2.4em', color: count > 0 ? step.color : 'text.disabled' }}>
                       {step.label}
                     </Typography>
                     <Typography variant="h6" fontWeight={800} color={count > 0 ? step.color : 'text.disabled'}>
                       {count}
                     </Typography>
+                    {returned > 0 && (
+                      <Typography variant="caption" sx={{ fontSize: '0.62rem', color: step.color, display: 'block', lineHeight: 1.1 }}>
+                        {returned} returned
+                      </Typography>
+                    )}
                   </Box>
                 </Tooltip>
                 {idx < PIPELINE_STEPS.length - 1 && (
-                  <ArrowIcon sx={{ color: 'text.disabled', flexShrink: 0 }} />
+                  <ArrowIcon sx={{ color: 'text.disabled', flexShrink: 0, alignSelf: 'center', fontSize: 18 }} />
                 )}
               </React.Fragment>
             );

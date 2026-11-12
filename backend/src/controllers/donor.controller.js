@@ -112,8 +112,7 @@ exports.getDonorById = async (req, res) => {
       `SELECT id, request_code, status, total_amount, created_at
        FROM requests
        WHERE donor_id = ?
-       ORDER BY created_at DESC
-       LIMIT 50`,
+       ORDER BY created_at DESC`,
       [parseInt(id)]
     );
     

@@ -84,7 +84,17 @@ interface BudgetDetails extends BudgetLine {
   donor_total_spent: number;
   created_by_first?: string;
   created_by_last?: string;
-  transactions: BudgetTransaction[];
+  transactions: (BudgetTransaction & { request_code?: string; proc_request_code?: string; request_id?: number | null })[];
+  /** How the spent figure is made up, from the line's own transactions. */
+  transactionSummary?: {
+    count: number;
+    allocations: number;
+    top_ups: number;
+    request_deductions: number;
+    reversals: number;
+    manual_deductions: number;
+    net_request_spend: number;
+  };
   requestSummary: Array<{
     status: string;
     count: number;
@@ -574,6 +584,33 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
 
             {/* Transactions Tab */}
             <TabPanel value={tabValue} index={2}>
+              {budgetDetails.transactionSummary && (() => {
+                const t = budgetDetails.transactionSummary!;
+                const spent = Math.round(Number(budgetDetails.spent_amount) * 100);
+                const fromRequests = Math.round(t.net_request_spend * 100);
+                const withManual = Math.round((t.net_request_spend + t.manual_deductions) * 100);
+                // Manual deductions either cut the allocation or recorded an
+                // expense; either way the spent figure must match one of these.
+                const tallies = spent === fromRequests || spent === withManual;
+                return (
+                  <Alert severity={tallies ? 'success' : 'warning'} sx={{ mb: 2 }}>
+                    <Typography variant="subtitle2" fontWeight={700}>
+                      {tallies ? 'Spent tallies with the transactions' : 'Spent does not tally with the transactions'}
+                    </Typography>
+                    <Typography variant="body2">
+                      Request deductions {formatCurrency(t.request_deductions)} − reversals {formatCurrency(t.reversals)}
+                      {' '}= <strong>{formatCurrency(t.net_request_spend)}</strong> spent through requests
+                      {t.manual_deductions > 0 && <> · manual deductions {formatCurrency(t.manual_deductions)}</>}
+                      {' '}· spent on this line <strong>{formatCurrency(budgetDetails.spent_amount)}</strong>
+                    </Typography>
+                    {!tallies && (
+                      <Typography variant="caption">
+                        Difference {formatCurrency((spent - fromRequests) / 100)} — ask Finance to review this line.
+                      </Typography>
+                    )}
+                  </Alert>
+                );
+              })()}
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
                 <Typography variant="body2" color="text.secondary">
                   {budgetDetails.transactions.length} transaction{budgetDetails.transactions.length !== 1 ? 's' : ''}
@@ -601,6 +638,7 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
                         <TableRow>
                           <TableCell>Date</TableCell>
                           <TableCell>Type</TableCell>
+                          <TableCell>Request</TableCell>
                           <TableCell align="right">Amount</TableCell>
                           <TableCell align="right">Balance Before</TableCell>
                           <TableCell align="right">Balance After</TableCell>
@@ -616,10 +654,25 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
                             </TableCell>
                             <TableCell>
                               <Chip
-                                label={tx.transaction_type}
+                                label={tx.transaction_type === 'DEDUCTION' && !tx.request_id ? 'MANUAL DEDUCTION' : tx.transaction_type.replace(/_/g, ' ')}
                                 size="small"
-                                color={tx.transaction_type === 'DEDUCTION' ? 'error' : 'success'}
+                                color={tx.transaction_type === 'DEDUCTION' ? 'error' : tx.transaction_type === 'REVERSAL' ? 'warning' : 'success'}
+                                variant={tx.transaction_type === 'DEDUCTION' && !tx.request_id ? 'outlined' : 'filled'}
                               />
+                            </TableCell>
+                            <TableCell>
+                              {tx.request_code ? (
+                                <>
+                                  <Typography variant="body2" fontWeight={600} color="primary"
+                                    sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
+                                    onClick={() => tx.request_id && handleViewRequest(tx.request_id)}>
+                                    {tx.request_code}
+                                  </Typography>
+                                  {tx.proc_request_code && (
+                                    <Typography variant="caption" color="text.secondary">via {tx.proc_request_code}</Typography>
+                                  )}
+                                </>
+                              ) : <Typography variant="caption" color="text.disabled">—</Typography>}
                             </TableCell>
                             <TableCell align="right">
                               <Typography
@@ -633,9 +686,11 @@ const BudgetDetailDialog: React.FC<BudgetDetailDialogProps> = ({
                             <TableCell align="right">{formatCurrency(tx.balance_before)}</TableCell>
                             <TableCell align="right">{formatCurrency(tx.balance_after)}</TableCell>
                             <TableCell>
-                              <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
-                                {tx.description}
-                              </Typography>
+                              <Tooltip title={tx.description || ''}>
+                                <Typography variant="body2" noWrap sx={{ maxWidth: 220 }}>
+                                  {tx.description}
+                                </Typography>
+                              </Tooltip>
                             </TableCell>
                             <TableCell>{tx.first_name} {tx.last_name}</TableCell>
                           </TableRow>

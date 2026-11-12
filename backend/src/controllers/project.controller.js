@@ -5,6 +5,7 @@
  */
 
 const { query, transaction } = require('../config/database');
+const { reservedSql } = require('../services/budgetReservation.service');
 const { ROLES, isFinanceManager, isAdminHrManager } = require('../config/roles');
 
 /**
@@ -176,7 +177,9 @@ exports.getProjectById = async (req, res) => {
     // Get budget lines for this project
     const budgetLines = await query(
       `SELECT bl.*,
-              (bl.allocated_amount - bl.spent_amount) AS balance,
+              (bl.allocated_amount - bl.spent_amount) AS book_balance,
+              ${reservedSql('bl')} AS reserved_amount,
+              (bl.allocated_amount - bl.spent_amount - ${reservedSql('bl')}) AS balance,
               dep.department_name,
               dep.department_code
        FROM budget_lines bl
@@ -430,7 +433,9 @@ exports.getProjectBudgetLines = async (req, res) => {
 
     const budgetLines = await query(
       `SELECT bl.*,
-              (bl.allocated_amount - bl.spent_amount) AS balance,
+              (bl.allocated_amount - bl.spent_amount) AS book_balance,
+              ${reservedSql('bl')} AS reserved_amount,
+              (bl.allocated_amount - bl.spent_amount - ${reservedSql('bl')}) AS balance,
               ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) AS utilization_percentage,
               dep.department_name,
               dep.department_code,
@@ -632,14 +637,15 @@ exports.getProjectActivity = async (req, res) => {
               bl.budget_name,
               u.first_name AS performed_by_first,
               u.last_name  AS performed_by_last,
-              r.request_code
+              r.request_code,
+              spr.request_code AS proc_request_code
        FROM budget_transactions bt
        JOIN budget_lines bl ON bt.budget_line_id = bl.id
        LEFT JOIN users u ON bt.performed_by = u.id
        LEFT JOIN requests r ON bt.request_id = r.id
+       LEFT JOIN proc_requests spr ON spr.id = r.source_proc_request_id
        WHERE bl.project_id = ?
-       ORDER BY bt.created_at DESC
-       LIMIT 200`,
+       ORDER BY bt.created_at DESC, bt.id DESC`,
       [projectId]
     );
 
@@ -660,15 +666,16 @@ exports.getProjectActivity = async (req, res) => {
                JOIN budget_lines bl ON ri.budget_line_id = bl.id
                WHERE bl.project_id = ?
              )
-       ORDER BY r.created_at DESC
-       LIMIT 100`,
+       ORDER BY r.created_at DESC`,
       [projectId, projectId]
     );
 
     // Budget lines summary
     const budgetLines = await query(
       `SELECT bl.id, bl.budget_code, bl.budget_name, bl.allocated_amount, bl.spent_amount,
-              (bl.allocated_amount - bl.spent_amount) AS balance,
+              (bl.allocated_amount - bl.spent_amount) AS book_balance,
+              ${reservedSql('bl')} AS reserved_amount,
+              (bl.allocated_amount - bl.spent_amount - ${reservedSql('bl')}) AS balance,
               bl.is_active, bl.created_at,
               dep.department_name
        FROM budget_lines bl

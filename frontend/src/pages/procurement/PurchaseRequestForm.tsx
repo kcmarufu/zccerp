@@ -155,6 +155,9 @@ const PurchaseRequestForm: React.FC = () => {
       .catch(() => { /* the server still enforces the rule on submit */ });
   }, [isEdit]);
   const isResubmission = isEdit && existingRequest?.status === 'REJECTED';
+  // Still waiting at the first approval desk: the requester may amend it, as on
+  // a float requisition. Saving keeps it where it is — it is already submitted.
+  const isPendingEdit = isEdit && ['PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL'].includes(existingRequest?.status || '');
   const overdueBlocked = Boolean(reconBlock?.isBlocked) && !isResubmission;
 
   useEffect(() => {
@@ -277,6 +280,10 @@ const PurchaseRequestForm: React.FC = () => {
     }
   };
 
+  // New requests, never-submitted drafts and v2 requests follow the float rules.
+  const followsFloatRules = !isEdit || Number((existingRequest as any)?.workflow_version) === 2 ||
+    (existingRequest?.status === 'DRAFT' && !existingRequest?.submitted_at);
+
   const validate = () => {
     if (!title.trim()) { toast.error('Title is required'); return false; }
     if (!justification.trim()) { toast.error('Justification is required'); return false; }
@@ -288,6 +295,30 @@ const PurchaseRequestForm: React.FC = () => {
     for (const item of items) {
       if (!item.item_description.trim()) { toast.error('All items must have a description'); return false; }
       if (item.quantity <= 0) { toast.error('Item quantity must be greater than 0'); return false; }
+      // Float rule: a purchase request ends in a float requisition, so every
+      // item is charged to a budget line. Requests already under way on the
+      // old flow keep the old rules.
+      if (followsFloatRules && !item.budget_line_id) { toast.error(`Choose a budget line for "${item.item_description || 'each item'}"`); return false; }
+    }
+    // Float rule: the request's whole draw on a budget line must fit what the
+    // line has left. The server checks this too; this says so before saving.
+    const drawByLine = new Map<number, number>();
+    for (const item of items) {
+      const lineId = Number(item.budget_line_id);
+      drawByLine.set(lineId, (drawByLine.get(lineId) || 0) + Math.round(item.quantity * item.estimated_unit_price * 100));
+    }
+    for (const [lineId, cents] of Array.from(drawByLine.entries())) {
+      if (!followsFloatRules || !lineId) continue;
+      const line = (activeBudgetLines as any[]).find((bl: any) => Number(bl.id) === lineId);
+      if (!line) continue;
+      const balance = Math.round(Number(line.balance ?? (Number(line.allocated_amount) - Number(line.spent_amount))) * 100);
+      if (cents > balance) {
+        toast.error(
+          `Budget line ${line.budget_code} has $${(balance / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })} available, ` +
+          `but this request charges $${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })} to it.`
+        );
+        return false;
+      }
     }
     return true;
   };
@@ -365,10 +396,10 @@ const PurchaseRequestForm: React.FC = () => {
     return <Box display="flex" justifyContent="center" mt={4}><CircularProgress /></Box>;
   }
 
-  if (isEdit && existingRequest && !['DRAFT', 'REJECTED'].includes(existingRequest.status)) {
+  if (isEdit && existingRequest && !['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL'].includes(existingRequest.status)) {
     return (
       <Alert severity="warning" sx={{ m: 2 }}>
-        This request is in <strong>{existingRequest.status?.replace(/_/g, ' ')}</strong> status and can no longer be edited — it can only be edited as a draft or after it has been rejected.
+        This request is in <strong>{existingRequest.status?.replace(/_/g, ' ')}</strong> status and can no longer be edited — it can only be edited as a draft, while it awaits its first approval, or after it has been rejected.
         <Button sx={{ ml: 2 }} size="small" onClick={() => navigate(`/procurement/requests/${id}`)}>
           View Request
         </Button>
@@ -388,13 +419,25 @@ const PurchaseRequestForm: React.FC = () => {
             {isEdit ? (existingRequest?.status === 'REJECTED' ? 'Edit & Resubmit Request' : 'Edit Purchase Request') : 'New Purchase Request'}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            {isEdit ? (existingRequest?.status === 'REJECTED' ? 'Update details and resubmit for approval' : 'Update the details of this draft request') : 'Fill in the details and add items to procure'}
+            {isEdit
+              ? (existingRequest?.status === 'REJECTED' ? 'Update details and resubmit for approval'
+                : isPendingEdit ? 'Amend the request while it awaits approval'
+                : 'Update the details of this draft request')
+              : 'Fill in the details and add items to procure'}
           </Typography>
         </Box>
       </Box>
 
       {/* Reconciliation block / warning */}
       <ReconBlockAlert block={isResubmission ? null : reconBlock} subject="purchase requests" />
+
+      {isPendingEdit && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          This request is awaiting {existingRequest?.status === 'PENDING_GS_APPROVAL' ? 'General Secretary' : 'department'} approval.
+          Your changes are saved straight onto it, the approver is notified, and the change is recorded in the audit trail.
+          It stays in the approval queue — there is no need to submit it again.
+        </Alert>
+      )}
 
       {/* Rejection reason banner */}
       {isEdit && existingRequest?.status === 'REJECTED' && existingRequest?.rejection_reason && (
@@ -600,7 +643,7 @@ const PurchaseRequestForm: React.FC = () => {
                       getOptionLabel={(opt: any) => `${opt.budget_code} – ${opt.budget_name}`}
                       value={(activeBudgetLines as any[]).find((bl: any) => bl.id === item.budget_line_id) || null}
                       onChange={(_, val: any) => updateItem(item._key, 'budget_line_id', val?.id || null)}
-                      renderInput={(params) => <TextField {...params} placeholder="Select budget line" />}
+                      renderInput={(params) => <TextField {...params} placeholder={followsFloatRules ? "Select budget line *" : "Select budget line"} error={followsFloatRules && !item.budget_line_id} />}
                       renderOption={(props, opt: any) => {
                         const balance = Number(opt.balance ?? (Number(opt.allocated_amount) - Number(opt.spent_amount)));
                         const allocated = Number(opt.allocated_amount) || 1;
@@ -615,6 +658,11 @@ const PurchaseRequestForm: React.FC = () => {
                                   color={isLow ? 'warning' : 'success'} sx={{ height: 20, fontSize: '0.7rem' }} />
                               </Box>
                               <Typography variant="caption" color="text.secondary" display="block">{opt.budget_name}</Typography>
+                              {Number(opt.reserved_amount || 0) > 0 && (
+                                <Typography variant="caption" color="warning.main" display="block">
+                                  ${Number(opt.reserved_amount).toLocaleString()} reserved for approved requests — not available
+                                </Typography>
+                              )}
                               {opt.donor_name && (
                                 <Typography variant="caption" color="text.disabled" display="block">
                                   {opt.donor_name}{opt.category ? ` \u00b7 ${opt.category}` : ''}
@@ -749,15 +797,18 @@ const PurchaseRequestForm: React.FC = () => {
         </Button>
         <Button variant="outlined" color="primary" size="large"
           startIcon={saving ? <CircularProgress size={16} /> : <SaveIcon />}
-          onClick={handleSave} disabled={saving || submitting} sx={{ borderRadius: 2 }}>
-          Save as Draft
+          onClick={handleSave} disabled={saving || submitting} sx={{ borderRadius: 2 }}
+          {...(isPendingEdit ? { variant: 'contained' as const } : {})}>
+          {isPendingEdit ? 'Save Changes' : 'Save as Draft'}
         </Button>
-        <Button variant="contained" color="primary" size="large"
-          startIcon={submitting ? <CircularProgress size={16} /> : <SubmitIcon />}
-          onClick={handleSubmit} disabled={saving || submitting || overdueBlocked}
-          sx={{ borderRadius: 2, fontWeight: 700 }}>
-          Save & Submit for Approval
-        </Button>
+        {!isPendingEdit && (
+          <Button variant="contained" color="primary" size="large"
+            startIcon={submitting ? <CircularProgress size={16} /> : <SubmitIcon />}
+            onClick={handleSubmit} disabled={saving || submitting || overdueBlocked}
+            sx={{ borderRadius: 2, fontWeight: 700 }}>
+            Save & Submit for Approval
+          </Button>
+        )}
       </Box>
     </Box>
   );

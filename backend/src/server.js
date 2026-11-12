@@ -13,6 +13,7 @@ const jwt = require('jsonwebtoken');
 const { testConnection, logger } = require('./config/database');
 const routes = require('./routes');
 const leaveAccrualScheduler = require('./scheduler/leaveAccrual.scheduler');
+const budgetReservationScheduler = require('./scheduler/budgetReservation.scheduler');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -162,6 +163,9 @@ const startServer = async () => {
 
       // Start leave accrual scheduler (fires monthly on the 25th)
       leaveAccrualScheduler.start();
+
+      // Reject approved requests whose 10-working-day budget reservation ran out
+      budgetReservationScheduler.start();
     });
   } catch (error) {
     logger.error('Failed to start server:', error);

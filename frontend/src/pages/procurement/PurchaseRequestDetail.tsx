@@ -32,7 +32,8 @@ import {
   HourglassEmpty as PendingIcon,
   Visibility as ViewIcon,
   Add as AddIcon,
-  CompareArrows as CompareIcon
+  CompareArrows as CompareIcon,
+  Payments as PaymentsIcon
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -66,16 +67,28 @@ import {
   PROC_STATUS_LABELS,
   PROC_STATUS_COLORS,
   PROC_WORKFLOW_STEPS,
+  PROC_WORKFLOW_STEPS_V2,
+  POST_COMMITTEE_STAGES,
+  isWorkflowV2,
+  confirmDepartment,
+  resubmitFromProcurement,
+  ReturnTo,
   submitPurchaseRequest,
   getVendors,
   isViewableInBrowser,
   viewRequestAttachment,
   viewQuotationFile,
-  viewProofOfPayment
+  viewProofOfPayment,
+  getPopObligations,
+  ProofOfPayment
 } from '../../services/procurementService';
 import { ProcQuotation, ProcQuotationItem, ProcRequestItem, ProcVendor } from '../../types';
 import VendorPicker from '../../components/procurement/VendorPicker';
 import VendorQuickDialog from '../../components/procurement/VendorQuickDialog';
+import {
+  AwardComparison, PaymentsPanel, ReturnToSelector, BudgetImpactPanel, fundsShort,
+  FinanceApprovalNotice, ReservationNotice, PopDeadlineNotice, PopObligationsAlert
+} from '../../components/procurement/PrFloatPanels';
 import { antiTerrorLabel, isAntiTerrorVerified, isVendorComplete } from '../../utils/vendorRegister';
 import { downloadHTMLAsPDF, downloadPurchaseOrderPDF } from '../../utils/pdfUtils';
 import { formatRoleLabel } from '../../utils/roleUtils';
@@ -542,7 +555,12 @@ const PurchaseRequestDetail: React.FC = () => {
   const { user, hasPermission, hasRole, isFinanceManager } = useAuthStore();
   const qc = useQueryClient();
 
-  const [actionDialog, setActionDialog] = useState<null | 'approve_dept' | 'reject' | 'submit_committee' | 'committee' | 'final_finance' | 'high_value'>(null);
+  const [actionDialog, setActionDialog] = useState<null | 'approve_dept' | 'reject' | 'submit_committee' | 'committee' | 'final_finance' | 'high_value' | 'confirm_dept'>(null);
+  // Workflow v2: who amends a request rejected after the Committee, and the
+  // payment Finance records with its approval.
+  const [returnTo, setReturnTo] = useState<ReturnTo | null>(null);
+  // The Add Payment dialog lives in the Payments panel; the sidebar opens it too.
+  const [addPaymentOpen, setAddPaymentOpen] = useState(false);
   const [highValueDecisionVal, setHighValueDecisionVal] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
   const [comments, setComments] = useState('');
   const [committeeDecisionVal, setCommitteeDecisionVal] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
@@ -642,19 +660,40 @@ const PurchaseRequestDetail: React.FC = () => {
   // A Head of Department's request is approved by the General Secretary at the
   // point where everyone else's gets a departmental approval.
   const isGsTrack = Number(request?.is_gs_track) === 1 || request?.status === 'PENDING_GS_APPROVAL';
-  const workflowSteps = PROC_WORKFLOW_STEPS.map(s =>
+  // Workflow v2: one chain from purchase request to float requisition.
+  const v2 = isWorkflowV2(request);
+  const baseSteps = v2 ? PROC_WORKFLOW_STEPS_V2 : PROC_WORKFLOW_STEPS;
+  const workflowSteps = baseSteps.map(s =>
     isGsTrack && s.status === 'PENDING_DEPT_APPROVAL' ? { ...s, label: 'General Secretary Approval' } : s
   );
-  const stepStatus = request?.status === 'PENDING_GS_APPROVAL' ? 'PENDING_DEPT_APPROVAL' : request?.status;
-  const currentStepIndex = PROC_WORKFLOW_STEPS.findIndex(s => s.status === stepStatus);
+  // A request sent back to Procurement after the Committee sits at the
+  // Procurement step on the timeline until it is resubmitted.
+  const stepStatus = request?.status === 'PENDING_GS_APPROVAL' ? 'PENDING_DEPT_APPROVAL'
+    : request?.status === 'RETURNED_TO_PROCUREMENT' ? 'PENDING_PROCUREMENT'
+    : request?.status;
+  const currentStepIndex = baseSteps.findIndex(s => s.status === stepStatus);
+  /** Rejection here asks who amends the request (v2, after the Committee). */
+  const needsReturnTo = v2 && (POST_COMMITTEE_STAGES.includes(request?.status || '') || request?.status === 'PENDING_PAYMENT');
+  // The department desk: the project-owning department's Lead/HOD — or the
+  // General Secretary for a Head of Department's request. The server checks
+  // the department; this only decides what is offered on screen.
+  // Whether this user is a Lead / Head of Department of the department the
+  // partner's project belongs to. Being a Lead elsewhere — the requester's own
+  // department, Finance, Admin & HR — gives view access only.
+  const ownsProject = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS') &&
+    Number(user?.department_id) === Number((request as any)?.routing_department_id || request?.department_id);
+  const isDeptDesk = isGsTrack ? hasRole('ADMIN') : ownsProject;
+  const canConfirmDept = request?.status === 'PENDING_DEPT_CONFIRMATION' && isDeptDesk;
+  // A budget line short of funds blocks every approval until it is topped up.
+  const noFunds = v2 && fundsShort(request);
 
   // Role checks
   const canApproveDept =
-    (hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN') && request?.status === 'PENDING_DEPT_APPROVAL') ||
+    ((ownsProject || hasRole('ADMIN')) && request?.status === 'PENDING_DEPT_APPROVAL') ||
     (hasRole('ADMIN') && request?.status === 'PENDING_GS_APPROVAL');
   // HOP/Lead can reverse dept approval within 12 hours (before quotations are added)
   const canReverseDept = (
-    (isGsTrack ? hasRole('ADMIN') : hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'ADMIN')) &&
+    (isGsTrack ? hasRole('ADMIN') : (ownsProject || hasRole('ADMIN'))) &&
     request?.status === 'PENDING_PROCUREMENT' &&
     (() => {
       const deptAt = (request as any)?.dept_approved_at;
@@ -666,13 +705,29 @@ const PurchaseRequestDetail: React.FC = () => {
   // The Finance desk: the Finance Clerk, and the Finance Lead / Head of
   // Department, who holds every one of the Clerk's powers here.
   const canProcFinance = hasPermission('proc_finance_approve') || isFinanceManager();
+  // Whoever approved a request for payment must attach its proof of payment
+  // within 5 working days; past that, the server refuses their approvals.
+  const { data: popObligations } = useQuery({
+    queryKey: ['proc-pop-obligations'],
+    queryFn: getPopObligations,
+    enabled: Boolean(user) && (canProcFinance || hasRole('ADMIN', 'PROGRAM_LEAD', 'HEAD_OF_PROGRAMS', 'PROCUREMENT_COMMITTEE')),
+    staleTime: 30000
+  });
+  const approvalsBlocked = Boolean(popObligations?.blocked);
+  const nothingPaid = !(request?.payment_batches || []).some(b => !b.reversed_at);
   const canReject = (
-    (hasPermission('approve_purchase_request') && ['PENDING_DEPT_APPROVAL'].includes(request?.status || '')) ||
+    (ownsProject && ['PENDING_DEPT_APPROVAL'].includes(request?.status || '')) ||
     (hasPermission('manage_quotations') && ['PENDING_PROCUREMENT'].includes(request?.status || '')) ||
     (canProcFinance && ['PENDING_FINAL_FINANCE'].includes(request?.status || '')) ||
+    // Approved for payment, nothing paid yet: Finance may withdraw its approval.
+    (canProcFinance && v2 && request?.status === 'PENDING_PAYMENT' && nothingPaid) ||
+    canConfirmDept ||
     (hasRole('ADMIN') && ['PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE'].includes(request?.status || ''))
   );
-  const canUploadQuotation = hasPermission('manage_quotations') && ['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request?.status || '');
+  const canUploadQuotation = hasPermission('manage_quotations') && ['PENDING_PROCUREMENT', 'PENDING_COMMITTEE', 'RETURNED_TO_PROCUREMENT'].includes(request?.status || '');
+  // Procurement has amended a request returned to it and sends it back to the
+  // stage that returned it.
+  const canResubmitFromProcurement = hasPermission('manage_quotations') && request?.status === 'RETURNED_TO_PROCUREMENT';
   const canSubmitCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_PROCUREMENT';
   const canResubmitToCommittee = hasPermission('manage_quotations') && request?.status === 'PENDING_COMMITTEE';
   const canCommitteeDecide = hasPermission('committee_review') && request?.status === 'PENDING_COMMITTEE';
@@ -680,23 +735,28 @@ const PurchaseRequestDetail: React.FC = () => {
   // High-value stage: the Super Admin seat (ADMIN) and the Finance seat (the
   // Lead / Head of Department of Finance, whichever department raised the
   // request). The server verifies both and records which seat a decision fills.
-  const isFinanceLead = hasRole('PROGRAM_LEAD', 'HEAD_OF_PROGRAMS') &&
-    user?.department_code === 'FOS';
+  // Only Finance's Head of Department holds the second high-value seat.
+  const isFinanceLead = hasRole('HEAD_OF_PROGRAMS') && user?.department_code === 'FOS';
   const canHighValueDecide = request?.status === 'PENDING_HIGH_VALUE_APPROVAL' &&
     (hasRole('ADMIN') || isFinanceLead);
   // Finance can keep attaching payment batches after completion — that is the
   // whole point of supporting more than one POP per request.
   const canManagePOP = (canProcFinance || hasRole('ADMIN')) &&
-    ['PENDING_FINAL_FINANCE', 'COMPLETED'].includes(request?.status || '');
+    ['PENDING_FINAL_FINANCE', 'PENDING_PAYMENT', 'COMPLETED'].includes(request?.status || '');
+  // v2: further payment batches until the approved amount is paid.
+  const canRecordPayment = canProcFinance && request?.status === 'PENDING_PAYMENT';
   // Procurement can take a request back from the Committee, the high-value
   // approvers or Finance to amend the quotations or the award — until a
   // payment has been recorded against it.
   const canRecall = hasPermission('manage_quotations') &&
-    ['PENDING_COMMITTEE', 'PENDING_HIGH_VALUE_APPROVAL', 'PENDING_FINAL_FINANCE'].includes(request?.status || '') &&
+    ['PENDING_COMMITTEE', 'PENDING_HIGH_VALUE_APPROVAL', 'PENDING_DEPT_CONFIRMATION', 'PENDING_FINAL_FINANCE'].includes(request?.status || '') &&
     pops.length === 0;
-  // Only the requester edits the request, and only as a draft or once it has
-  // been sent back. Procurement amends quotations, never the request itself.
-  const canEdit = ['DRAFT', 'REJECTED'].includes(request?.status || '') && Number(request?.requester_id) === Number(user?.id);
+  // Only the requester edits the request: as a draft, once it has been sent
+  // back, or while it still waits at the first approval desk — as a float
+  // requisition can be. Procurement amends quotations, never the request itself.
+  const canEdit = ['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL'].includes(request?.status || '') &&
+    Number(request?.requester_id) === Number(user?.id);
+  const editWhilePending = canEdit && ['PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL'].includes(request?.status || '');
   const canSubmit = ['DRAFT', 'REJECTED'].includes(request?.status || '') && (Number(request?.requester_id) === Number(user?.id) || hasRole('ADMIN'));
 
   const doAction = async () => {
@@ -713,10 +773,16 @@ const PurchaseRequestDetail: React.FC = () => {
           setDeptConfirmData({ comments: capturedComments });
           return;
         }
-        case 'reject':
+        case 'reject': {
           if (!comments.trim()) { toast.error('Rejection reason required'); return; }
-          await rejectProcurementRequest(id!, comments);
-          toast.success('Request rejected');
+          if (needsReturnTo && !returnTo) { toast.error('Choose who should amend the request'); return; }
+          const rej = await rejectProcurementRequest(id!, comments, needsReturnTo ? returnTo : null);
+          toast.success(rej.message || 'Request rejected');
+          break;
+        }
+        case 'confirm_dept':
+          await confirmDepartment(id!, comments);
+          toast.success('Award confirmed — forwarded to Finance');
           break;
         case 'submit_committee': {
           if (splitAward) {
@@ -752,17 +818,37 @@ const PurchaseRequestDetail: React.FC = () => {
             setActionLoading(false);
             return;
           }
-          const hv = await highValueDecision(id!, highValueDecisionVal, comments);
+          if (v2 && highValueDecisionVal === 'REJECTED' && !returnTo) {
+            toast.error('Choose who should amend the request');
+            setActionLoading(false);
+            return;
+          }
+          const hv = await highValueDecision(
+            id!, highValueDecisionVal, comments,
+            v2 && highValueDecisionVal === 'REJECTED' ? returnTo : null
+          );
           toast.success(hv.message);
           break;
         }
         case 'final_finance': {
+          // v2: Finance approves now; the payments and their proof follow.
+          if (v2) {
+            const fd = new FormData();
+            if (comments) fd.append('comments', comments);
+            const fin = await finalFinanceApproval(id!, fd);
+            toast.success(fin.message || 'Approved for payment — funds reserved');
+            setActionDialog(null);
+            setComments('');
+            invalidate();
+            qc.invalidateQueries({ queryKey: ['proc-pop-obligations'] });
+            return;
+          }
           if (!popFile.length) { toast.error('At least one Proof of Payment (POP) document is required'); setActionLoading(false); return; }
           const fd = new FormData();
           popFile.forEach(f => fd.append('files', f));
           if (comments) fd.append('comments', comments);
-          await finalFinanceApproval(id!, fd);
-          toast.success('Final approval granted — Procurement completed!');
+          const fin = await finalFinanceApproval(id!, fd);
+          toast.success(fin.message || 'Final approval granted — Procurement completed!');
           const capturedFileName = popFile.map(f => f.name).join(', ');
           const capturedComments = comments;
           setPopFile([]);
@@ -775,6 +861,7 @@ const PurchaseRequestDetail: React.FC = () => {
       }
       setActionDialog(null);
       setComments('');
+      setReturnTo(null);
       invalidate();
     } catch (e: any) {
       toast.error(e?.response?.data?.error || 'Action failed');
@@ -972,11 +1059,20 @@ const PurchaseRequestDetail: React.FC = () => {
     }
     setActionLoading(true);
     try {
-      await resubmitToCommittee(
-        id!, splitAward ? null : resubmitQuotId, resubmitComments,
-        splitAward ? awardChoicePayload(awardChoice) : null
-      );
-      toast.success('Revised quotations resubmitted to the Procurement Committee');
+      if (request?.status === 'RETURNED_TO_PROCUREMENT') {
+        // Returned after the Committee: it goes back to the stage that returned it.
+        const res = await resubmitFromProcurement(
+          id!, splitAward ? null : resubmitQuotId, resubmitComments,
+          splitAward ? awardChoicePayload(awardChoice) : null
+        );
+        toast.success(res.message || 'Resubmitted');
+      } else {
+        await resubmitToCommittee(
+          id!, splitAward ? null : resubmitQuotId, resubmitComments,
+          splitAward ? awardChoicePayload(awardChoice) : null
+        );
+        toast.success('Revised quotations resubmitted to the Procurement Committee');
+      }
       setResubmitDialog(false);
       setResubmitComments('');
       setResubmitQuotId(null);
@@ -1287,6 +1383,45 @@ ${allCommitteeApproved ? `
     }
   };
 
+  /** View / download (and, for Finance, remove) one proof-of-payment document. */
+  const renderPopActions = (pop: ProofOfPayment) => (
+    <Box component="span" sx={{ whiteSpace: 'nowrap' }}>
+      <Tooltip title={isViewableInBrowser(pop.file_name) ? 'View' : 'Cannot be previewed — download it'}>
+        <span>
+          <IconButton size="small" color="primary" sx={{ p: 0.25 }} disabled={!isViewableInBrowser(pop.file_name)}
+            onClick={() => viewDocument(() => viewProofOfPayment(id!, pop.id, pop.file_name))}>
+            <ViewIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title="Download">
+        <IconButton size="small" color="primary" sx={{ p: 0.25 }}
+          onClick={async () => {
+            try { await downloadProofOfPayment(id!, pop.id, pop.file_name); }
+            catch (err: any) { toast.error(err?.message || 'Failed to download proof of payment'); }
+          }}>
+          <DownloadIcon sx={{ fontSize: 16 }} />
+        </IconButton>
+      </Tooltip>
+      {canManagePOP && (
+        <Tooltip title="Remove">
+          <IconButton size="small" color="error" sx={{ p: 0.25 }}
+            onClick={async () => {
+              try {
+                await deleteProofOfPayment(id!, pop.id);
+                toast.success('Proof of payment removed');
+                await loadPops();
+              } catch (err: any) {
+                toast.error(err?.response?.data?.error || 'Failed to remove proof of payment');
+              }
+            }}>
+            <DeleteIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      )}
+    </Box>
+  );
+
   if (isLoading) return <Box display="flex" justifyContent="center" mt={4}><CircularProgress /></Box>;
   if (error || !request) return <Alert severity="error" sx={{ m: 2 }}>Request not found.</Alert>;
 
@@ -1324,7 +1459,13 @@ ${allCommitteeApproved ? `
 
   const hasAnyAction = canEdit || canSubmit || canApproveDept || canReverseDept || canReject ||
     canSubmitCommittee || canResubmitToCommittee || canRecall || canCommitteeDecide || canHighValueDecide || canFinalApprove ||
-    (['PENDING_FINAL_FINANCE', 'COMPLETED'] as string[]).includes(request.status);
+    canConfirmDept || canResubmitFromProcurement ||
+    (['PENDING_DEPT_CONFIRMATION', 'PENDING_FINAL_FINANCE', 'PENDING_PAYMENT', 'COMPLETED'] as string[]).includes(request.status);
+  const returnedStage = ({
+    PENDING_HIGH_VALUE_APPROVAL: 'high-value approval',
+    PENDING_DEPT_CONFIRMATION: 'department confirmation',
+    PENDING_FINAL_FINANCE: 'Finance approval'
+  } as Record<string, string>)[request.rejected_from_status || ''] || 'the stage that sent it back';
 
   const showCommittee = ['PENDING_COMMITTEE', 'PENDING_FINAL_FINANCE', 'COMPLETED'].includes(request.status);
 
@@ -1358,6 +1499,47 @@ ${allCommitteeApproved ? `
         <Alert severity="error" sx={{ mb: 3 }}>
           <Typography variant="subtitle2" fontWeight={700}>Rejection Reason</Typography>
           <Typography variant="body2">{request.rejection_reason}</Typography>
+          {request.returned_to === 'REQUESTER' && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              Returned to the requester to amend. Once resubmitted it goes straight back to <strong>{returnedStage}</strong>.
+              If you change the items themselves, Procurement will need to price and award them again.
+            </Typography>
+          )}
+        </Alert>
+      )}
+
+      {request.status === 'RETURNED_TO_PROCUREMENT' && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          <Typography variant="subtitle2" fontWeight={700}>Returned to Procurement for amendment</Typography>
+          {request.rejection_reason && <Typography variant="body2">{request.rejection_reason}</Typography>}
+          <Typography variant="body2" sx={{ mt: 0.5 }}>
+            Amend the quotations or the award, then use <strong>Resubmit Amended Request</strong>.
+            It goes straight back to <strong>{returnedStage}</strong>.
+          </Typography>
+        </Alert>
+      )}
+
+      {request.status === 'PENDING_DEPT_CONFIRMATION' && <AwardComparison request={request} />}
+
+      {/* Finance users: an overdue proof of payment blocks their approvals. */}
+      {popObligations && (canProcFinance || popObligations.blocked) && (
+        <PopObligationsAlert obligations={popObligations} currentId={request.id} />
+      )}
+      {v2 && <PopDeadlineNotice request={request} />}
+      {v2 && <ReservationNotice reservation={request.reservation} until="payment" />}
+
+      {noFunds && !['DRAFT', 'COMPLETED', 'REJECTED', 'CANCELLED'].includes(request.status) && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          <strong>Insufficient funds.</strong> A budget line on this request does not have enough money left
+          (see Budget Impact). Approvals are blocked until Finance tops it up.
+        </Alert>
+      )}
+
+      {v2 && ['DRAFT', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request.status) && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          After the Committee, the department confirms the award, then Finance approves it.
+          Finance's approval generates this request's <strong>float requisition</strong> automatically, so
+          <strong> do not raise a separate float</strong> for these items.
         </Alert>
       )}
 
@@ -1377,7 +1559,7 @@ ${allCommitteeApproved ? `
             <Divider sx={{ mb: 2 }} />
             <Grid container spacing={2}>
               {infoFields.map(f => (
-                <Grid item xs={12} sm={6} key={f.label}>
+                <Grid item xs={12} sm={6} lg={4} key={f.label}>
                   <Typography variant="body2" color="text.secondary">{f.label}</Typography>
                   <Typography variant="body1" fontWeight="medium">{f.value}</Typography>
                 </Grid>
@@ -1524,7 +1706,7 @@ ${allCommitteeApproved ? `
                           <Box display="flex" alignItems="center" gap={0.75} flexWrap="wrap">
                             <VendorIcon fontSize="small" color="action" />
                             <Typography variant="body2" fontWeight={600}>{quot.vendor_name}</Typography>
-                            {quot.is_selected && (
+                            {Boolean(Number(quot.is_selected)) && (
                               <Chip
                                 color="success" size="small"
                                 label={quot.awarded_amount != null
@@ -1532,7 +1714,7 @@ ${allCommitteeApproved ? `
                                   : 'Selected'}
                               />
                             )}
-                            {quot.is_prequalified && <Chip label="Prequalified" color="info" size="small" variant="outlined" />}
+                            {Number(quot.is_prequalified) === 1 && <Chip label="Prequalified" color="info" size="small" variant="outlined" />}
                             <Chip
                               size="small" variant="outlined"
                               color={isAntiTerrorVerified(quot.antiterror_verified) ? 'success' : 'warning'}
@@ -1588,68 +1770,23 @@ ${allCommitteeApproved ? `
             )}
           </Paper>
 
-          {/* Attachments */}
-          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" gutterBottom>Attachments & Documents</Typography>
-            <Divider sx={{ mb: 2 }} />
-            {(attachments as any[]).length === 0 ? (
-              <Typography color="text.secondary" textAlign="center" py={2}>No attachments uploaded for this request</Typography>
-            ) : (
-              <Table size="small" sx={{ tableLayout: 'fixed' }}>
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ width: '40%' }}>File</TableCell>
-                    <TableCell sx={{ width: '16%' }}>Type</TableCell>
-                    <TableCell sx={{ width: '18%' }}>Uploaded By</TableCell>
-                    <TableCell sx={{ width: '14%' }}>Date</TableCell>
-                    <TableCell align="center" sx={{ width: '12%' }}>View / Download</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(attachments as any[]).map((att: any) => (
-                    <TableRow key={att.id}>
-                      <TableCell sx={{ maxWidth: 0 }}>
-                        <Box display="flex" alignItems="center" gap={0.75} sx={{ overflow: 'hidden' }}>
-                          <FileIcon fontSize="small" color="action" sx={{ flexShrink: 0 }} />
-                          <Tooltip title={att.original_name} placement="top-start">
-                            <Typography variant="body2" noWrap>{att.original_name}</Typography>
-                          </Tooltip>
-                        </Box>
-                        <Typography variant="caption" color="text.secondary" display="block" noWrap>
-                          {att.file_size ? `${(att.file_size / 1024).toFixed(1)} KB` : ''}
-                          {att.description ? ` · ${att.description}` : ''}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Chip label={String(att.attachment_type || 'OTHER').replace(/_/g, ' ')} size="small" variant="outlined" />
-                      </TableCell>
-                      <TableCell><Typography variant="body2" noWrap>{att.first_name} {att.last_name}</Typography></TableCell>
-                      <TableCell><Typography variant="body2">{att.created_at ? formatDate(att.created_at) : '—'}</Typography></TableCell>
-                      <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
-                        <Tooltip title={isViewableInBrowser(att.file_type || att.original_name) ? 'View in browser' : 'This file type cannot be previewed — use Download'}>
-                          <span>
-                            <IconButton size="small" color="primary" disabled={!isViewableInBrowser(att.file_type || att.original_name)}
-                              onClick={() => viewDocument(() => viewRequestAttachment(att.id, att.original_name))}>
-                              <ViewIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                        <Tooltip title="Download">
-                          <IconButton size="small" color="primary" onClick={() => handleDownloadAttachment(att.id, att.original_name)}>
-                            <DownloadIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </Paper>
+          {/* Workflow v2: payments (each with its proof) and the generated float requisition */}
+          {v2 && (
+            <PaymentsPanel
+              request={request}
+              canRecord={canRecordPayment}
+              canReverse={canProcFinance && ['PENDING_PAYMENT', 'COMPLETED'].includes(request.status)}
+              onChanged={() => { invalidate(); qc.invalidateQueries({ queryKey: ['proc-pop-obligations'] }); }}
+              pops={pops}
+              renderPop={renderPopActions}
+              addOpen={addPaymentOpen}
+              onAddOpenChange={setAddPaymentOpen}
+            />
+          )}
 
-          {/* Proof of Payment — a request may carry several, because payments
-              are often settled in batches rather than at once. */}
-          {(pops.length > 0 || canManagePOP) && (
+          {/* Proof of Payment (requests on the earlier flow) — a request may
+              carry several, because payments are often settled in batches. */}
+          {!v2 && (pops.length > 0 || canManagePOP) && (
             <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
               <Box display="flex" justifyContent="space-between" alignItems="center" gap={1}>
                 <Typography variant="h6">Proof of Payment {pops.length > 0 ? `(${pops.length})` : ''}</Typography>
@@ -1767,13 +1904,18 @@ ${allCommitteeApproved ? `
                   {request.status === 'REJECTED' ? 'Edit & Resubmit' : 'Edit Request'}
                 </Button>
               )}
+              {editWhilePending && (
+                <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5 }}>
+                  You can edit this request until it is approved. The approver is told it changed.
+                </Typography>
+              )}
               {canSubmit && (
                 <Button fullWidth variant="contained" startIcon={<SendIcon />} onClick={handleSubmitRequest} disabled={actionLoading}>
                   {request.status === 'REJECTED' ? 'Resubmit for Approval' : 'Submit for Approval'}
                 </Button>
               )}
               {canApproveDept && (
-                <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />} onClick={() => setActionDialog('approve_dept')}>
+                <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />} onClick={() => setActionDialog('approve_dept')} disabled={noFunds || approvalsBlocked}>
                   {request.status === 'PENDING_GS_APPROVAL' ? 'Approve (General Secretary)' : 'Approve (Dept Level)'}
                 </Button>
               )}
@@ -1794,6 +1936,18 @@ ${allCommitteeApproved ? `
                   Resubmit Amended Quotations
                 </Button>
               )}
+              {canResubmitFromProcurement && (
+                <Button fullWidth variant="contained" color="warning" startIcon={<SendIcon />}
+                  onClick={() => { setResubmitQuotId(request.quotations?.find(q => q.is_selected)?.id || lowestQuotation?.id || null); primeAward(); setResubmitDialog(true); }}>
+                  Resubmit Amended Request
+                </Button>
+              )}
+              {canConfirmDept && (
+                <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />} disabled={noFunds || approvalsBlocked}
+                  onClick={() => { setComments(''); setActionDialog('confirm_dept'); }}>
+                  {isGsTrack ? 'Confirm Award (General Secretary)' : 'Confirm Award'}
+                </Button>
+              )}
               {canRecall && (
                 <Button fullWidth variant="outlined" color="warning" startIcon={<UndoIcon />}
                   onClick={() => { setRecallReason(''); setRecallDialog(true); }}>
@@ -1808,27 +1962,39 @@ ${allCommitteeApproved ? `
               )}
               {canHighValueDecide && (
                 <>
-                  <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />}
+                  <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />} disabled={noFunds || approvalsBlocked}
                     onClick={() => { setHighValueDecisionVal('APPROVED'); setActionDialog('high_value'); }}>
                     Approve (High-Value)
                   </Button>
                   <Button fullWidth variant="outlined" color="error" startIcon={<RejectIcon />}
-                    onClick={() => { setHighValueDecisionVal('REJECTED'); setActionDialog('high_value'); }}>
+                    onClick={() => { setReturnTo(null); setHighValueDecisionVal('REJECTED'); setActionDialog('high_value'); }}>
                     Reject (High-Value)
                   </Button>
                 </>
               )}
               {canFinalApprove && (
-                <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />} onClick={() => setActionDialog('final_finance')}>
-                  Final Finance Approval
+                <Button fullWidth variant="contained" color="success" startIcon={<ApproveIcon />} disabled={noFunds || approvalsBlocked}
+                  onClick={() => { setComments(''); setActionDialog('final_finance'); }}>
+                  {v2 ? 'Approve for Payment' : 'Final Finance Approval'}
                 </Button>
+              )}
+              {v2 && canRecordPayment && Number(request.outstanding_amount || 0) > 0 && (
+                <Button fullWidth variant="contained" startIcon={<PaymentsIcon />} onClick={() => setAddPaymentOpen(true)}>
+                  {nothingPaid ? 'Add Payment' : 'Add Another Payment'}
+                </Button>
+              )}
+              {approvalsBlocked && (canFinalApprove || canApproveDept || canConfirmDept || canHighValueDecide) && (
+                <Typography variant="caption" color="error">
+                  Approving is blocked until the overdue proof of payment is attached (see the notice above).
+                </Typography>
               )}
               {canReject && (
-                <Button fullWidth variant="outlined" color="error" startIcon={<RejectIcon />} onClick={() => setActionDialog('reject')}>
-                  Reject
+                <Button fullWidth variant="outlined" color="error" startIcon={<RejectIcon />}
+                  onClick={() => { setReturnTo(null); setActionDialog('reject'); }}>
+                  {request.status === 'PENDING_PAYMENT' ? 'Withdraw Approval' : 'Reject'}
                 </Button>
               )}
-              {(['PENDING_FINAL_FINANCE', 'COMPLETED'] as string[]).includes(request.status) && (
+              {(['PENDING_DEPT_CONFIRMATION', 'PENDING_FINAL_FINANCE', 'PENDING_PAYMENT', 'COMPLETED'] as string[]).includes(request.status) && (
                 <Button fullWidth variant="outlined" color="success" startIcon={<DownloadIcon />} onClick={downloadPurchaseOrder}>
                   Download Purchase Order
                 </Button>
@@ -1862,6 +2028,64 @@ ${allCommitteeApproved ? `
             </Stepper>
           </Paper>
 
+          {/* Workflow v2: what the request takes from each budget line */}
+          {v2 && <BudgetImpactPanel request={request} compact />}
+
+          {/* Attachments — a compact list, so the sidebar carries its share of the page */}
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>
+              Attachments {(attachments as any[]).length ? `(${(attachments as any[]).length})` : ''}
+            </Typography>
+            <Divider sx={{ mb: 1 }} />
+            {(attachments as any[]).length === 0 ? (
+              <Typography color="text.secondary" variant="body2" textAlign="center" py={2}>No attachments uploaded for this request</Typography>
+            ) : (
+              <List dense disablePadding>
+                {(attachments as any[]).map((att: any) => (
+                  <ListItem
+                    key={att.id} disableGutters divider
+                    secondaryAction={
+                      <Box sx={{ whiteSpace: 'nowrap' }}>
+                        <Tooltip title={isViewableInBrowser(att.file_type || att.original_name) ? 'View in browser' : 'This file type cannot be previewed — use Download'}>
+                          <span>
+                            <IconButton size="small" color="primary" disabled={!isViewableInBrowser(att.file_type || att.original_name)}
+                              onClick={() => viewDocument(() => viewRequestAttachment(att.id, att.original_name))}>
+                              <ViewIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <Tooltip title="Download">
+                          <IconButton size="small" color="primary" onClick={() => handleDownloadAttachment(att.id, att.original_name)}>
+                            <DownloadIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    }
+                    sx={{ pr: 9 }}
+                  >
+                    <ListItemAvatar sx={{ minWidth: 34 }}>
+                      <FileIcon fontSize="small" color="action" />
+                    </ListItemAvatar>
+                    <ListItemText
+                      primary={
+                        <Tooltip title={att.original_name} placement="top-start">
+                          <Typography variant="body2" noWrap>{att.original_name}</Typography>
+                        </Tooltip>
+                      }
+                      secondary={
+                        <Typography component="span" variant="caption" color="text.secondary" noWrap display="block">
+                          {String(att.attachment_type || 'OTHER').replace(/_/g, ' ')} · {att.first_name} {att.last_name}
+                          {att.created_at ? ` · ${formatDate(att.created_at)}` : ''}
+                          {att.description ? ` · ${att.description}` : ''}
+                        </Typography>
+                      }
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            )}
+          </Paper>
+
           {/* High-value approval — the committee recommends, then the Super
               Admin and Finance's Lead/HOD must both approve. */}
           {Number((request as any).is_high_value) === 1 && (
@@ -1874,7 +2098,7 @@ ${allCommitteeApproved ? `
               <Stack spacing={1}>
                 {(['SUPER_ADMIN', 'FINANCE'] as const).map(seat => {
                   const rec = ((request as any).high_value_approvals || []).find((a: any) => a.seat === seat);
-                  const seatName = seat === 'SUPER_ADMIN' ? 'Super Admin' : 'Finance Lead / Head of Department';
+                  const seatName = seat === 'SUPER_ADMIN' ? 'Super Admin' : 'Finance Head of Department';
                   return (
                     <Box key={seat} display="flex" alignItems="center" gap={1}>
                       <Chip
@@ -1984,7 +2208,7 @@ ${allCommitteeApproved ? `
                       {(request.quotations || []).map(q => (
                         <TableCell key={q.id} align="right" sx={{ fontWeight: 700, minWidth: 140 }}>
                           {q.vendor_name}
-                          {q.is_selected && (
+                          {Boolean(Number(q.is_selected)) && (
                             <Chip label="Selected" color="success" size="small" sx={{ ml: 0.5, height: 18, fontSize: '0.6rem' }} />
                           )}
                         </TableCell>
@@ -2182,9 +2406,30 @@ ${allCommitteeApproved ? `
           {actionDialog === 'submit_committee' && 'Submit to Procurement Committee'}
           {actionDialog === 'committee' && 'Record Committee Decision'}
           {actionDialog === 'high_value' && 'High-Value Approval'}
-          {actionDialog === 'final_finance' && 'Final Finance Approval'}
+          {actionDialog === 'final_finance' && (v2 ? 'Approve for Payment' : 'Final Finance Approval')}
+          {actionDialog === 'confirm_dept' && 'Confirm the Award'}
         </DialogTitle>
         <DialogContent>
+          {actionDialog === 'confirm_dept' && (
+            <Box sx={{ mt: 1 }}>
+              <AwardComparison request={request} />
+            </Box>
+          )}
+          {((actionDialog === 'reject' && needsReturnTo) ||
+            (actionDialog === 'high_value' && v2 && highValueDecisionVal === 'REJECTED')) && (
+            <ReturnToSelector value={returnTo} onChange={setReturnTo} />
+          )}
+          {actionDialog === 'final_finance' && v2 && (
+            <Box sx={{ mt: 1 }}>
+              <FinanceApprovalNotice payable={Number(request.selected_quotation_amount || 0)} />
+            </Box>
+          )}
+          {actionDialog === 'reject' && request.status === 'PENDING_PAYMENT' && (
+            <Alert severity="warning" sx={{ mb: 2, mt: 1 }}>
+              This withdraws Finance's approval. The reserved funds are released, and once amended the request comes back to
+              Finance for approval.
+            </Alert>
+          )}
           {actionDialog === 'committee' && (
             <TextField
               select fullWidth label="Decision" value={committeeDecisionVal}
@@ -2268,7 +2513,7 @@ ${allCommitteeApproved ? `
               <Alert severity="info" sx={{ mb: 2, mt: 1 }}>
                 The Procurement Committee has <strong>recommended</strong> this request.
                 It proceeds to the Finance desk only once <strong>both</strong> the Super Admin
-                and the Finance Lead / Head of Department have approved.
+                and the Finance Head of Department have approved.
                 A rejection by either returns it to be amended and resubmitted.
               </Alert>
               <TextField
@@ -2281,13 +2526,13 @@ ${allCommitteeApproved ? `
               </TextField>
             </>
           )}
-          {actionDialog === 'final_finance' && (
+          {actionDialog === 'final_finance' && !v2 && (
             <Alert severity="warning" sx={{ mb: 2, mt: 1 }}>
               At least one Proof of Payment (POP) document is <strong>required</strong> to complete this approval.
-              Attach several at once if the payment was made in batches — more can be added afterwards.
+              {' '}Attach several at once if the payment was made in batches — more can be added afterwards.
             </Alert>
           )}
-          {actionDialog === 'final_finance' && (
+          {actionDialog === 'final_finance' && !v2 && (
             <Box sx={{ mb: 2 }}>
               <Button
                 variant={popFile.length ? 'outlined' : 'contained'}
@@ -2341,10 +2586,13 @@ ${allCommitteeApproved ? `
             variant="contained"
             color={actionDialog === 'reject' ? 'error' : 'primary'}
             onClick={doAction}
-            disabled={actionLoading || (actionDialog === 'final_finance' && popFile.length === 0)}
+            disabled={actionLoading || (actionDialog === 'final_finance' && !v2 && popFile.length === 0) ||
+              ((actionDialog === 'reject' && needsReturnTo) || (actionDialog === 'high_value' && v2 && highValueDecisionVal === 'REJECTED')) && !returnTo}
             startIcon={actionLoading ? <CircularProgress size={16} /> : undefined}
           >
-            {actionDialog === 'final_finance' && popFile.length === 0 ? 'Upload POP to Continue' : 'Confirm'}
+            {actionDialog === 'final_finance'
+              ? (v2 ? 'Approve for Payment' : popFile.length === 0 ? 'Upload POP to Continue' : 'Confirm')
+              : actionDialog === 'reject' && request.status === 'PENDING_PAYMENT' ? 'Withdraw Approval' : 'Confirm'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -2503,11 +2751,15 @@ ${allCommitteeApproved ? `
       <Dialog open={resubmitDialog} onClose={() => !actionLoading && setResubmitDialog(false)} maxWidth={splitAward ? 'md' : 'sm'} fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <SendIcon color="warning" />
-          Resubmit Amended Quotations to Committee
+          {request?.status === 'RETURNED_TO_PROCUREMENT'
+            ? `Resubmit Amended Request to ${returnedStage.replace(/^\w/, c => c.toUpperCase())}`
+            : 'Resubmit Amended Quotations to Committee'}
         </DialogTitle>
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>
-            This will reset all existing committee votes so members can review the updated quotations afresh.
+            {request?.status === 'RETURNED_TO_PROCUREMENT'
+              ? `The request goes straight back to ${returnedStage} with the award you choose here. If the award reaches the high-value threshold, the Super Admin and the Finance Head of Department must approve it again.`
+              : 'This will reset all existing committee votes so members can review the updated quotations afresh.'}
           </Alert>
           <Box display="flex" alignItems="center" gap={1} mb={1}>
             <Switch checked={splitAward} onChange={e => setSplitAward(e.target.checked)} />
@@ -2558,7 +2810,7 @@ ${allCommitteeApproved ? `
           <Button onClick={() => setResubmitDialog(false)} disabled={actionLoading}>Cancel</Button>
           <Button variant="contained" color="warning" onClick={handleResubmitToCommittee} disabled={actionLoading}
             startIcon={actionLoading ? <CircularProgress size={16} /> : <SendIcon />}>
-            Resubmit to Committee
+            {request?.status === 'RETURNED_TO_PROCUREMENT' ? 'Resubmit' : 'Resubmit to Committee'}
           </Button>
         </DialogActions>
       </Dialog>

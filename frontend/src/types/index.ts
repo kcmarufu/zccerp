@@ -108,6 +108,8 @@ export interface Request {
   version: number;
   items?: RequestItem[];
   approvalTrail?: ApprovalLog[];
+  /** Funds held between Finance approval and dispatch. */
+  reservation?: BudgetReservation | null;
 }
 
 export interface CreateRequestPayload {
@@ -202,7 +204,12 @@ export interface BudgetLine {
   fiscal_year: number;
   allocated_amount: number;
   spent_amount: number;
+  /** Available to new requests: allocated − spent − reserved. */
   balance: number;
+  /** allocated − spent, before reservations. */
+  book_balance?: number;
+  /** Held for approved requests awaiting dispatch / payment. */
+  reserved_amount?: number;
   utilization_percentage: number;
   description: string | null;
   is_active: boolean;
@@ -1148,10 +1155,66 @@ export type ProcurementStatus =
   // Selected quotation >= USD 5,000: recommended by the committee, awaiting the
   // Super Admin and the Finance Lead / Head of Department (both required).
   | 'PENDING_HIGH_VALUE_APPROVAL'
+  // Workflow v2: the department checks the award before Finance.
+  | 'PENDING_DEPT_CONFIRMATION'
   | 'PENDING_FINAL_FINANCE'
+  // Workflow v2: sent back to Procurement to amend after the Committee.
+  | 'RETURNED_TO_PROCUREMENT'
+  // Workflow v2: Finance approved and paid part; batches outstanding.
+  | 'PENDING_PAYMENT'
   | 'COMPLETED'
   | 'REJECTED'
   | 'CANCELLED';
+
+/** One payment Finance made against a purchase request (workflow v2). */
+export interface ProcPaymentBatch {
+  id: number;
+  request_id: number;
+  float_request_id?: number | null;
+  batch_no: number;
+  amount: number | string;
+  payment_date: string;
+  payment_reference?: string | null;
+  /** BANK, CASH or MOBILE_MONEY. */
+  payment_method?: 'BANK' | 'CASH' | 'MOBILE_MONEY' | null;
+  /** The bank used, for a bank payment. */
+  bank_name?: string | null;
+  notes?: string | null;
+  paid_by: number;
+  first_name?: string;
+  last_name?: string;
+  pop_count?: number;
+  /** Set when Finance reversed the batch; it no longer counts as paid. */
+  reversed_at?: string | null;
+  reversal_reason?: string | null;
+  reversed_by_first_name?: string;
+  reversed_by_last_name?: string;
+  created_at: string;
+}
+
+export interface ProcBudgetImpactLine {
+  budget_line_id: number;
+  budget_code: string;
+  budget_name: string;
+  allocated_amount: number;
+  spent_amount: number;
+  balance: number;
+  /** Held on this line for other approved requests; already left out of `balance`. */
+  reserved_by_others?: number;
+  request_amount: number;
+  already_paid: number;
+  still_needed: number;
+  balance_after: number;
+  sufficient: boolean;
+}
+
+/** How the Committee's award differs from what the department asked for. */
+export interface ProcAwardComparison {
+  estimated_total: number;
+  awarded_total: number;
+  has_changes: boolean;
+  changes: string[];
+}
 
 export interface ProcRequestItem {
   id?: number;
@@ -1242,6 +1305,59 @@ export interface ProcRequest {
   items?: ProcRequestItem[];
   quotations?: ProcQuotation[];
   approvalTrail?: any[];             // used in some pages
+  // ── Workflow v2 (purchase request → float requisition) ──
+  /** 2 = unified flow: department confirmation, float generated, batch payments. */
+  workflow_version?: number;
+  rejected_from_status?: string | null;
+  /** Who amends a request sent back after the Committee. */
+  returned_to?: 'PROCUREMENT' | 'REQUESTER' | null;
+  routing_department_id?: number | null;
+  dept_confirmed_at?: string | null;
+  payment_mode?: 'FULL' | 'BATCH' | null;
+  payable_amount?: number | string | null;
+  float_request_id?: number | null;
+  float_request?: { id: number; request_code: string; status: string; total_amount: number | string } | null;
+  payment_batches?: ProcPaymentBatch[];
+  paid_amount?: number;
+  outstanding_amount?: number | null;
+  award_comparison?: ProcAwardComparison | null;
+  /** Per budget line: balance, what this request takes, and whether it fits. */
+  budget_impact?: ProcBudgetImpactLine[];
+  selected_quotation_amount?: number | null;
+  /** Funds held on the budget lines between Finance approval and payment. */
+  reservation?: BudgetReservation | null;
+  final_finance_approved_by?: number | null;
+  final_finance_approver_name?: string | null;
+  /** Proof of payment due: 5 working days after Finance approval. */
+  pop_due_at?: string | null;
+  /** Approved for payment and nothing paid yet. */
+  pop_pending?: boolean;
+  pop_overdue?: boolean;
+  pop_deadline_working_days?: number;
+}
+
+/**
+ * Money held on budget lines for an approved request until it is dispatched
+ * (float) or paid (purchase request) — at most 10 working days, after which
+ * the request is rejected automatically and the funds released.
+ */
+export interface BudgetReservation {
+  status: 'ACTIVE' | 'CONSUMED' | 'RELEASED' | 'EXPIRED';
+  amount: number;
+  reserved_at: string;
+  expires_at: string | null;
+  closed_at?: string | null;
+  close_reason?: string | null;
+  window_working_days: number;
+  lines: { budget_line_id: number; budget_code: string; budget_name: string; amount: number; status: string }[];
+}
+
+/** The signed-in Finance user's proof-of-payment deadlines. */
+export interface PopObligations {
+  blocked: boolean;
+  deadline_working_days: number;
+  overdue: { id: number; request_code: string; title: string; pop_due_at: string; payable_amount: number | string }[];
+  due: { id: number; request_code: string; title: string; pop_due_at: string; payable_amount: number | string }[];
 }
 
 export interface ProcQuotation {

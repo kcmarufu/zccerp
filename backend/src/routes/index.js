@@ -202,7 +202,11 @@ router.get('/procurement/dashboard', authenticateToken, procurementController.ge
 // (/budgets/reports); the per-role data scoping happens inside the service.
 // Declared before '/procurement/requests/:id' so 'reports' is never taken as an id.
 router.get('/procurement/reports', authenticateToken, requirePermission(PERMISSIONS.VIEW_REPORTS), procurementController.getProcurementReports.bind(procurementController));
+// Declared before '/procurement/requests/:id' so 'open-for-project' is never taken as an id.
+router.get('/procurement/requests/open-for-project', authenticateToken, procurementController.getOpenRequestsForProject.bind(procurementController));
 router.get('/procurement/requests', authenticateToken, procurementController.getPurchaseRequests.bind(procurementController));
+// Proof-of-payment deadlines of the signed-in Finance user (5 working days after approval).
+router.get('/procurement/pop-obligations', authenticateToken, procurementController.getPopObligations.bind(procurementController));
 router.post('/procurement/requests', authenticateToken, procurementController.createPurchaseRequest.bind(procurementController));
 router.get('/procurement/requests/:id', authenticateToken, procurementController.getPurchaseRequestById.bind(procurementController));
 router.put('/procurement/requests/:id', authenticateToken, procurementController.updatePurchaseRequest.bind(procurementController));
@@ -227,6 +231,11 @@ router.get('/procurement/requests/:id/high-value-approvals', authenticateToken, 
 // Payments are often settled in batches, so final approval accepts several POP
 // documents at once and further batches can be attached afterwards.
 router.post('/procurement/requests/:id/final-approve', authenticateToken, uploadMultiple, handleUploadError, procurementController.finalFinanceApproval.bind(procurementController));
+router.post('/procurement/requests/:id/confirm-dept', authenticateToken, procurementController.confirmDepartment.bind(procurementController));
+router.post('/procurement/requests/:id/resubmit-from-procurement', authenticateToken, procurementController.resubmitFromProcurement.bind(procurementController));
+router.get('/procurement/requests/:id/payments', authenticateToken, procurementController.getPaymentBatches.bind(procurementController));
+router.post('/procurement/requests/:id/payments', authenticateToken, uploadMultiple, handleUploadError, procurementController.recordPaymentBatch.bind(procurementController));
+router.post('/procurement/requests/:id/payments/:batchId/reverse', authenticateToken, procurementController.reversePaymentBatch.bind(procurementController));
 router.get('/procurement/requests/:id/pops', authenticateToken, procurementController.getProofOfPayments.bind(procurementController));
 router.post('/procurement/requests/:id/pops', authenticateToken, uploadMultiple, handleUploadError, procurementController.addProofOfPayment.bind(procurementController));
 router.get('/procurement/requests/:id/pops/:popId/download', authenticateToken, procurementController.downloadProofOfPayment.bind(procurementController));

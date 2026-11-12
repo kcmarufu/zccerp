@@ -10,6 +10,8 @@ const notificationService = require('./notification.service');
 const workflowEmail = require('./workflowEmail.service');
 const reconciliationService = require('./reconciliation.service');
 const { resolveProcItemCategory, inferProcItemCategory } = require('../config/procItemCategories');
+const { generateRequestCode, assertItemsFitBudget, toCents } = require('./floatRules');
+const reservations = require('./budgetReservation.service');
 
 const PROC_STATUS = {
   DRAFT: 'DRAFT',
@@ -21,7 +23,14 @@ const PROC_STATUS = {
   PENDING_PROCUREMENT: 'PENDING_PROCUREMENT',
   PENDING_COMMITTEE: 'PENDING_COMMITTEE',
   PENDING_HIGH_VALUE_APPROVAL: 'PENDING_HIGH_VALUE_APPROVAL',
+  // Workflow v2: after the Committee, the department checks the award against
+  // what it asked for before the request reaches Finance.
+  PENDING_DEPT_CONFIRMATION: 'PENDING_DEPT_CONFIRMATION',
   PENDING_FINAL_FINANCE: 'PENDING_FINAL_FINANCE',
+  // Workflow v2: sent back to Procurement to amend after the Committee stage.
+  RETURNED_TO_PROCUREMENT: 'RETURNED_TO_PROCUREMENT',
+  // Workflow v2: Finance approved and paid part; further batches outstanding.
+  PENDING_PAYMENT: 'PENDING_PAYMENT',
   COMPLETED: 'COMPLETED',
   REJECTED: 'REJECTED',
   CANCELLED: 'CANCELLED'
@@ -68,8 +77,55 @@ const AWARDED_VALUE_SQL = (alias = 'q') => `COALESCE(${alias}.awarded_amount, ${
 const RECALLABLE_STATUSES = [
   'PENDING_COMMITTEE',
   'PENDING_HIGH_VALUE_APPROVAL',
+  'PENDING_DEPT_CONFIRMATION',
   'PENDING_FINAL_FINANCE'
 ];
+
+// ── Workflow v2: one chain from purchase request to float requisition ───────
+//
+//   Supervisor (Lead/HOD) → Procurement → Committee (+ high-value rule)
+//     → Department confirmation → Finance approval + payment batches
+//
+// Finance approval generates the linked float requisition, carrying the PR's
+// approval trail, and every payment batch deducts its amount from the budget.
+// Requests raised before this flow existed keep workflow_version 1 and finish
+// on the old route.
+const WORKFLOW_V2 = 2;
+const isV2 = (req) => Number(req?.workflow_version) === WORKFLOW_V2;
+
+// Stages from which a rejection asks who amends the request: Procurement or
+// the requester. A resubmission returns it to the stage that sent it back.
+const POST_COMMITTEE_STAGES = [
+  'PENDING_HIGH_VALUE_APPROVAL',
+  'PENDING_DEPT_CONFIRMATION',
+  'PENDING_FINAL_FINANCE'
+];
+const RETURN_TO = { PROCUREMENT: 'PROCUREMENT', REQUESTER: 'REQUESTER' };
+
+// How Finance paid a batch. A bank payment also names the bank it went from.
+const PAYMENT_METHODS = { BANK: 'Bank transfer', CASH: 'Cash', MOBILE_MONEY: 'Mobile money' };
+const paymentMethodLabel = (method, bank) =>
+  method ? `${PAYMENT_METHODS[method] || method}${method === 'BANK' && bank ? ` (${bank})` : ''}` : null;
+
+// The requester may change a request while it is theirs (draft, rejected) and
+// while it still waits at the first approval desk - the same rule as a float
+// requisition. Once the department / General Secretary has approved it, it
+// belongs to Procurement and the approvers.
+const REQUESTER_EDITABLE_STATUSES = ['DRAFT', 'REJECTED', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL'];
+
+// Where Procurement may add, edit or remove quotations.
+const QUOTATION_EDITABLE_STATUSES = ['PENDING_PROCUREMENT', 'PENDING_COMMITTEE', 'RETURNED_TO_PROCUREMENT'];
+
+const STAGE_LABELS = {
+  PENDING_DEPT_APPROVAL: 'department approval',
+  PENDING_GS_APPROVAL: 'General Secretary approval',
+  PENDING_PROCUREMENT: 'Procurement',
+  PENDING_COMMITTEE: 'the Committee',
+  PENDING_HIGH_VALUE_APPROVAL: 'high-value approval',
+  PENDING_DEPT_CONFIRMATION: 'department confirmation',
+  PENDING_FINAL_FINANCE: 'Finance approval'
+};
+const stageLabel = (status) => STAGE_LABELS[status] || String(status || '').replace(/_/g, ' ').toLowerCase();
 
 /** Finance Clerk, or the Finance Lead / Head of Department, or a Super Admin. */
 const canActAsProcFinance = (user) =>
@@ -277,9 +333,61 @@ class ProcurementService {
     return parts;
   }
 
+  // ============================================================
+  // FLOAT RULES ON A PURCHASE REQUEST (workflow v2)
+  // ------------------------------------------------------------
+  // A v2 request ends in a float requisition, so it is held to the float
+  // form's rules from the start: partner and project are required (see
+  // _validateDonorAndProject), every item is charged to a budget line of that
+  // project, and no budget line is asked for more than it has left.
+  // ============================================================
+
+  _assertItemsHaveBudgetLines(items) {
+    const missing = (items || [])
+      .map((it, idx) => (Number(it.budget_line_id) ? null : idx + 1))
+      .filter(Boolean);
+    if (missing.length) {
+      throw new Error(
+        `Choose a budget line for every item — missing on item${missing.length === 1 ? '' : 's'} ${missing.join(', ')}`
+      );
+    }
+  }
+
+  /** Request items in the shape floatRules.assertItemsFitBudget reads. */
+  _toBudgetItems(items, useActuals = false) {
+    return (items || [])
+      .filter((it) => !useActuals || it.is_available === undefined || Number(it.is_available) === 1)
+      .map((it) => ({
+        budgetLineId: it.budget_line_id,
+        quantity: Number(it.quantity || 1),
+        unitPrice: useActuals && it.actual_unit_price != null
+          ? Number(it.actual_unit_price)
+          : Number(it.estimated_unit_price || 0)
+      }));
+  }
+
+  /**
+   * Re-check the request's stored items against the budget. Before the award
+   * the estimates are what is asked for; from department confirmation on, the
+   * awarded prices are what will actually be paid.
+   */
+  async _assertPrFitsBudget(conn, requestId, projectId, useActuals = false) {
+    const [rows] = await conn.execute(
+      `SELECT budget_line_id, quantity, estimated_unit_price, actual_unit_price, is_available
+         FROM proc_request_items WHERE request_id = ?`,
+      [requestId]
+    );
+    this._assertItemsHaveBudgetLines(rows);
+    await assertItemsFitBudget(conn, this._toBudgetItems(rows, useActuals), projectId, { type: 'PR', id: Number(requestId) });
+  }
+
   async createPurchaseRequest(data, user) {
     return transaction(async (conn) => {
       await this._validateDonorAndProject(conn, data.donor_id, data.project_id);
+
+      // Every new request follows the unified flow and the float rules.
+      this._assertItemsHaveBudgetLines(data.items);
+      await assertItemsFitBudget(conn, this._toBudgetItems(data.items), data.project_id);
 
       const year = new Date().getFullYear();
       const [seq] = await conn.execute(
@@ -301,8 +409,8 @@ class ProcurementService {
       const [result] = await conn.execute(
         `INSERT INTO proc_requests 
           (request_code, requester_id, department_id, donor_id, project_id, title, justification, 
-           expected_delivery_date, priority, total_estimated_amount, routing_department_id, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', NOW(), NOW())`,
+           expected_delivery_date, priority, total_estimated_amount, routing_department_id, status, workflow_version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ${WORKFLOW_V2}, NOW(), NOW())`,
         [
           requestCode,
           user.id,
@@ -400,7 +508,7 @@ class ProcurementService {
         //   6. Finance's Lead/HOD sees every request at the Finance desk, and
         //      the completed ones, with the Finance Clerk's powers over them
         const financeSeat = user.department_code === FINANCE_DEPT_CODE
-          ? `OR pr.status IN ('PENDING_HIGH_VALUE_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_FINAL_FINANCE', 'COMPLETED')`
+          ? `OR pr.status IN ('PENDING_HIGH_VALUE_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_FINAL_FINANCE', 'PENDING_PAYMENT', 'COMPLETED')`
           : '';
         where = `WHERE (
           (pr.status = 'PENDING_DEPT_APPROVAL' AND COALESCE(pr.routing_department_id, pr.department_id) = ?) OR
@@ -412,10 +520,10 @@ class ProcurementService {
       }
     } else if (user.role === ROLES.PROCUREMENT_OFFICER) {
       // Procurement officer sees everything from finance-approved stage onwards + rejected
-      where = "WHERE pr.status IN ('PENDING_PROCUREMENT','PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_FINAL_FINANCE','COMPLETED','REJECTED')";
+      where = "WHERE pr.status IN ('PENDING_PROCUREMENT','RETURNED_TO_PROCUREMENT','PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_DEPT_CONFIRMATION','PENDING_FINAL_FINANCE','PENDING_PAYMENT','COMPLETED','REJECTED')";
     } else if (user.role === ROLES.PROCUREMENT_COMMITTEE) {
       // Committee sees requests sent to them + completed/rejected for reference
-      where = "WHERE pr.status IN ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_FINAL_FINANCE','COMPLETED','REJECTED')";
+      where = "WHERE pr.status IN ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_DEPT_CONFIRMATION','PENDING_FINAL_FINANCE','PENDING_PAYMENT','COMPLETED','REJECTED')";
     } else {
       // ADMIN, FINANCE_CLERK see all
       where = 'WHERE 1=1';
@@ -501,7 +609,8 @@ class ProcurementService {
           (bl.allocated_amount - bl.spent_amount) AS budget_balance
          FROM proc_request_items pri
          LEFT JOIN budget_lines bl ON pri.budget_line_id = bl.id
-         WHERE pri.request_id = ?`,
+         WHERE pri.request_id = ?
+         ORDER BY pri.id ASC`,
         [requestId]
       ),
       query(
@@ -545,6 +654,21 @@ class ProcurementService {
       );
     } catch (_) { /* table may not exist yet — safe to ignore */ }
 
+    if (isV2(request)) {
+      Object.assign(request, await this._paymentSummary(requestId, request));
+      request.award_comparison = this._awardComparison(items);
+      request.budget_impact = await this.getBudgetImpact(requestId);
+      request.reservation = await reservations.getReservation('PR', Number(requestId));
+      if (request.final_finance_approved_by) {
+        const [approver] = await query('SELECT first_name, last_name FROM users WHERE id = ?', [request.final_finance_approved_by]);
+        request.final_finance_approver_name = approver ? `${approver.first_name} ${approver.last_name}` : null;
+      }
+      const nothingPaid = !(request.payment_batches || []).some((b) => !b.reversed_at);
+      request.pop_pending = request.status === PROC_STATUS.PENDING_PAYMENT && nothingPaid && Boolean(request.pop_due_at);
+      request.pop_overdue = request.pop_pending && new Date(request.pop_due_at) < new Date();
+      request.pop_deadline_working_days = reservations.POP_DEADLINE_WORKING_DAYS;
+    }
+
     return { ...request, items, approvalTrail: logs, quotations, committeeVotes };
   }
 
@@ -552,12 +676,13 @@ class ProcurementService {
     const existing = await this.getPurchaseRequestById(requestId);
     if (!existing) throw new Error('Request not found');
     // Only the person who raised the request edits it, and only while it is
-    // theirs: a draft, or one sent back to them. Once submitted it belongs to
-    // the approvers and Procurement — and an edit replaces the item list, which
-    // would cut the link between the items and the prices on the quotations
-    // Procurement has already captured. Procurement changes quotations only.
-    if (![PROC_STATUS.DRAFT, PROC_STATUS.REJECTED].includes(existing.status)) {
-      throw new Error('A purchase request can only be edited while it is a draft or after it has been rejected');
+    // theirs (a draft, or one sent back to them) or while it still waits at
+    // the first approval desk, as a float requisition can be. Once the
+    // department has approved it, it belongs to Procurement and the approvers:
+    // an edit replaces the item list, which would cut the link between the
+    // items and the prices on the quotations Procurement captures.
+    if (!REQUESTER_EDITABLE_STATUSES.includes(existing.status)) {
+      throw new Error('A purchase request can only be edited while it is a draft, while it is awaiting its first (department or General Secretary) approval, or after it has been rejected');
     }
     if (Number(existing.requester_id) !== Number(user.id)) {
       throw new Error('Only the person who raised this purchase request can edit it');
@@ -566,8 +691,22 @@ class ProcurementService {
     const donorId = data.donor_id || existing.donor_id;
     const projectId = data.project_id || existing.project_id;
 
+    // A draft that has never been submitted joins the unified flow; a request
+    // already under way keeps the flow it started on.
+    const upgradeToV2 = !isV2(existing) && existing.status === PROC_STATUS.DRAFT && !existing.submitted_at;
+    const followsV2 = isV2(existing) || upgradeToV2;
+
     return transaction(async (conn) => {
       await this._validateDonorAndProject(conn, donorId, projectId);
+
+      if (followsV2) {
+        const itemsToCheck = data.items && data.items.length ? data.items : existing.items;
+        this._assertItemsHaveBudgetLines(itemsToCheck);
+        await assertItemsFitBudget(conn, this._toBudgetItems(itemsToCheck), projectId);
+        if (upgradeToV2) {
+          await conn.execute('UPDATE proc_requests SET workflow_version = ? WHERE id = ?', [WORKFLOW_V2, requestId]);
+        }
+      }
 
       const totalEstimated = (data.items || []).reduce((sum, item) => {
         return sum + ((item.quantity || 1) * (item.estimated_unit_price || 0));
@@ -588,7 +727,33 @@ class ProcurementService {
         ]
       );
 
-      if (data.items && data.items.length > 0) {
+      // When the items themselves are unchanged — same lines, quantities and
+      // estimates, in the same order — they are updated in place. Deleting and
+      // re-inserting them would cut the link to the supplier's priced lines and
+      // the awarded prices, which a request sent back after the Committee
+      // still needs.
+      const sameItems = (data.items || []).length > 0 &&
+        (existing.items || []).length === data.items.length &&
+        data.items.every((it, idx) => {
+          const was = existing.items[idx];
+          return String(was.item_description || '').trim() === String(it.item_description || '').trim() &&
+            Number(was.quantity) === Number(it.quantity || 1) &&
+            toCents(was.estimated_unit_price) === toCents(it.estimated_unit_price || 0);
+        });
+
+      if (sameItems) {
+        for (const [idx, item] of data.items.entries()) {
+          await conn.execute(
+            `UPDATE proc_request_items
+                SET budget_line_id = ?, category = ?, specifications = ?, unit_of_measure = ?, notes = ?
+              WHERE id = ? AND request_id = ?`,
+            [item.budget_line_id || null,
+             resolveProcItemCategory(item, data.title || existing.title),
+             item.specifications || null, item.unit_of_measure || 'unit', item.notes || null,
+             existing.items[idx].id, requestId]
+          );
+        }
+      } else if (data.items && data.items.length > 0) {
         await conn.execute('DELETE FROM proc_request_items WHERE request_id = ?', [requestId]);
         for (const item of data.items) {
           await conn.execute(
@@ -639,7 +804,7 @@ class ProcurementService {
         const prefix = existing.status === PROC_STATUS.PENDING_COMMITTEE
           ? 'Edited while under Committee review — '
           : inFlight
-            ? `Edited after submission (at ${existing.status.replace(/_/g, ' ').toLowerCase()}) — `
+            ? `Edited by the requester while awaiting ${stageLabel(existing.status)} — `
             : 'Edited — ';
         await this._logEvent(
           conn, requestId, user, 'EDITED', existing.status, existing.status,
@@ -647,6 +812,16 @@ class ProcurementService {
         );
       }
 
+      return { success: true, amended: changes.length > 0 };
+    }).then((result) => {
+      // The desk holding the request is told it changed, so nobody approves
+      // figures the requester has since altered.
+      if (result.amended && [PROC_STATUS.PENDING_DEPT_APPROVAL, PROC_STATUS.PENDING_GS_APPROVAL].includes(existing.status)) {
+        notificationService.onProcurementAmended(
+          existing.id, existing.request_code, existing.requester_id, existing.department_id,
+          existing.routing_department_id, existing.status === PROC_STATUS.PENDING_GS_APPROVAL
+        ).catch(() => {});
+      }
       return { success: true };
     });
   }
@@ -671,8 +846,16 @@ class ProcurementService {
       await reconciliationService.assertCanRaiseRequest(existing.requester_id);
     }
 
+    // A draft that has never been submitted joins the unified flow.
+    const upgradeToV2 = !isV2(existing) && existing.status === PROC_STATUS.DRAFT && !existing.submitted_at;
+    const followsV2 = isV2(existing) || upgradeToV2;
+
     return transaction(async (conn) => {
       await this._validateDonorAndProject(conn, existing.donor_id, existing.project_id);
+
+      if (upgradeToV2) {
+        await conn.execute('UPDATE proc_requests SET workflow_version = ? WHERE id = ?', [WORKFLOW_V2, requestId]);
+      }
 
       // Recompute the owning department at submission so routing reflects the
       // project selected right now, not whatever was on the request when drafted.
@@ -710,6 +893,7 @@ class ProcurementService {
           PROC_STATUS.PENDING_PROCUREMENT,
           PROC_STATUS.PENDING_COMMITTEE,
           PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
+          PROC_STATUS.PENDING_DEPT_CONFIRMATION,
           PROC_STATUS.PENDING_FINAL_FINANCE
         ];
         if (resumable.includes(rejectedFrom)) {
@@ -731,13 +915,39 @@ class ProcurementService {
           await conn.execute('DELETE FROM proc_high_value_approvals WHERE request_id = ?', [requestId]);
           const stillHighValue = await this.isHighValueRequest(requestId);
           if (!stillHighValue.isHighValue) {
-            targetStatus = PROC_STATUS.PENDING_FINAL_FINANCE;
+            targetStatus = isV2(existing) ? PROC_STATUS.PENDING_DEPT_CONFIRMATION : PROC_STATUS.PENDING_FINAL_FINANCE;
+          }
+        }
+
+        // A request sent back to its requester after the Committee returns to
+        // the stage that sent it back — unless the requester changed the items
+        // themselves, which leaves them without the awarded prices. Procurement
+        // then has to price and award them again before anyone can approve.
+        if (followsV2 && POST_COMMITTEE_STAGES.includes(targetStatus)) {
+          const [unpriced] = await conn.execute(
+            `SELECT COUNT(*) AS cnt FROM proc_request_items
+              WHERE request_id = ? AND is_available = 1 AND actual_unit_price IS NULL`,
+            [requestId]
+          );
+          if (Number(unpriced[0].cnt) > 0) {
+            targetStatus = PROC_STATUS.PENDING_PROCUREMENT;
+            await conn.execute('DELETE FROM proc_committee_votes WHERE request_id = ?', [requestId]);
+            await conn.execute('DELETE FROM proc_high_value_approvals WHERE request_id = ?', [requestId]);
+            await conn.execute('UPDATE proc_quotations SET is_selected = FALSE, awarded_amount = NULL WHERE request_id = ?', [requestId]);
           }
         }
       }
 
+      // The float rule: no budget line may be asked for more than it has left.
+      // Past the Committee the awarded prices are what will be paid.
+      if (followsV2) {
+        await this._assertPrFitsBudget(
+          conn, requestId, existing.project_id, POST_COMMITTEE_STAGES.includes(targetStatus)
+        );
+      }
+
       await conn.execute(
-        `UPDATE proc_requests SET status=?, routing_department_id=?, submitted_at=IF(submitted_at IS NULL, NOW(), submitted_at), rejection_reason=NULL, rejected_from_status=NULL, updated_at=NOW() WHERE id=?`,
+        `UPDATE proc_requests SET status=?, routing_department_id=?, submitted_at=IF(submitted_at IS NULL, NOW(), submitted_at), rejection_reason=NULL, rejected_from_status=NULL, returned_to=NULL, updated_at=NOW() WHERE id=?`,
         [targetStatus, routingDepartmentId, requestId]
       );
       await conn.execute(
@@ -767,12 +977,65 @@ class ProcurementService {
   }
 
   // ============================================================
+  // PROOF-OF-PAYMENT DEADLINE
+  // ------------------------------------------------------------
+  // Whoever approves a purchase request for payment must see its proof of
+  // payment attached within 5 working days. Until every overdue one has a
+  // payment recorded, that account cannot approve further purchase requests.
+  // ============================================================
+
+  /** Requests `userId` approved for payment with nothing paid yet (only overdue ones unless includePending). */
+  async getOverduePops(userId, { includePending = false } = {}) {
+    try {
+      return await query(
+        `SELECT pr.id, pr.request_code, pr.title, pr.final_finance_approved_at, pr.pop_due_at, pr.payable_amount,
+                (pr.pop_due_at < NOW()) AS is_overdue
+           FROM proc_requests pr
+          WHERE pr.final_finance_approved_by = ? AND pr.status = 'PENDING_PAYMENT'
+            AND pr.pop_due_at IS NOT NULL ${includePending ? '' : 'AND pr.pop_due_at < NOW()'}
+            AND NOT EXISTS (SELECT 1 FROM proc_payment_batches b WHERE b.request_id = pr.id AND b.reversed_at IS NULL)
+          ORDER BY pr.pop_due_at`,
+        [userId]
+      );
+    } catch (err) {
+      if (err.code === 'ER_BAD_FIELD_ERROR') return []; // migration not yet run
+      throw err;
+    }
+  }
+
+  /** For the UI: what this user owes, and whether it blocks them. */
+  async getPopObligations(user) {
+    const rows = await this.getOverduePops(user.id, { includePending: true });
+    const overdue = rows.filter((r) => Number(r.is_overdue) === 1);
+    return {
+      blocked: overdue.length > 0,
+      deadline_working_days: reservations.POP_DEADLINE_WORKING_DAYS,
+      overdue,
+      due: rows.filter((r) => Number(r.is_overdue) !== 1)
+    };
+  }
+
+  async _assertNoOverduePop(user) {
+    const overdue = await this.getOverduePops(user.id);
+    if (!overdue.length) return;
+    const list = overdue.slice(0, 5).map((r) => r.request_code).join(', ') + (overdue.length > 5 ? ` and ${overdue.length - 5} more` : '');
+    const err = new Error(
+      `You cannot approve purchase requests until the proof of payment is attached for ${list}. `
+      + `You approved ${overdue.length === 1 ? 'it' : 'them'} for payment more than ${reservations.POP_DEADLINE_WORKING_DAYS} working days ago `
+      + 'and no payment has been recorded yet.'
+    );
+    err.popOverdue = overdue;
+    throw err;
+  }
+
+  // ============================================================
   // APPROVAL ACTIONS
   // ============================================================
 
   async approveDeptLevel(requestId, user, comments = '') {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
+    await this._assertNoOverduePop(user);
 
     // General Secretary stage (a Head of Department's request). Same outcome as a
     // departmental approval — on to Procurement — but only a Super Admin decides it.
@@ -781,6 +1044,7 @@ class ProcurementService {
         throw new Error("A Head of Department's purchase request is approved by the General Secretary");
       }
       return transaction(async (conn) => {
+        await this._assertFundsAvailable(conn, req);
         await conn.execute(
           `UPDATE proc_requests SET status='PENDING_PROCUREMENT', dept_approved_at=NOW(), updated_at=NOW() WHERE id=?`,
           [requestId]
@@ -813,6 +1077,7 @@ class ProcurementService {
     }
 
     return transaction(async (conn) => {
+      await this._assertFundsAvailable(conn, req);
       // New flow: dept approval goes directly to PENDING_PROCUREMENT (no intermediate finance step)
       await conn.execute(
         `UPDATE proc_requests SET status='PENDING_PROCUREMENT', dept_approved_at=NOW(), updated_at=NOW() WHERE id=?`,
@@ -891,13 +1156,13 @@ class ProcurementService {
     });
   }
 
-  async rejectRequest(requestId, user, comments = '') {
+  async rejectRequest(requestId, user, comments = '', returnTo = null) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
 
     const allowedStatuses = [
       'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL',
-      'PENDING_PROCUREMENT', 'PENDING_FINAL_FINANCE'
+      'PENDING_PROCUREMENT', 'PENDING_DEPT_CONFIRMATION', 'PENDING_FINAL_FINANCE', 'PENDING_PAYMENT'
     ];
     if (!allowedStatuses.includes(req.status)) {
       if (req.status === 'PENDING_COMMITTEE') {
@@ -912,6 +1177,39 @@ class ProcurementService {
 
     if (req.status === PROC_STATUS.PENDING_FINAL_FINANCE && !canActAsProcFinance(user)) {
       throw new Error('Only Finance (the Finance Clerk or the Finance Lead / Head of Department) can reject at this stage');
+    }
+
+    if (req.status === PROC_STATUS.PENDING_DEPT_CONFIRMATION) {
+      this._assertDeptDesk(req, user);
+    }
+
+    // Approved for payment but nothing paid yet: Finance may withdraw its
+    // approval and send the request back. The reserved funds are released.
+    if (req.status === PROC_STATUS.PENDING_PAYMENT) {
+      if (!isV2(req) || !canActAsProcFinance(user)) {
+        throw new Error('Only Finance can send back a request approved for payment');
+      }
+      if ((req.payment_batches || []).some((b) => !b.reversed_at)) {
+        throw new Error('Payments have been recorded on this request — reverse them before sending it back');
+      }
+      return transaction(async (conn) => {
+        await this._undoFinanceApproval(conn, req, user, 'Finance withdrew its approval');
+        const result = await this._sendBack(
+          conn, req, user, PROC_STATUS.PENDING_FINAL_FINANCE, returnTo,
+          `Finance approval withdrawn: ${comments || 'no reason given'}`
+        );
+        return { success: true, ...result };
+      });
+    }
+
+    // v2: past the Committee the approver says who amends the request.
+    if (isV2(req) && POST_COMMITTEE_STAGES.includes(req.status)) {
+      return transaction(async (conn) => {
+        const result = await this._sendBack(
+          conn, req, user, req.status, returnTo, comments || 'Rejected (no reason given)'
+        );
+        return { success: true, ...result };
+      });
     }
 
     // The dept-approval decision — approve or reject — belongs to the Lead/HOD of the
@@ -986,18 +1284,22 @@ class ProcurementService {
       await this._applyAward(conn, requestId, award, user);
 
       if (bypassCommittee) {
+        // v2: the department confirms the award before Finance sees it.
+        const next = isV2(req) ? PROC_STATUS.PENDING_DEPT_CONFIRMATION : PROC_STATUS.PENDING_FINAL_FINANCE;
         await conn.execute(
-          `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', procurement_assigned_at=NOW(), committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
-          [requestId]
+          `UPDATE proc_requests SET status=?, procurement_assigned_at=NOW(), committee_reviewed_at=NOW(), updated_at=NOW() WHERE id=?`,
+          [next, requestId]
         );
         await conn.execute(
           `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
-           VALUES (?, ?, ?, 'COMMITTEE_BYPASSED', 'PENDING_PROCUREMENT', 'PENDING_FINAL_FINANCE', ?)`,
-          [requestId, user.id, user.role,
-           `${award.split ? 'Awarded total' : 'Quotation total'} (USD ${award.amount.toFixed(2)}) is below the USD ${COMMITTEE_BYPASS_THRESHOLD_USD} threshold — Committee review bypassed, forwarded directly to Finance`
+           VALUES (?, ?, ?, 'COMMITTEE_BYPASSED', 'PENDING_PROCUREMENT', ?, ?)`,
+          [requestId, user.id, user.role, next,
+           `${award.split ? 'Awarded total' : 'Quotation total'} (USD ${award.amount.toFixed(2)}) is below the USD ${COMMITTEE_BYPASS_THRESHOLD_USD} threshold — Committee review bypassed, forwarded directly to `
+           + (isV2(req) ? 'the department for confirmation' : 'Finance')
            + (award.split ? `. ${award.summary}` : '')]
         );
-        return { success: true, bypassed: true, status: 'PENDING_FINAL_FINANCE' };
+        if (isV2(req)) this._notifyDeptConfirmation(req);
+        return { success: true, bypassed: true, status: next };
       }
 
       // Standard flow — send to committee
@@ -1048,13 +1350,15 @@ class ProcurementService {
       await conn.execute('DELETE FROM proc_committee_votes WHERE request_id = ?', [requestId]);
       await conn.execute('DELETE FROM proc_high_value_approvals WHERE request_id = ?', [requestId]);
       await conn.execute(
-        `UPDATE proc_requests SET status='PENDING_PROCUREMENT', committee_reviewed_at=NULL, updated_at=NOW() WHERE id=?`,
+        `UPDATE proc_requests SET status='PENDING_PROCUREMENT', committee_reviewed_at=NULL, dept_confirmed_at=NULL,
+           rejected_from_status=NULL, returned_to=NULL, updated_at=NOW() WHERE id=?`,
         [requestId]
       );
       await this._logEvent(
         conn, requestId, user, 'RECALLED_TO_PROCUREMENT', req.status, PROC_STATUS.PENDING_PROCUREMENT,
         `Recalled to Procurement from ${req.status.replace(/_/g, ' ').toLowerCase()}: ${String(reason).trim()}`
       );
+      await this._refreshFloatTrail(conn, req);
       return { success: true, status: PROC_STATUS.PENDING_PROCUREMENT };
     });
   }
@@ -1075,6 +1379,7 @@ class ProcurementService {
     if (!['APPROVED', 'REJECTED'].includes(decision)) {
       throw new Error('Decision must be APPROVED or REJECTED');
     }
+    if (decision === 'APPROVED') await this._assertNoOverduePop(user);
 
     // Fetch user's department code for informational/audit purposes only
     const [userRow] = await query(
@@ -1091,6 +1396,7 @@ class ProcurementService {
     const highValue = await this.isHighValueRequest(requestId);
 
     return transaction(async (conn) => {
+      if (decision === 'APPROVED') await this._assertFundsAvailable(conn, req, 'vote to approve this request');
       // Check if this voter has already cast a vote on this request
       const [existingVote] = await conn.execute(
         'SELECT id FROM proc_committee_votes WHERE request_id = ? AND voter_id = ?',
@@ -1138,7 +1444,7 @@ class ProcurementService {
       // still needs the Super Admin and the owning department's Lead/HOP.
       const onwardStatus = highValue.isHighValue
         ? PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL
-        : PROC_STATUS.PENDING_FINAL_FINANCE;
+        : isV2(req) ? PROC_STATUS.PENDING_DEPT_CONFIRMATION : PROC_STATUS.PENDING_FINAL_FINANCE;
 
       const advance = async (logComment, resultMessage) => {
         await conn.execute(
@@ -1157,13 +1463,15 @@ class ProcurementService {
           notificationService.onProcurementHighValuePending(
             requestId, req.request_code, highValue.amount
           ).catch(() => {});
+        } else if (onwardStatus === PROC_STATUS.PENDING_DEPT_CONFIRMATION) {
+          this._notifyDeptConfirmation(req);
         }
         return { success: true, status: onwardStatus, highValue: highValue.isHighValue, message: resultMessage };
       };
 
       const onwardLabel = highValue.isHighValue
-        ? 'the Super Admin and the Finance Lead / Head of Department for approval'
-        : 'Finance for final approval';
+        ? 'the Super Admin and the Finance Head of Department for approval'
+        : isV2(req) ? 'the department for confirmation' : 'Finance for final approval';
 
       // An ADMIN acting at the committee stage carries the committee outright.
       if (user.role === ROLES.ADMIN && decision === 'APPROVED') {
@@ -1177,8 +1485,8 @@ class ProcurementService {
         return advance(
           `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee votes received — forwarded to ${onwardLabel}`,
           highValue.isHighValue
-            ? `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. This request is USD ${highValue.amount.toFixed(2)} — recommended for approval and forwarded to the Super Admin and the Finance Lead / Head of Department.`
-            : `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. Request forwarded to Finance for final approval.`
+            ? `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. This request is USD ${highValue.amount.toFixed(2)} — recommended for approval and forwarded to the Super Admin and the Finance Head of Department.`
+            : `${COMMITTEE_APPROVALS_REQUIRED} Procurement Committee approvals received. Request forwarded to ${onwardLabel}.`
         );
       }
 
@@ -1215,10 +1523,10 @@ class ProcurementService {
   _highValueSeatFor(user, request) {
     if (user.role === ROLES.ADMIN) return HV_SEAT.SUPER_ADMIN;
 
-    if ([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role) &&
-        user.department_code === FINANCE_DEPT_CODE) {
-      // Either the Lead or the Head of Department of Finance may fill the seat —
-      // whichever acts first settles it.
+    // Only Finance's Head of Department fills the second seat. Finance's Lead,
+    // and every other Lead / Head of Department — Admin & HR included — may
+    // view a high-value request but not decide it.
+    if (user.role === ROLES.HEAD_OF_PROGRAMS && user.department_code === FINANCE_DEPT_CODE) {
       return HV_SEAT.FINANCE;
     }
     return null;
@@ -1241,7 +1549,7 @@ class ProcurementService {
    * Both seats must approve before the request reaches Finance; a rejection by
    * either sends it back to be amended and resubmitted.
    */
-  async highValueDecision(requestId, decision, user, comments = '') {
+  async highValueDecision(requestId, decision, user, comments = '', returnTo = null) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
     if (req.status !== PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL) {
@@ -1250,11 +1558,12 @@ class ProcurementService {
     if (!['APPROVED', 'REJECTED'].includes(decision)) {
       throw new Error('Decision must be APPROVED or REJECTED');
     }
+    if (decision === 'APPROVED') await this._assertNoOverduePop(user);
 
     const seat = this._highValueSeatFor(user, req);
     if (!seat) {
       throw new Error(
-        'Only the Super Admin or the Finance Department Lead / Head of Department may approve a high-value request'
+        'Only the Super Admin or the Finance Head of Department may approve or reject a high-value request'
       );
     }
     if (decision === 'REJECTED' && !String(comments || '').trim()) {
@@ -1273,9 +1582,17 @@ class ProcurementService {
         [requestId, seat, user.id, user.role, user.department_id || null, decision, comments || null]
       );
 
-      const seatLabel = seat === HV_SEAT.SUPER_ADMIN ? 'Super Admin' : 'Finance Lead / Head of Department';
+      const seatLabel = seat === HV_SEAT.SUPER_ADMIN ? 'Super Admin' : 'Finance Head of Department';
 
       // ── Rejection: stop here. The request goes back to be amended. ──────────
+      if (decision === 'REJECTED' && isV2(req)) {
+        // v2: the approver says who amends it — Procurement or the requester.
+        const result = await this._sendBack(
+          conn, req, user, PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL, returnTo,
+          `${seatLabel} rejected: ${comments}`, 'HIGH_VALUE_REJECTED'
+        );
+        return { success: true, ...result };
+      }
       if (decision === 'REJECTED') {
         await conn.execute(
           `UPDATE proc_requests
@@ -1297,24 +1614,26 @@ class ProcurementService {
       }
 
       // ── Approval: advance only when BOTH seats have approved. ──────────────
+      await this._assertFundsAvailable(conn, req);
       const [rows] = await conn.execute(
         `SELECT seat, decision FROM proc_high_value_approvals WHERE request_id = ?`,
         [requestId]
       );
       const approvedSeats = new Set(rows.filter(r => r.decision === 'APPROVED').map(r => r.seat));
       const bothApproved = approvedSeats.has(HV_SEAT.SUPER_ADMIN) && approvedSeats.has(HV_SEAT.FINANCE);
+      const afterHighValue = isV2(req) ? PROC_STATUS.PENDING_DEPT_CONFIRMATION : PROC_STATUS.PENDING_FINAL_FINANCE;
 
       await conn.execute(
         `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
          VALUES (?, ?, ?, 'HIGH_VALUE_APPROVED', ?, ?, ?)`,
         [requestId, user.id, user.role, PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
-         bothApproved ? PROC_STATUS.PENDING_FINAL_FINANCE : PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
+         bothApproved ? afterHighValue : PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL,
          `${seatLabel} approved${comments ? `: ${comments}` : ''}`]
       );
 
       if (!bothApproved) {
         const waitingOn = approvedSeats.has(HV_SEAT.SUPER_ADMIN)
-          ? 'the Finance Lead / Head of Department'
+          ? 'the Finance Head of Department'
           : 'the Super Admin';
         return {
           success: true,
@@ -1326,13 +1645,15 @@ class ProcurementService {
 
       await conn.execute(
         `UPDATE proc_requests SET status=?, updated_at=NOW() WHERE id=?`,
-        [PROC_STATUS.PENDING_FINAL_FINANCE, requestId]
+        [afterHighValue, requestId]
       );
+      if (isV2(req)) this._notifyDeptConfirmation(req);
       return {
         success: true,
-        status: PROC_STATUS.PENDING_FINAL_FINANCE,
+        status: afterHighValue,
         approvedSeats: [...approvedSeats],
-        message: 'Both the Super Admin and the Finance Lead / Head of Department have approved. Forwarded to Finance for final approval.'
+        message: 'Both the Super Admin and the Finance Head of Department have approved. Forwarded to '
+          + (isV2(req) ? 'the department for confirmation.' : 'Finance for final approval.')
       };
     });
   }
@@ -1360,7 +1681,7 @@ class ProcurementService {
    * often settled in batches, so more than one may be attached here, and further
    * batches can be added afterwards via addProofOfPayment().
    */
-  async finalFinanceApproval(requestId, user, comments = '', popFiles = []) {
+  async finalFinanceApproval(requestId, user, comments = '', popFiles = [], payment = {}) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
     if (req.status !== 'PENDING_FINAL_FINANCE') {
@@ -1368,6 +1689,11 @@ class ProcurementService {
     }
     if (!canActAsProcFinance(user)) {
       throw new Error('Only Finance (the Finance Clerk or the Finance Lead / Head of Department) can give final approval');
+    }
+    // v2: Finance approves first; the payment and its proof follow.
+    if (isV2(req)) {
+      await this._assertNoOverduePop(user);
+      return this._financeApproveV2(req, user, comments, popFiles, payment);
     }
     if (!popFiles.length) {
       throw new Error('At least one Proof of Payment (POP) document must be uploaded before final approval');
@@ -1395,21 +1721,1044 @@ class ProcurementService {
         [requestId, user.id, user.role, comments || 'Final finance approval granted. Payment authorised.']
       );
 
-      // Auto-update vendor rating: increment by 1 (max 5) for every awarded
-      // vendor — a split award has more than one.
-      const [selectedVendors] = await conn.execute(
-        `SELECT DISTINCT vendor_id FROM proc_quotations WHERE request_id = ? AND is_selected = TRUE AND vendor_id IS NOT NULL`,
-        [requestId]
-      );
-      for (const { vendor_id: vendorId } of selectedVendors) {
-        await conn.execute(
-          `UPDATE proc_vendors SET rating = LEAST(5.0, COALESCE(rating, 0) + 1.0), updated_at=NOW() WHERE id=?`,
-          [vendorId]
-        );
-      }
+      // A supplier's star rating is Procurement's assessment of how well they
+      // perform, set on the vendor record. It used to go up by one star on
+      // every payment, which put every regular supplier at five stars however
+      // they had performed, so it is no longer changed here.
 
       return { success: true };
     });
+  }
+
+  // ============================================================
+  // WORKFLOW V2 — department confirmation, send-backs, payment
+  // ============================================================
+
+  /**
+   * The department desk: the Lead / Head of Department of the department that
+   * owns the project — the same people who approved the request first — or
+   * the General Secretary for a Head of Department's own request.
+   */
+  _assertDeptDesk(req, user) {
+    if (req.is_gs_track) {
+      if (user.role !== ROLES.ADMIN) {
+        throw new Error("A Head of Department's purchase request is confirmed by the General Secretary");
+      }
+      return;
+    }
+    // Decided by the department the partner's project belongs to — not the
+    // requester's department, and not anyone else's Lead / Head of Department,
+    // whatever their other powers (Finance, Admin & HR, Super Admin).
+    if (![ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role)) {
+      throw new Error('Only the Department Lead or Head of Department of the department that owns the project can act at this stage');
+    }
+    const owningDepartmentId = Number(req.routing_department_id || req.department_id);
+    if (owningDepartmentId !== Number(user.department_id)) {
+      throw new Error('This request must be confirmed by the Department Lead / Head of Department of the department that owns the selected project');
+    }
+  }
+
+  _notifyDeptConfirmation(req) {
+    notificationService.onProcurementAwaitingDeptConfirmation(
+      req.id, req.request_code, req.requester_id,
+      Number(req.routing_department_id || req.department_id), Boolean(req.is_gs_track)
+    ).catch(() => {});
+  }
+
+  /**
+   * What the award changed against what the department asked for, item by
+   * item. The department reads this at confirmation: when nothing changed it
+   * simply confirms; when something did, it confirms the change or sends the
+   * request back.
+   */
+  _awardComparison(items) {
+    const awarded = (items || []).some((i) => i.actual_quotation_id != null || i.actual_unit_price != null);
+    if (!awarded) return null;
+    const money = (v) => `$${Number(v || 0).toFixed(2)}`;
+    const changes = [];
+    let estimated = 0;
+    let actual = 0;
+    for (const it of items) {
+      const est = Number(it.quantity || 0) * Number(it.estimated_unit_price || 0);
+      estimated += est;
+      if (Number(it.is_available) !== 1) {
+        changes.push(`"${this._short(it.item_description, 60)}" is not being supplied (estimated ${money(est)})`);
+        continue;
+      }
+      const act = it.actual_total != null ? Number(it.actual_total) : est;
+      actual += act;
+      if (toCents(it.actual_unit_price ?? it.estimated_unit_price) !== toCents(it.estimated_unit_price)) {
+        changes.push(`"${this._short(it.item_description, 60)}": ${money(it.estimated_unit_price)} each estimated → ${money(it.actual_unit_price)} awarded`);
+      }
+    }
+    return {
+      estimated_total: Math.round(estimated * 100) / 100,
+      awarded_total: Math.round(actual * 100) / 100,
+      has_changes: changes.length > 0,
+      changes
+    };
+  }
+
+  /** Paid, outstanding and the linked float, for a v2 request. */
+  async _paymentSummary(requestId, request) {
+    let batches = [];
+    try {
+      batches = await this.getPaymentBatches(requestId);
+    } catch (_) { /* migration not yet run */ }
+    const paid = batches.filter((b) => !b.reversed_at).reduce((sum, b) => sum + Number(b.amount || 0), 0);
+    const payable = request.payable_amount != null ? Number(request.payable_amount) : null;
+    let floatRequest = null;
+    if (request.float_request_id) {
+      const rows = await query(
+        'SELECT id, request_code, status, total_amount FROM requests WHERE id = ?',
+        [request.float_request_id]
+      );
+      floatRequest = rows[0] || null;
+    }
+    return {
+      payment_batches: batches,
+      paid_amount: Math.round(paid * 100) / 100,
+      outstanding_amount: payable != null ? Math.round((payable - paid) * 100) / 100 : null,
+      float_request: floatRequest
+    };
+  }
+
+  async getPaymentBatches(requestId) {
+    return query(
+      `SELECT b.*, u.first_name, u.last_name,
+              ru.first_name AS reversed_by_first_name, ru.last_name AS reversed_by_last_name,
+              (SELECT COUNT(*) FROM proc_request_pops p WHERE p.batch_id = b.id) AS pop_count
+         FROM proc_payment_batches b
+         LEFT JOIN users u ON u.id = b.paid_by
+         LEFT JOIN users ru ON ru.id = b.reversed_by
+        WHERE b.request_id = ?
+        ORDER BY b.batch_no ASC`,
+      [requestId]
+    );
+  }
+
+  /**
+   * Send a request back from a post-Committee stage. The approver chooses who
+   * amends it: Procurement (quotations or award) or the requester (the request
+   * itself). Either way, once the fix is resubmitted it returns to `fromStage`.
+   */
+  async _sendBack(conn, req, user, fromStage, returnTo, reason, action = 'REJECTED') {
+    const target = String(returnTo || '').toUpperCase();
+    if (!Object.values(RETURN_TO).includes(target)) {
+      throw new Error('Say who should amend this request: the Procurement team or the requester');
+    }
+    const toProcurement = target === RETURN_TO.PROCUREMENT;
+    const newStatus = toProcurement ? PROC_STATUS.RETURNED_TO_PROCUREMENT : PROC_STATUS.REJECTED;
+
+    await conn.execute(
+      `UPDATE proc_requests
+          SET status=?, rejection_reason=?, rejected_from_status=?, returned_to=?, updated_at=NOW()
+        WHERE id=?`,
+      [newStatus, reason, fromStage, target, req.id]
+    );
+    await this._logEvent(
+      conn, req.id, user, action, fromStage, newStatus,
+      `${reason} — returned to ${toProcurement ? 'the Procurement team' : 'the requester'} to amend; `
+      + `it comes back to ${stageLabel(fromStage)} once resubmitted`
+    );
+
+    await this._refreshFloatTrail(conn, req);
+
+    notificationService.onProcurementReturned(
+      req.id, req.request_code, req.requester_id, toProcurement, stageLabel(fromStage), reason
+    ).catch(() => {});
+
+    return {
+      status: newStatus,
+      message: toProcurement
+        ? `Returned to the Procurement team to amend. It will come back to ${stageLabel(fromStage)} once they resubmit it.`
+        : `Returned to the requester to amend. It will come back to ${stageLabel(fromStage)} once they resubmit it.`
+    };
+  }
+
+  /**
+   * Department confirmation: the department that asked for the purchase checks
+   * the award. Confirming sends it to Finance; the request must still fit the
+   * budget at the awarded prices.
+   */
+  async confirmDepartment(requestId, user, comments = '') {
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req) throw new Error('Request not found');
+    if (req.status !== PROC_STATUS.PENDING_DEPT_CONFIRMATION) {
+      throw new Error('Request is not awaiting department confirmation');
+    }
+    this._assertDeptDesk(req, user);
+    await this._assertNoOverduePop(user);
+
+    const comparison = req.award_comparison;
+    const award = await this.isHighValueRequest(requestId);
+    return transaction(async (conn) => {
+      await this._assertFundsAvailable(conn, req, 'confirm this award');
+      await conn.execute(
+        `UPDATE proc_requests SET status=?, dept_confirmed_at=NOW(), updated_at=NOW() WHERE id=?`,
+        [PROC_STATUS.PENDING_FINAL_FINANCE, requestId]
+      );
+      const summary = comparison && comparison.has_changes
+        ? `Award confirmed with changes from the original request — ${comparison.changes.join('; ')}`
+        : 'Award confirmed — no changes from the original request';
+      await this._logEvent(
+        conn, requestId, user, 'DEPT_CONFIRMED', PROC_STATUS.PENDING_DEPT_CONFIRMATION, PROC_STATUS.PENDING_FINAL_FINANCE,
+        comments ? `${summary}. ${comments}` : summary
+      );
+      // The float requisition exists from here on — the document Finance and
+      // the other teams process the payment from. It waits on Finance.
+      const float = await this._syncFloat(
+        conn, { ...req, status: PROC_STATUS.PENDING_FINAL_FINANCE }, user, award.amount, 'PENDING_FINANCE_APPROVAL'
+      );
+      return { success: true, status: PROC_STATUS.PENDING_FINAL_FINANCE, float_request_id: float.id, float_request_code: float.code };
+    });
+  }
+
+  /**
+   * Procurement has amended a request sent back to it after the Committee and
+   * sends it on. It returns to the stage that sent it back — except that a
+   * high-value approval only counts for the award it was given on, so a
+   * changed award at or above the threshold goes to the high-value approvers
+   * again, and one that dropped below it no longer needs them.
+   */
+  async resubmitFromProcurement(requestId, selectedQuotationId, user, comments = '', awards = null) {
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req) throw new Error('Request not found');
+    if (req.status !== PROC_STATUS.RETURNED_TO_PROCUREMENT) {
+      throw new Error('This request has not been returned to Procurement');
+    }
+    if (![ROLES.PROCUREMENT_OFFICER, ROLES.ADMIN].includes(user.role)) {
+      throw new Error('Only Procurement Officers can resubmit a returned request');
+    }
+    const quotations = await query('SELECT id FROM proc_quotations WHERE request_id = ?', [requestId]);
+    if (!quotations.length) throw new Error('At least one quotation must exist before resubmitting');
+
+    let quotationId = selectedQuotationId;
+    let itemAwards = Array.isArray(awards) && awards.length ? awards : null;
+    if (!quotationId && !itemAwards) {
+      const existing = await this._currentAward(requestId);
+      quotationId = existing?.quotationId || null;
+      itemAwards = existing?.awards || null;
+    }
+    const award = await this._resolveAward(
+      requestId, quotationId, itemAwards, 'Choose the quotation to award before resubmitting'
+    );
+    const isHighValue = award.currency === 'USD' && award.amount >= HIGH_VALUE_THRESHOLD_USD;
+    const awardChanged = toCents(award.amount) !== toCents(req.selected_quotation_amount || 0);
+
+    return transaction(async (conn) => {
+      await this._applyAward(conn, requestId, award, user);
+
+      let target = POST_COMMITTEE_STAGES.includes(req.rejected_from_status)
+        ? req.rejected_from_status
+        : PROC_STATUS.PENDING_DEPT_CONFIRMATION;
+
+      if (target === PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL || (isHighValue && awardChanged)) {
+        await conn.execute('DELETE FROM proc_high_value_approvals WHERE request_id = ?', [requestId]);
+      }
+      if (target === PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL && !isHighValue) {
+        target = PROC_STATUS.PENDING_DEPT_CONFIRMATION;
+      } else if (target !== PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL && isHighValue) {
+        const [hv] = await conn.execute(
+          `SELECT COUNT(DISTINCT seat) AS seats FROM proc_high_value_approvals
+            WHERE request_id = ? AND decision = 'APPROVED'`,
+          [requestId]
+        );
+        if (Number(hv[0].seats) < 2) target = PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL;
+      }
+
+      await conn.execute(
+        `UPDATE proc_requests
+            SET status=?, rejected_from_status=NULL, returned_to=NULL, rejection_reason=NULL, updated_at=NOW()
+          WHERE id=?`,
+        [target, requestId]
+      );
+      await this._logEvent(
+        conn, requestId, user, 'RESUBMITTED_BY_PROCUREMENT', PROC_STATUS.RETURNED_TO_PROCUREMENT, target,
+        `${comments || 'Amended by Procurement'} — sent back to ${stageLabel(target)}`
+        + (award.split ? `. ${award.summary}` : '')
+      );
+
+      if (target === PROC_STATUS.PENDING_HIGH_VALUE_APPROVAL) {
+        notificationService.onProcurementHighValuePending(requestId, req.request_code, award.amount).catch(() => {});
+      } else if (target === PROC_STATUS.PENDING_DEPT_CONFIRMATION) {
+        this._notifyDeptConfirmation(req);
+      }
+      return { success: true, status: target, message: `Resubmitted — back with ${stageLabel(target)}` };
+    });
+  }
+
+  /** Payment details Finance enters, checked and normalised. */
+  _parsePayment(payment, outstandingCents, { allowFull = true } = {}) {
+    const mode = String(payment.payment_mode || 'FULL').toUpperCase();
+    if (!['FULL', 'BATCH'].includes(mode)) throw new Error('Payment mode must be FULL or BATCH');
+    let amountCents;
+    if (mode === 'FULL' && allowFull) {
+      amountCents = outstandingCents;
+    } else {
+      const amount = parseFloat(payment.amount);
+      if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter the amount paid in this batch');
+      amountCents = toCents(amount);
+    }
+    if (amountCents > outstandingCents) {
+      throw new Error(
+        `This payment of $${(amountCents / 100).toFixed(2)} is more than the $${(outstandingCents / 100).toFixed(2)} still to be paid`
+      );
+    }
+    const date = String(payment.payment_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) {
+      throw new Error('Payment date is not a valid date');
+    }
+    const reference = String(payment.payment_reference || '').trim().slice(0, 100) || null;
+    const method = String(payment.payment_method || '').trim().toUpperCase();
+    if (!PAYMENT_METHODS[method]) {
+      throw new Error('Choose how this payment was made: bank transfer, cash or mobile money');
+    }
+    const bank = String(payment.bank_name || '').trim().slice(0, 100) || null;
+    if (method === 'BANK' && !bank) throw new Error('Enter the bank this payment was made from');
+    return { mode, amountCents, date, reference, method, bank: method === 'BANK' ? bank : null };
+  }
+
+  /**
+   * Finance approval of a v2 request. Approval and payment are separate steps:
+   * Finance approves the awarded amount, which generates (or approves) the
+   * linked float requisition and reserves the money on the budget lines for
+   * 10 working days. The payments follow, each with its amount, method and
+   * proof of payment; the first must come within 5 working days or the
+   * approver cannot approve further purchase requests.
+   *
+   * A payment sent with the approval (popFiles + payment details) is still
+   * recorded straight away, so a one-step approve-and-pay keeps working.
+   */
+  async _financeApproveV2(req, user, comments, popFiles, payment) {
+    const requestId = req.id;
+    const award = await this.isHighValueRequest(requestId);
+    const payableCents = toCents(award.amount);
+    if (payableCents <= 0) throw new Error('This request has no awarded amount to pay');
+    const payNow = popFiles.length ? this._parsePayment({ ...payment, payment_mode: 'BATCH', amount: payment.amount || payableCents / 100 }, payableCents) : null;
+
+    const now = new Date();
+    const popDue = reservations.addWorkingDays(now, reservations.POP_DEADLINE_WORKING_DAYS);
+    const reservedUntil = reservations.addWorkingDays(now, reservations.RESERVATION_WORKING_DAYS);
+    const day = (d) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const usd = (cents) => `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    const result = await transaction(async (conn) => {
+      const [locked] = await conn.execute('SELECT status FROM proc_requests WHERE id = ? FOR UPDATE', [requestId]);
+      if (locked[0]?.status !== PROC_STATUS.PENDING_FINAL_FINANCE) {
+        throw new Error('Request is no longer pending final finance approval — refresh and try again');
+      }
+      await this._assertFundsAvailable(conn, req, 'approve this request');
+
+      await conn.execute(
+        `UPDATE proc_requests
+            SET status=?, final_finance_approved_at=NOW(), final_finance_approved_by=?, pop_due_at=?,
+                payment_mode=NULL, payable_amount=?, updated_at=NOW()
+          WHERE id=?`,
+        [PROC_STATUS.PENDING_PAYMENT, user.id, popDue, payableCents / 100, requestId]
+      );
+      await this._logEvent(
+        conn, requestId, user, 'FINAL_APPROVED', PROC_STATUS.PENDING_FINAL_FINANCE, PROC_STATUS.PENDING_PAYMENT,
+        `${comments || 'Finance approval granted.'} Approved for payment: ${usd(payableCents)}. `
+        + `Proof of payment due by ${day(popDue)} (${reservations.POP_DEADLINE_WORKING_DAYS} working days).`
+      );
+
+      // The float was generated at department confirmation (or is created now
+      // for a request confirmed before that existed). Finance's approval moves
+      // it to Approved, after the approval is logged so its trail includes it.
+      const float = await this._syncFloat(conn, req, user, payableCents / 100, 'APPROVED');
+
+      // Hold the money until it is paid.
+      const impact = await this.getBudgetImpact(requestId, conn);
+      const heldCents = await reservations.syncPrReservation(conn, requestId, impact, user, { expiresAt: reservedUntil });
+      await this._logEvent(
+        conn, requestId, user, 'FUNDS_RESERVED', PROC_STATUS.PENDING_PAYMENT, PROC_STATUS.PENDING_PAYMENT,
+        `${usd(heldCents)} reserved on ${impact.filter((l) => l.still_needed > 0).map((l) => `${l.budget_code} (${usd(toCents(l.still_needed))})`).join(', ')} `
+        + `until ${day(reservedUntil)} (${reservations.RESERVATION_WORKING_DAYS} working days). Each payment is deducted from the budget as it is recorded; `
+        + 'if nothing is paid by then the request is rejected automatically and the funds released.'
+      );
+      await this._refreshFloatTrail(conn, req);
+
+      let batch = {};
+      if (payNow) {
+        batch = await this._recordPaymentBatch(
+          conn, { ...req, status: PROC_STATUS.PENDING_PAYMENT }, float, payNow, comments, popFiles, user, payableCents
+        );
+      }
+      return {
+        success: true,
+        status: batch.status || PROC_STATUS.PENDING_PAYMENT,
+        float_request_id: float.id,
+        float_request_code: float.code,
+        payable_amount: payableCents / 100,
+        outstanding_amount: batch.outstanding_amount ?? payableCents / 100,
+        completed: Boolean(batch.completed),
+        pop_due_at: popDue,
+        reserved_until: reservedUntil,
+        ...batch
+      };
+    });
+
+    notificationService.onProcurementApprovedForPayment(
+      requestId, req.request_code, req.requester_id, user.id, popDue, reservedUntil
+    ).catch(() => {});
+    if (payNow) {
+      notificationService.onProcurementPaid(
+        requestId, req.request_code, req.requester_id, result.float_request_code, result.completed
+      ).catch(() => {});
+    }
+    return result;
+  }
+
+  /**
+   * Withdraw Finance's approval (sent back, or the reservation expired): the
+   * hold is closed, the approval stamps cleared and the float returns to
+   * awaiting Finance. Only valid while nothing has been paid.
+   */
+  async _undoFinanceApproval(conn, req, user, reason, closeAs = 'RELEASED') {
+    const cents = await reservations.closeReservation(conn, 'PR', req.id, closeAs, user, reason);
+    await conn.execute(
+      `UPDATE proc_requests
+          SET final_finance_approved_at=NULL, final_finance_approved_by=NULL, pop_due_at=NULL,
+              payable_amount=NULL, payment_mode=NULL, updated_at=NOW()
+        WHERE id=?`,
+      [req.id]
+    );
+    if (cents > 0) {
+      await this._logEvent(
+        conn, req.id, user, 'FUNDS_RELEASED', req.status, req.status,
+        `Reservation of $${(cents / 100).toFixed(2)} released back to the budget lines — ${reason}`
+      );
+    }
+    if (req.float_request_id) {
+      const [rows] = await conn.execute('SELECT status FROM requests WHERE id = ?', [req.float_request_id]);
+      if (rows.length && rows[0].status === 'APPROVED') {
+        await conn.execute(
+          `UPDATE requests SET status='PENDING_FINANCE_APPROVAL', finance_approved_at=NULL, updated_at=NOW(3), version=version+1 WHERE id=?`,
+          [req.float_request_id]
+        );
+        await conn.execute(
+          `INSERT INTO approval_logs (request_id, approver_id, approver_role, action, previous_status, new_status, comments)
+           VALUES (?, ?, ?, 'APPROVAL_WITHDRAWN', 'APPROVED', 'PENDING_FINANCE_APPROVAL', ?)`,
+          [req.float_request_id, user.id, user.role, `Finance approval of ${req.request_code} withdrawn — ${reason}`]
+        );
+      }
+    }
+    return cents;
+  }
+
+  /**
+   * Called by the reservation scheduler once a request's 10 working days have
+   * run out. A request already being paid has no expiry; one with nothing paid
+   * is rejected back to its requester and the funds released. Returns true
+   * when it was rejected.
+   */
+  async expireReservation(requestId, system, expiresAt) {
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req || req.status !== PROC_STATUS.PENDING_PAYMENT) return false;
+    if ((req.payment_batches || []).some((b) => !b.reversed_at)) {
+      await query(
+        "UPDATE budget_reservations SET expires_at = NULL WHERE source_type = 'PR' AND source_id = ? AND status = 'ACTIVE'",
+        [requestId]
+      );
+      return false;
+    }
+    const until = new Date(expiresAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const reason = `Not paid within ${reservations.RESERVATION_WORKING_DAYS} working days of Finance approval (funds were reserved until ${until})`;
+
+    const done = await transaction(async (conn) => {
+      const [locked] = await conn.execute('SELECT status FROM proc_requests WHERE id = ? FOR UPDATE', [requestId]);
+      if (locked[0]?.status !== PROC_STATUS.PENDING_PAYMENT) return false;
+      const [paid] = await conn.execute(
+        'SELECT COUNT(*) AS n FROM proc_payment_batches WHERE request_id = ? AND reversed_at IS NULL', [requestId]
+      );
+      if (Number(paid[0].n) > 0) return false;
+
+      await this._undoFinanceApproval(conn, req, system, 'the reservation expired', 'EXPIRED');
+      await conn.execute(
+        `UPDATE proc_requests
+            SET status='REJECTED', rejection_reason=?, rejected_from_status=?, returned_to=?, updated_at=NOW()
+          WHERE id=?`,
+        [reason, PROC_STATUS.PENDING_FINAL_FINANCE, RETURN_TO.REQUESTER, requestId]
+      );
+      await this._logEvent(
+        conn, requestId, system, 'AUTO_REJECTED', PROC_STATUS.PENDING_PAYMENT, PROC_STATUS.REJECTED,
+        `Automatically rejected by the system: ${reason}. The reserved funds were released. `
+        + 'Once the requester resubmits it, it returns to Finance for approval.'
+      );
+      if (req.float_request_id) {
+        await conn.execute(
+          `UPDATE requests SET status='REJECTED', updated_at=NOW(3), version=version+1 WHERE id=?`, [req.float_request_id]
+        );
+        await conn.execute(
+          `INSERT INTO approval_logs (request_id, approver_id, approver_role, action, previous_status, new_status, comments)
+           VALUES (?, ?, 'SYSTEM', 'AUTO_REJECTED', 'PENDING_FINANCE_APPROVAL', 'REJECTED', ?)`,
+          [req.float_request_id, system.id, `Automatically rejected with ${req.request_code}: ${reason}`]
+        );
+      }
+      await this._refreshFloatTrail(conn, req);
+      return true;
+    });
+
+    if (done) {
+      notificationService.onReservationExpired(
+        requestId, req.request_code, req.requester_id, 'proc_request', req.final_finance_approved_by
+      ).catch(() => {});
+    }
+    return done;
+  }
+
+  /** A further payment batch on a request Finance has already approved. */
+  async recordPaymentBatch(requestId, user, payment = {}, popFiles = []) {
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req) throw new Error('Request not found');
+    if (!isV2(req) || req.status !== PROC_STATUS.PENDING_PAYMENT) {
+      throw new Error('Payments can only be recorded on an approved request that still has an amount outstanding');
+    }
+    if (!canActAsProcFinance(user)) {
+      throw new Error('Only Finance (the Finance Clerk or the Finance Lead / Head of Department) can record a payment');
+    }
+    if (!popFiles.length) throw new Error('Attach the proof of payment for this batch');
+
+    const result = await transaction(async (conn) => {
+      const [locked] = await conn.execute(
+        'SELECT status, payable_amount, float_request_id FROM proc_requests WHERE id = ? FOR UPDATE', [requestId]
+      );
+      if (locked[0]?.status !== PROC_STATUS.PENDING_PAYMENT) {
+        throw new Error('This request is no longer awaiting payment — refresh and try again');
+      }
+      const [floats] = await conn.execute(
+        'SELECT id, request_code FROM requests WHERE id = ?', [locked[0].float_request_id]
+      );
+      if (!floats.length) throw new Error('The float requisition for this request could not be found');
+
+      const [paidRows] = await conn.execute(
+        'SELECT COALESCE(SUM(amount), 0) AS paid FROM proc_payment_batches WHERE request_id = ? AND reversed_at IS NULL', [requestId]
+      );
+      const payableCents = toCents(locked[0].payable_amount);
+      const outstandingCents = payableCents - toCents(paidRows[0].paid);
+      if (outstandingCents <= 0) throw new Error('Nothing is outstanding on this request');
+      const pay = this._parsePayment({ ...payment, payment_mode: 'BATCH' }, outstandingCents, { allowFull: false });
+
+      return this._recordPaymentBatch(
+        conn, req, { id: floats[0].id, code: floats[0].request_code }, pay,
+        payment.notes || '', popFiles, user, payableCents
+      );
+    });
+
+    notificationService.onProcurementPaid(
+      requestId, req.request_code, req.requester_id, req.float_request?.request_code, result.completed
+    ).catch(() => {});
+    return { success: true, ...result };
+  }
+
+  /**
+   * Finance reverses one payment batch: the money it took from each budget
+   * line goes back (a REVERSAL transaction against the same float, line by
+   * line, exactly as the batch deducted it), the batch is marked reversed —
+   * never deleted, so the trail keeps it — and the request is reopened for
+   * payment. A request that had been paid in full returns to Pending payment
+   * and its float requisition reopens.
+   */
+  async reversePaymentBatch(requestId, batchId, user, reason = '') {
+    if (!canActAsProcFinance(user)) {
+      throw new Error('Only Finance (the Finance Clerk or the Finance Lead / Head of Department) can reverse a payment');
+    }
+    if (!String(reason || '').trim()) throw new Error('Give a reason for reversing this payment');
+    const req = await this.getPurchaseRequestById(requestId);
+    if (!req) throw new Error('Request not found');
+    if (!isV2(req) || ![PROC_STATUS.PENDING_PAYMENT, PROC_STATUS.COMPLETED].includes(req.status)) {
+      throw new Error('Only a payment on an approved purchase request can be reversed');
+    }
+
+    const result = await transaction(async (conn) => {
+      await conn.execute('SELECT id FROM proc_requests WHERE id = ? FOR UPDATE', [requestId]);
+      const [batches] = await conn.execute(
+        'SELECT * FROM proc_payment_batches WHERE id = ? AND request_id = ? FOR UPDATE', [batchId, requestId]
+      );
+      const batch = batches[0];
+      if (!batch) throw new Error('Payment batch not found');
+      if (batch.reversed_at) throw new Error(`Payment batch ${batch.batch_no} has already been reversed`);
+
+      const [floats] = await conn.execute('SELECT id, request_code, status FROM requests WHERE id = ?', [batch.float_request_id]);
+      const float = floats[0];
+      if (!float) throw new Error('The float requisition for this payment could not be found');
+
+      // The deductions this batch made, one per budget line.
+      const [deductions] = await conn.execute(
+        `SELECT id, budget_line_id, amount FROM budget_transactions
+          WHERE request_id = ? AND transaction_type = 'DEDUCTION' AND description LIKE ?`,
+        [float.id, `Payment batch ${batch.batch_no} for ${req.request_code} %`]
+      );
+      const deductedCents = deductions.reduce((s, d) => s + toCents(d.amount), 0);
+      if (deductedCents !== toCents(batch.amount)) {
+        throw new Error(
+          `The budget deductions for payment batch ${batch.batch_no} do not add up to its amount — reverse it manually with Finance support`
+        );
+      }
+
+      for (const d of deductions) {
+        const amount = Number(d.amount);
+        const [bl] = await conn.execute(
+          'SELECT (allocated_amount - spent_amount) AS balance, donor_id FROM budget_lines WHERE id = ? FOR UPDATE',
+          [d.budget_line_id]
+        );
+        if (!bl.length) continue;
+        const balanceBefore = parseFloat(bl[0].balance);
+        await conn.execute(
+          'UPDATE budget_lines SET spent_amount = spent_amount - ?, updated_at = NOW() WHERE id = ?',
+          [amount, d.budget_line_id]
+        );
+        await conn.execute(
+          `INSERT INTO budget_transactions
+             (budget_line_id, request_id, transaction_type, amount, balance_before, balance_after, description, performed_by)
+           VALUES (?, ?, 'REVERSAL', ?, ?, ?, ?, ?)`,
+          [d.budget_line_id, float.id, amount, balanceBefore, Math.round((balanceBefore + amount) * 100) / 100,
+           `Reversal of payment batch ${batch.batch_no} for ${req.request_code} (float ${float.request_code}): ${String(reason).trim().slice(0, 200)}`,
+           user.id]
+        );
+        if (bl[0].donor_id) {
+          await conn.execute(
+            'UPDATE donors SET total_spent = total_spent - ?, updated_at = NOW() WHERE id = ?',
+            [amount, bl[0].donor_id]
+          );
+        }
+      }
+
+      await conn.execute(
+        'UPDATE proc_payment_batches SET reversed_at = NOW(), reversed_by = ?, reversal_reason = ? WHERE id = ?',
+        [user.id, String(reason).trim().slice(0, 500), batch.id]
+      );
+
+      const [paidRows] = await conn.execute(
+        'SELECT COALESCE(SUM(amount), 0) AS paid FROM proc_payment_batches WHERE request_id = ? AND reversed_at IS NULL',
+        [requestId]
+      );
+      const paidCents = toCents(paidRows[0].paid);
+      const outstandingCents = toCents(req.payable_amount) - paidCents;
+
+      // Nothing paid any more: the request is back to approved-and-unpaid, so
+      // the reservation window and the proof-of-payment deadline start again.
+      const nothingPaid = paidCents <= 0;
+      const popDue = nothingPaid ? reservations.addWorkingDays(new Date(), reservations.POP_DEADLINE_WORKING_DAYS) : null;
+      await conn.execute(
+        `UPDATE proc_requests SET status = ?, completed_at = NULL${nothingPaid ? ', pop_due_at = ?' : ''}, updated_at = NOW() WHERE id = ?`,
+        nothingPaid ? [PROC_STATUS.PENDING_PAYMENT, popDue, requestId] : [PROC_STATUS.PENDING_PAYMENT, requestId]
+      );
+      const impact = await this.getBudgetImpact(requestId, conn);
+      const reservedUntil = nothingPaid ? reservations.addWorkingDays(new Date(), reservations.RESERVATION_WORKING_DAYS) : null;
+      const heldCents = await reservations.syncPrReservation(conn, requestId, impact, user, { expiresAt: reservedUntil });
+      await this._logEvent(
+        conn, requestId, user, 'PAYMENT_REVERSED', req.status, PROC_STATUS.PENDING_PAYMENT,
+        `Payment batch ${batch.batch_no} ($${Number(batch.amount).toFixed(2)}) reversed and returned to the budget: ${String(reason).trim()}. `
+        + `$${(outstandingCents / 100).toFixed(2)} now outstanding and reserved again ($${(heldCents / 100).toFixed(2)} held`
+        + (nothingPaid
+          ? ` until ${reservedUntil.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}; proof of payment due by ${popDue.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}).`
+          : ').')
+      );
+
+      // A float closed by the last payment reopens.
+      if (float.status === 'RECONCILED') {
+        await conn.execute(
+          `UPDATE requests SET status = 'APPROVED', completed_at = NULL, updated_at = NOW(3), version = version + 1 WHERE id = ?`,
+          [float.id]
+        );
+      }
+      await conn.execute(
+        `INSERT INTO approval_logs (request_id, approver_id, approver_role, action, previous_status, new_status, comments)
+         VALUES (?, ?, ?, 'PAYMENT_REVERSED', ?, 'APPROVED', ?)`,
+        [float.id, user.id, user.role, float.status,
+         `Payment batch ${batch.batch_no} of ${req.request_code} ($${Number(batch.amount).toFixed(2)}) reversed: ${String(reason).trim()}`]
+      );
+
+      return {
+        batch_no: batch.batch_no,
+        amount: Number(batch.amount),
+        paid_amount: paidCents / 100,
+        outstanding_amount: outstandingCents / 100,
+        status: PROC_STATUS.PENDING_PAYMENT
+      };
+    });
+    return { success: true, ...result };
+  }
+
+  /**
+   * Create the float requisition for a Finance-approved purchase request. It is
+   * born approved — the PR's approvals are its approvals, copied onto its trail
+   * — and carries a reference built from the same partner and project.
+   */
+  async _generateFloat(conn, req, user, payable, status = 'APPROVED') {
+    const code = await generateRequestCode(conn, req.donor_id, req.project_id);
+    const justification =
+      `Float requisition generated from purchase request ${req.request_code} — ${req.title}\n\n${req.justification || ''}`.trim();
+
+    const [ins] = await conn.execute(
+      `INSERT INTO requests
+         (request_code, requester_id, department_id, donor_id, project_id, routing_department_id,
+          status, total_amount, justification, priority,
+          submitted_at, lead_approved_at, finance_approved_at,
+          created_at, updated_at, version, source_proc_request_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${status === 'APPROVED' ? 'NOW(3)' : 'NULL'}, NOW(3), NOW(3), 1, ?)`,
+      [code, req.requester_id, req.department_id, req.donor_id, req.project_id,
+       req.routing_department_id || null, status, payable, justification, req.priority || 'MEDIUM',
+       req.submitted_at || null, req.dept_approved_at || null, req.id]
+    );
+    const floatId = ins.insertId;
+    await this._writeFloatItems(conn, floatId, req);
+    await this._copyTrailToFloat(conn, floatId, req);
+    await conn.execute(
+      `INSERT INTO approval_logs (request_id, approver_id, approver_role, action, previous_status, new_status, comments)
+       VALUES (?, ?, ?, 'GENERATED_FROM_PR', NULL, ?, ?)`,
+      [floatId, user.id, user.role, status,
+       `Float requisition generated from purchase request ${req.request_code} when the department confirmed the award. `
+       + 'It is approved and paid through the purchase request — no reconciliation is required.']
+    );
+    return { id: floatId, code };
+  }
+
+  /** The float's items are the PR's awarded items, at the awarded prices. */
+  async _writeFloatItems(conn, floatId, req) {
+    await conn.execute('DELETE FROM request_items WHERE request_id = ?', [floatId]);
+    const [items] = await conn.execute(
+      'SELECT * FROM proc_request_items WHERE request_id = ? AND is_available = 1 ORDER BY id', [req.id]
+    );
+    if (!items.length) throw new Error('No awarded items to pay for on this request');
+    for (const it of items) {
+      if (!it.budget_line_id) {
+        throw new Error(`"${this._short(it.item_description, 60)}" has no budget line — it cannot be paid`);
+      }
+      await conn.execute(
+        `INSERT INTO request_items
+           (request_id, item_description, category, quantity, unit_of_measure, unit_price, budget_line_id, notes, created_at, updated_at)
+         VALUES (?, ?, 'PROCUREMENT', ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
+        [floatId, it.item_description, it.quantity, it.unit_of_measure || 'unit',
+         it.actual_unit_price != null ? it.actual_unit_price : it.estimated_unit_price,
+         it.budget_line_id, `Purchase request ${req.request_code}, item #${it.id}`]
+      );
+    }
+  }
+
+  /**
+   * The PR's trail, mirrored onto its float. Actions are prefixed PR_ so float
+   * statistics (rejections, approver counts) do not count PR decisions twice.
+   * Re-run whenever the PR moves, so the float's trail is always current; the
+   * float's own entries (generation, payments) are left alone.
+   */
+  async _copyTrailToFloat(conn, floatId, req) {
+    await conn.execute("DELETE FROM approval_logs WHERE request_id = ? AND action LIKE 'PR\\_%'", [floatId]);
+    await conn.execute(
+      `INSERT INTO approval_logs
+         (request_id, approver_id, approver_role, action, previous_status, new_status, comments, created_at)
+       SELECT ?, actor_id, actor_role, LEFT(CONCAT('PR_', action), 50), previous_status, new_status,
+              CONCAT('[', ?, '] ', COALESCE(comments, '')), created_at
+         FROM proc_approval_logs
+        WHERE request_id = ?
+        ORDER BY created_at ASC, id ASC`,
+      [floatId, req.request_code, req.id]
+    );
+  }
+
+  /**
+   * The PR's float requisition, created on first confirmation and brought up
+   * to date afterwards — a request confirmed again after being sent back keeps
+   * its float and reference number; only the items, amount and status change.
+   *
+   *   PENDING_FINANCE_APPROVAL — confirmed by the department, with Finance
+   *   APPROVED                 — Finance approved; being paid
+   *   RECONCILED               — paid in full (set by the last payment)
+   */
+  async _syncFloat(conn, req, user, payable, status) {
+    const [rows] = await conn.execute(
+      'SELECT id, request_code, status FROM requests WHERE source_proc_request_id = ?', [req.id]
+    );
+    if (!rows.length) {
+      const float = await this._generateFloat(conn, req, user, payable, status);
+      await conn.execute('UPDATE proc_requests SET float_request_id = ? WHERE id = ?', [float.id, req.id]);
+      return float;
+    }
+    const float = { id: rows[0].id, code: rows[0].request_code };
+    await this._writeFloatItems(conn, float.id, req);
+    await conn.execute(
+      `UPDATE requests
+          SET status = ?, total_amount = ?, finance_approved_at = ${status === 'APPROVED' ? 'NOW(3)' : 'NULL'},
+              updated_at = NOW(3), version = version + 1
+        WHERE id = ?`,
+      [status, payable, float.id]
+    );
+    await this._copyTrailToFloat(conn, float.id, req);
+    await conn.execute('UPDATE proc_requests SET float_request_id = ? WHERE id = ?', [float.id, req.id]);
+    return float;
+  }
+
+  /** Keep the float's copy of the trail current after a PR event (send-back, recall). */
+  async _refreshFloatTrail(conn, req) {
+    const [rows] = await conn.execute('SELECT id FROM requests WHERE source_proc_request_id = ?', [req.id]);
+    if (rows.length) await this._copyTrailToFloat(conn, rows[0].id, req);
+  }
+
+  // ============================================================
+  // BUDGET IMPACT — funds must be there before anyone approves
+  // ============================================================
+
+  /**
+   * Per budget line: what this request takes from it, what the line has left,
+   * and whether that is enough. Before the award the estimates are what is
+   * asked for; after it, the awarded prices. Whatever has already been paid on
+   * the request's float is already out of the balance, so only the unpaid part
+   * still has to fit.
+   */
+  async getBudgetImpact(requestId, conn = null) {
+    const run = conn ? (sql, p) => conn.execute(sql, p).then(r => r[0]) : query;
+    const others = reservations.reservedSql('bl', { type: 'PR', id: Number(requestId) });
+    const lines = await run(
+      `SELECT bl.id AS budget_line_id, bl.budget_code, bl.budget_name, bl.allocated_amount, bl.spent_amount,
+              (bl.allocated_amount - bl.spent_amount - ${others}) AS balance,
+              ${others} AS reserved_by_others,
+              SUM(CASE WHEN pri.is_available = 1
+                       THEN pri.quantity * COALESCE(pri.actual_unit_price, pri.estimated_unit_price)
+                       ELSE 0 END) AS request_amount
+         FROM proc_request_items pri
+         JOIN budget_lines bl ON bl.id = pri.budget_line_id
+        WHERE pri.request_id = ?
+        GROUP BY bl.id
+        ORDER BY bl.budget_code`,
+      [requestId]
+    );
+    const paidByLine = new Map();
+    const paid = await run(
+      `SELECT bt.budget_line_id,
+              SUM(CASE WHEN bt.transaction_type = 'DEDUCTION' THEN bt.amount
+                       WHEN bt.transaction_type = 'REVERSAL' THEN -bt.amount ELSE 0 END) AS paid
+         FROM budget_transactions bt
+         JOIN requests r ON r.id = bt.request_id
+        WHERE r.source_proc_request_id = ?
+        GROUP BY bt.budget_line_id`,
+      [requestId]
+    );
+    for (const p of paid) paidByLine.set(Number(p.budget_line_id), Number(p.paid || 0));
+    return lines.map((l) => {
+      const requestCents = toCents(l.request_amount);
+      const paidCents = toCents(paidByLine.get(Number(l.budget_line_id)) || 0);
+      const stillNeededCents = Math.max(0, requestCents - paidCents);
+      const balanceCents = toCents(l.balance);
+      return {
+        budget_line_id: l.budget_line_id,
+        budget_code: l.budget_code,
+        budget_name: l.budget_name,
+        allocated_amount: Number(l.allocated_amount),
+        spent_amount: Number(l.spent_amount),
+        reserved_by_others: Number(l.reserved_by_others || 0),
+        balance: balanceCents / 100,
+        request_amount: requestCents / 100,
+        already_paid: paidCents / 100,
+        still_needed: stillNeededCents / 100,
+        balance_after: (balanceCents - stillNeededCents) / 100,
+        sufficient: stillNeededCents <= balanceCents
+      };
+    });
+  }
+
+  /**
+   * Refuse an approval while any budget line is short. The approver cannot
+   * approve their way past it: Finance must top the line up first.
+   */
+  async _assertFundsAvailable(conn, req, action = 'approve this request') {
+    if (!isV2(req)) return;
+    const impact = await this.getBudgetImpact(req.id, conn);
+    const short = impact.filter((l) => !l.sufficient);
+    if (!short.length) return;
+    const money = (v) => `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const err = new Error(
+      `Insufficient funds — you cannot ${action} until the budget is topped up. `
+      + short.map((l) => `${l.budget_code} has ${money(l.balance)} available but this request needs ${money(l.still_needed)} (short by ${money(l.still_needed - l.balance)})`).join('; ')
+      + '.'
+    );
+    err.insufficientFunds = short;
+    throw err;
+  }
+
+  /**
+   * Record one payment and deduct it from the budget. The amount is spread over
+   * the request's budget lines in proportion to what each line is charged on
+   * the float, so a part-payment draws on every line fairly. Paying the last of
+   * the amount completes the request and closes its float.
+   */
+  async _recordPaymentBatch(conn, req, float, pay, notes, popFiles, user, payableCents) {
+    // Batch numbers stay unique across reversals; the amount paid does not
+    // count a reversed batch.
+    const [agg] = await conn.execute(
+      `SELECT COALESCE(SUM(CASE WHEN reversed_at IS NULL THEN amount ELSE 0 END), 0) AS paid,
+              COALESCE(MAX(batch_no), 0) AS n
+         FROM proc_payment_batches WHERE request_id = ?`,
+      [req.id]
+    );
+    const paidBeforeCents = toCents(agg[0].paid);
+    const batchNo = Number(agg[0].n) + 1;
+    const amount = pay.amountCents / 100;
+
+    const [ins] = await conn.execute(
+      `INSERT INTO proc_payment_batches
+         (request_id, float_request_id, batch_no, amount, payment_date, payment_reference, payment_method, bank_name, notes, paid_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.id, float.id, batchNo, amount, pay.date, pay.reference, pay.method || null, pay.bank || null,
+       notes ? String(notes).slice(0, 500) : null, user.id]
+    );
+    const batchId = ins.insertId;
+    for (const f of popFiles) {
+      await conn.execute(
+        `INSERT INTO proc_request_pops (request_id, file_path, file_name, file_size, note, uploaded_by, batch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [req.id, f.path, f.originalname, f.size, `Payment batch ${batchNo}`, user.id, batchId]
+      );
+    }
+
+    await this._deductFromBudget(conn, float, req.request_code, batchNo, pay.amountCents, user, req.id);
+
+    const paidCents = paidBeforeCents + pay.amountCents;
+    const outstandingCents = payableCents - paidCents;
+    const completed = outstandingCents <= 0;
+    const via = paymentMethodLabel(pay.method, pay.bank);
+    const ref = `${via ? ` by ${via}` : ''}${pay.reference ? ` (ref ${pay.reference})` : ''}`;
+
+    // The reservation now holds only what is still to be paid, and — the
+    // request being under way — no longer expires. Paid in full, it closes.
+    const impact = await this.getBudgetImpact(req.id, conn);
+    const stillHeld = await reservations.syncPrReservation(conn, req.id, impact, user, {
+      expiresAt: null, closeAs: 'CONSUMED', reason: `paid through batch ${batchNo}`
+    });
+
+    await conn.execute(
+      `INSERT INTO approval_logs (request_id, approver_id, approver_role, action, previous_status, new_status, comments)
+       VALUES (?, ?, ?, ?, 'APPROVED', 'APPROVED', ?)`,
+      [float.id, user.id, user.role, batchNo === 1 ? 'DISPATCHED' : 'PAYMENT_BATCH',
+       `Payment batch ${batchNo}: $${amount.toFixed(2)} paid on ${pay.date}${ref} through ${req.request_code}`]
+    );
+    if (batchNo === 1) {
+      await conn.execute('UPDATE requests SET dispatched_at = NOW(3), updated_at = NOW(3) WHERE id = ?', [float.id]);
+    }
+
+    const prStatus = completed ? PROC_STATUS.COMPLETED : PROC_STATUS.PENDING_PAYMENT;
+    await conn.execute(
+      `UPDATE proc_requests SET status=?, completed_at=${completed ? 'NOW()' : 'NULL'}, updated_at=NOW() WHERE id=?`,
+      [prStatus, req.id]
+    );
+    await this._logEvent(
+      conn, req.id, user, 'PAYMENT_RECORDED', req.status, prStatus,
+      `Payment batch ${batchNo}: $${amount.toFixed(2)} paid on ${pay.date}${ref}, with ${popFiles.length} proof of payment document${popFiles.length === 1 ? '' : 's'}, `
+      + `deducted from the budget through float ${float.code}. `
+      + (completed
+        ? 'Paid in full — the reservation is closed.'
+        : `$${(outstandingCents / 100).toFixed(2)} still to be paid and stays reserved ($${(stillHeld / 100).toFixed(2)} held).`)
+    );
+
+    if (completed) {
+      // Paid to the supplier in exact amounts — nothing to reconcile.
+      await conn.execute(
+        `UPDATE requests SET status='RECONCILED', completed_at=NOW(3), updated_at=NOW(3), version=version+1 WHERE id=?`,
+        [float.id]
+      );
+      await conn.execute(
+        `INSERT INTO approval_logs (request_id, approver_id, approver_role, action, previous_status, new_status, comments)
+         VALUES (?, ?, ?, 'PAID_IN_FULL', 'APPROVED', 'RECONCILED', ?)`,
+        [float.id, user.id, user.role,
+         `Paid in full through ${req.request_code} in ${batchNo} batch${batchNo === 1 ? '' : 'es'}. Closed without reconciliation — the supplier was paid the exact amount.`]
+      );
+    }
+
+    return {
+      batch_no: batchNo,
+      amount,
+      paid_amount: paidCents / 100,
+      outstanding_amount: Math.max(0, outstandingCents) / 100,
+      completed,
+      status: prStatus
+    };
+  }
+
+  /** Deduct one payment from the float's budget lines, as dispatch does for an ordinary float. */
+  async _deductFromBudget(conn, float, prCode, batchNo, amountCents, user, prId = null) {
+    const [rows] = await conn.execute(
+      `SELECT budget_line_id, SUM(quantity * unit_price) AS line_total
+         FROM request_items WHERE request_id = ? GROUP BY budget_line_id ORDER BY budget_line_id`,
+      [float.id]
+    );
+    const lines = rows.map((r) => ({ id: r.budget_line_id, weight: toCents(r.line_total) })).filter((l) => l.weight > 0);
+    const totalWeight = lines.reduce((sum, l) => sum + l.weight, 0);
+    if (!totalWeight) throw new Error('The float requisition has no priced budget lines to charge');
+
+    // Proportional split in whole cents; the rounding remainder goes to the
+    // largest line so the deductions always add up to the payment exactly.
+    let allocated = 0;
+    for (const l of lines) {
+      l.cents = Math.floor((amountCents * l.weight) / totalWeight);
+      allocated += l.cents;
+    }
+    lines.reduce((max, l) => (l.weight > max.weight ? l : max), lines[0]).cents += amountCents - allocated;
+
+    // Every line must have the money for its share before anything moves.
+    // Money this request reserved for itself is its own; other requests'
+    // reservations are not available to it.
+    const heldByOthers = await reservations.reservedByLine(
+      conn, lines.map((l) => l.id), prId ? { type: 'PR', id: prId } : null
+    );
+    const short = [];
+    for (const l of lines) {
+      const [bl] = await conn.execute(
+        'SELECT budget_code, (allocated_amount - spent_amount) AS balance FROM budget_lines WHERE id = ? FOR UPDATE', [l.id]
+      );
+      const availableCents = bl.length ? toCents(bl[0].balance) - (heldByOthers.get(Number(l.id)) || 0) : 0;
+      if (bl.length && l.cents > availableCents) {
+        short.push(`${bl[0].budget_code} has $${(Math.max(0, availableCents) / 100).toFixed(2)} available but this payment needs $${(l.cents / 100).toFixed(2)}`);
+      }
+    }
+    if (short.length) {
+      throw new Error(`Insufficient funds — top up the budget before recording this payment. ${short.join('; ')}.`);
+    }
+
+    for (const l of lines) {
+      if (l.cents <= 0) continue;
+      const amount = l.cents / 100;
+      const [bl] = await conn.execute(
+        'SELECT (allocated_amount - spent_amount) AS balance, donor_id FROM budget_lines WHERE id = ? FOR UPDATE',
+        [l.id]
+      );
+      if (!bl.length) continue;
+      const balanceBefore = parseFloat(bl[0].balance);
+      await conn.execute(
+        'UPDATE budget_lines SET spent_amount = spent_amount + ?, updated_at = NOW() WHERE id = ?',
+        [amount, l.id]
+      );
+      await conn.execute(
+        `INSERT INTO budget_transactions
+           (budget_line_id, request_id, transaction_type, amount, balance_before, balance_after, description, performed_by)
+         VALUES (?, ?, 'DEDUCTION', ?, ?, ?, ?, ?)`,
+        [l.id, float.id, amount, balanceBefore, Math.round((balanceBefore - amount) * 100) / 100,
+         `Payment batch ${batchNo} for ${prCode} (float ${float.code})`, user.id]
+      );
+      if (bl[0].donor_id) {
+        await conn.execute(
+          'UPDATE donors SET total_spent = total_spent + ?, updated_at = NOW() WHERE id = ?',
+          [amount, bl[0].donor_id]
+        );
+      }
+    }
+  }
+
+  /**
+   * The requester's open v2 purchase requests on a project, for the float
+   * form: their float is generated automatically, so a separate float must not
+   * be raised for the same purchase.
+   */
+  async getOpenRequestsForProject(user, projectId) {
+    if (!projectId) return [];
+    return query(
+      `SELECT id, request_code, title, status, total_estimated_amount
+         FROM proc_requests
+        WHERE requester_id = ? AND project_id = ? AND workflow_version = ?
+          AND status NOT IN ('COMPLETED', 'CANCELLED', 'DRAFT')
+        ORDER BY created_at DESC`,
+      [user.id, projectId, WORKFLOW_V2]
+    );
   }
 
   // ============================================================
@@ -1431,7 +2780,7 @@ class ProcurementService {
    * Attach further POP documents after final approval — used when a payment is
    * settled in batches and the later instalments are paid separately.
    */
-  async addProofOfPayment(requestId, user, files = [], note = null) {
+  async addProofOfPayment(requestId, user, files = [], note = null, batchId = null) {
     if (!canActAsProcFinance(user)) {
       throw new Error('Only Finance or Admin can attach proof of payment');
     }
@@ -1439,8 +2788,34 @@ class ProcurementService {
 
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
-    if (!['PENDING_FINAL_FINANCE', 'COMPLETED'].includes(req.status)) {
+    if (!['PENDING_FINAL_FINANCE', 'PENDING_PAYMENT', 'COMPLETED'].includes(req.status)) {
       throw new Error('Proof of payment can only be attached once a request has reached final finance approval');
+    }
+
+    // v2: a proof of payment always belongs to a payment. A new payment is
+    // recorded with its amount, method and proof together (Add Payment); here
+    // only further documents for a payment already recorded can be added.
+    if (isV2(req)) {
+      const batch = (req.payment_batches || []).find((b) => Number(b.id) === Number(batchId));
+      if (!batch) {
+        throw new Error('Record the payment with Add Payment — enter the amount, how it was paid and the proof of payment together');
+      }
+      if (batch.reversed_at) throw new Error(`Payment batch ${batch.batch_no} has been reversed`);
+      return transaction(async (conn) => {
+        for (const f of files) {
+          await conn.execute(
+            `INSERT INTO proc_request_pops (request_id, file_path, file_name, file_size, note, uploaded_by, batch_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [requestId, f.path, f.originalname, f.size, note || `Payment batch ${batch.batch_no}`, user.id, batch.id]
+          );
+        }
+        await this._logEvent(
+          conn, requestId, user, 'POP_ATTACHED', req.status, req.status,
+          `${files.length} further proof of payment document(s) attached to payment batch ${batch.batch_no} `
+          + `($${Number(batch.amount).toFixed(2)}): ${files.map((f) => this._short(f.originalname, 60)).join(', ')}${note ? ` — ${note}` : ''}`
+        );
+        return { success: true, added: files.length };
+      });
     }
 
     return transaction(async (conn) => {
@@ -1484,6 +2859,14 @@ class ProcurementService {
     if (req && req.status === 'COMPLETED' && Number(remaining[0].cnt) <= 1) {
       throw new Error('A completed request must keep at least one proof of payment');
     }
+    if (rows[0].batch_id) {
+      const [sameBatch] = await query(
+        'SELECT COUNT(*) AS cnt FROM proc_request_pops WHERE batch_id = ?', [rows[0].batch_id]
+      );
+      if (Number(sameBatch.cnt) <= 1) {
+        throw new Error('Every payment batch must keep at least one proof of payment — upload the replacement first');
+      }
+    }
 
     await query('DELETE FROM proc_request_pops WHERE id = ?', [popId]);
 
@@ -1509,6 +2892,11 @@ class ProcurementService {
     }
     if (!canActAsProcFinance(user)) {
       throw new Error('Only Finance or Admin can reverse final approval');
+    }
+    if (isV2(req)) {
+      throw new Error(
+        'Payments on this request have already been deducted from the budget through its float requisition, so its final approval cannot be reversed'
+      );
     }
     await query(
       `UPDATE proc_requests SET status='PENDING_FINAL_FINANCE', final_finance_approved_at=NULL, completed_at=NULL,
@@ -1968,7 +3356,7 @@ class ProcurementService {
   async addQuotation(requestId, data, user) {
     const req = await this.getPurchaseRequestById(requestId);
     if (!req) throw new Error('Request not found');
-    if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(req.status)) {
+    if (!QUOTATION_EDITABLE_STATUSES.includes(req.status)) {
       throw new Error('Quotations can only be added when request is in procurement or committee review stage');
     }
 
@@ -2049,7 +3437,7 @@ class ProcurementService {
     // Same window as editing: once a request has left Procurement and the
     // Committee, its bids are the record of what was decided. Recall it to
     // Procurement first to change them.
-    if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(parent?.status)) {
+    if (!QUOTATION_EDITABLE_STATUSES.includes(parent?.status)) {
       throw new Error('Quotations can only be deleted while the request is in the procurement or committee-review stage');
     }
     await query('DELETE FROM proc_quotations WHERE id = ?', [quotationId]);
@@ -2071,7 +3459,7 @@ class ProcurementService {
     if (![ROLES.PROCUREMENT_OFFICER, ROLES.ADMIN].includes(user.role)) {
       throw new Error('Only Procurement Officers can edit quotations');
     }
-    if (!['PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(quot.request_status)) {
+    if (!QUOTATION_EDITABLE_STATUSES.includes(quot.request_status)) {
       throw new Error('Quotations can only be edited while the request is in the procurement or committee-review stage. Recall it to Procurement first to amend it');
     }
     // Amended lines replace the previous ones wholesale, and the header total
@@ -2238,6 +3626,11 @@ class ProcurementService {
       where += ' AND v.is_prequalified = ?';
       params.push(filters.is_prequalified === 'true' ? 1 : 0);
     }
+    // Star rating bands: good 4–5, average 2.5–3.5, poor below 2.5, or none yet.
+    if (filters.rating === 'good') where += ' AND v.rating >= 4';
+    if (filters.rating === 'average') where += ' AND v.rating >= 2.5 AND v.rating < 4';
+    if (filters.rating === 'poor') where += ' AND v.rating > 0 AND v.rating < 2.5';
+    if (filters.rating === 'unrated') where += ' AND (v.rating IS NULL OR v.rating = 0)';
     if (filters.is_active !== undefined) {
       where += ' AND v.is_active = ?';
       params.push(filters.is_active === 'false' ? 0 : 1);
@@ -2252,7 +3645,7 @@ class ProcurementService {
        FROM proc_vendors v
        LEFT JOIN users u ON v.created_by = u.id
        ${where}
-       ORDER BY v.company_name ASC
+       ORDER BY ${filters.sort === 'rating' ? 'COALESCE(v.rating, 0) DESC, v.company_name ASC' : 'v.company_name ASC'}
        LIMIT ${parseInt(filters.limit) || 5000}`,
       params
     );
@@ -2274,6 +3667,14 @@ class ProcurementService {
     return { name, verified: [true, 1, '1'].includes(data.antiterror_verified) ? 1 : 0 };
   }
 
+  /** A star rating from 0.5 to 5 in half stars, or null for "not rated". */
+  _parseRating(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0 || n > 5) throw new Error('A rating must be between 0 and 5 stars');
+    return n === 0 ? null : Math.round(n * 2) / 2;
+  }
+
   async createVendor(data, user) {
     const { name, verified } = await this._assertVendorComplete(data);
 
@@ -2285,8 +3686,8 @@ class ProcurementService {
       `INSERT INTO proc_vendors 
         (vendor_code, company_name, contact_person, email, phone, address, tin_number,
          registration_number, category, is_prequalified, prequalification_expiry, notes,
-         antiterror_verified, antiterror_checked_by, antiterror_checked_at, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, NOW())`,
+         antiterror_verified, antiterror_checked_by, antiterror_checked_at, created_by, rating, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, NOW())`,
       [
         vendorCode,
         name,
@@ -2302,7 +3703,8 @@ class ProcurementService {
         data.notes || null,
         verified,
         user.id,
-        user.id
+        user.id,
+        this._parseRating(data.rating)
       ]
     );
 
@@ -2319,7 +3721,7 @@ class ProcurementService {
       `UPDATE proc_vendors SET
         company_name=?, contact_person=?, email=?, phone=?, address=?, tin_number=?,
         registration_number=?, category=?, is_prequalified=?, prequalification_expiry=?,
-        notes=?, is_active=?, antiterror_verified=?,
+        notes=?, is_active=?, antiterror_verified=?, rating=?,
         antiterror_checked_by=IF(?, ?, antiterror_checked_by),
         antiterror_checked_at=IF(?, NOW(), antiterror_checked_at),
         updated_at=NOW()
@@ -2338,6 +3740,7 @@ class ProcurementService {
         data.notes || null,
         data.is_active !== undefined ? (data.is_active ? 1 : 0) : 1,
         verified,
+        this._parseRating(data.rating),
         checkChanged, user.id,
         checkChanged,
         vendorId
@@ -2402,9 +3805,9 @@ class ProcurementService {
         params.push(user.department_id, user.department_id);
       }
     } else if (user.role === ROLES.PROCUREMENT_OFFICER) {
-      requestFilter = "WHERE pr.status IN ('PENDING_PROCUREMENT','PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_FINAL_FINANCE','COMPLETED')";
+      requestFilter = "WHERE pr.status IN ('PENDING_PROCUREMENT','RETURNED_TO_PROCUREMENT','PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_DEPT_CONFIRMATION','PENDING_FINAL_FINANCE','PENDING_PAYMENT','COMPLETED')";
     } else if (user.role === ROLES.PROCUREMENT_COMMITTEE) {
-      requestFilter = "WHERE pr.status IN ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','COMPLETED')";
+      requestFilter = "WHERE pr.status IN ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_DEPT_CONFIRMATION','PENDING_PAYMENT','COMPLETED')";
     } else {
       requestFilter = 'WHERE 1=1';
     }
@@ -2453,10 +3856,10 @@ class ProcurementService {
     return {
       statusSummary: statusMap,
       totalCompleted: statusMap['COMPLETED'] || 0,
-      totalPending: (statusMap['PENDING_DEPT_APPROVAL'] || 0) + (statusMap['PENDING_GS_APPROVAL'] || 0) + (statusMap['PENDING_FINANCE_APPROVAL'] || 0),
-      totalInProcurement: statusMap['PENDING_PROCUREMENT'] || 0,
+      totalPending: (statusMap['PENDING_DEPT_APPROVAL'] || 0) + (statusMap['PENDING_GS_APPROVAL'] || 0) + (statusMap['PENDING_FINANCE_APPROVAL'] || 0) + (statusMap['PENDING_DEPT_CONFIRMATION'] || 0),
+      totalInProcurement: (statusMap['PENDING_PROCUREMENT'] || 0) + (statusMap['RETURNED_TO_PROCUREMENT'] || 0),
       totalAwaitingCommittee: statusMap['PENDING_COMMITTEE'] || 0,
-      totalFinalFinance: statusMap['PENDING_FINAL_FINANCE'] || 0,
+      totalFinalFinance: (statusMap['PENDING_FINAL_FINANCE'] || 0) + (statusMap['PENDING_PAYMENT'] || 0),
       totalRejected: statusMap['REJECTED'] || 0,
       totalSpend: parseFloat(totalSpend?.total || 0),
       pendingDeptApproval: parseInt(pendingMine?.count || 0),
@@ -2696,7 +4099,7 @@ class ProcurementService {
            LEFT JOIN proc_quotations q ON q.request_id = pr.id
            ${where}
            ${where ? 'AND' : 'WHERE'} pr.status IN
-             ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_FINAL_FINANCE','COMPLETED')
+             ('PENDING_COMMITTEE','PENDING_HIGH_VALUE_APPROVAL','PENDING_DEPT_CONFIRMATION','PENDING_FINAL_FINANCE','PENDING_PAYMENT','COMPLETED')
           GROUP BY pr.id
        ) t`,
       P()

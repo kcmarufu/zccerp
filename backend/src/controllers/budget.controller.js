@@ -4,6 +4,7 @@
  */
 
 const { validationResult } = require('express-validator');
+const { reservedSql } = require('../services/budgetReservation.service');
 const { query, transaction } = require('../config/database');
 const { ROLES, isFinanceManager, isAdminHrManager } = require('../config/roles');
 const requestAgeingService = require('../services/requestAgeing.service');
@@ -74,7 +75,9 @@ class BudgetController {
                 COALESCE(p.project_code, NULLIF(bl.category, ''), 'UNASSIGNED') as project_code,
                 COALESCE(p.project_name, '') as project_name,
                 COALESCE(don.currency_code, 'USD') as currency_code,
-                (bl.allocated_amount - bl.spent_amount) as balance,
+                (bl.allocated_amount - bl.spent_amount) as book_balance,
+              ${reservedSql('bl')} as reserved_amount,
+              (bl.allocated_amount - bl.spent_amount - ${reservedSql('bl')}) as balance,
                 ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) as utilization_percentage
          FROM budget_lines bl
          LEFT JOIN departments d ON bl.department_id = d.id
@@ -605,7 +608,9 @@ class BudgetController {
           COALESCE(p.project_code, NULLIF(bl.category, ''), 'UNASSIGNED') as project_code,
                 COALESCE(p.project_name, '') as project_name,
                 don.currency_code,
-                (bl.allocated_amount - bl.spent_amount) as balance,
+                (bl.allocated_amount - bl.spent_amount) as book_balance,
+              ${reservedSql('bl')} as reserved_amount,
+              (bl.allocated_amount - bl.spent_amount - ${reservedSql('bl')}) as balance,
                 ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) as utilization_percentage
          FROM budget_lines bl
          LEFT JOIN departments d ON bl.department_id = d.id
@@ -662,7 +667,9 @@ class BudgetController {
                 p.project_code,
                 p.project_name,
                 don.currency_code,
-                (bl.allocated_amount - bl.spent_amount) as balance,
+                (bl.allocated_amount - bl.spent_amount) as book_balance,
+              ${reservedSql('bl')} as reserved_amount,
+              (bl.allocated_amount - bl.spent_amount - ${reservedSql('bl')}) as balance,
                 ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) as utilization_percentage
          FROM budget_lines bl
          LEFT JOIN departments d ON bl.department_id = d.id
@@ -807,9 +814,13 @@ class BudgetController {
                 don.currency_code,
                 don.fiscal_year as donor_fiscal_year,
                 don.total_committed as donor_total_committed,
-                don.total_allocated as donor_total_allocated,
-                don.total_spent as donor_total_spent,
-                (bl.allocated_amount - bl.spent_amount) as balance,
+                -- Partner totals are summed from the partner's budget lines, so
+                -- they always tally with the lines shown.
+                (SELECT COALESCE(SUM(x.allocated_amount), 0) FROM budget_lines x WHERE x.donor_id = bl.donor_id) as donor_total_allocated,
+                (SELECT COALESCE(SUM(x.spent_amount), 0) FROM budget_lines x WHERE x.donor_id = bl.donor_id) as donor_total_spent,
+                (bl.allocated_amount - bl.spent_amount) as book_balance,
+              ${reservedSql('bl')} as reserved_amount,
+              (bl.allocated_amount - bl.spent_amount - ${reservedSql('bl')}) as balance,
                 ROUND((bl.spent_amount / NULLIF(bl.allocated_amount, 0)) * 100, 2) as utilization_percentage,
                 u.first_name as created_by_first,
                 u.last_name as created_by_last
@@ -835,20 +846,41 @@ class BudgetController {
         });
       }
 
-      // Get recent transactions
+      // Every transaction on the line. This used to stop at the latest 20, so
+      // on a busy line older deductions vanished from the list even though the
+      // spent figure included them, and the two could not be reconciled.
       const transactions = await query(
-        `SELECT bt.*, 
+        `SELECT bt.*,
                 u.first_name,
                 u.last_name,
-                r.request_code
+                r.request_code,
+                r.status AS request_status,
+                spr.request_code AS proc_request_code
          FROM budget_transactions bt
-         JOIN users u ON bt.performed_by = u.id
+         LEFT JOIN users u ON bt.performed_by = u.id
          LEFT JOIN requests r ON bt.request_id = r.id
+         LEFT JOIN proc_requests spr ON spr.id = r.source_proc_request_id
          WHERE bt.budget_line_id = ?
-         ORDER BY bt.created_at DESC
-         LIMIT 20`,
+         ORDER BY bt.created_at DESC, bt.id DESC`,
         [budgetLineId]
       );
+
+      // How the spent figure is made up, from the transactions themselves:
+      // request deductions less reversals is what requests have spent; manual
+      // deductions are adjustments Finance entered without a request.
+      const sumOf = (pred) => transactions.filter(pred).reduce((s, t) => s + Number(t.amount || 0), 0);
+      const round2 = (v) => Math.round(v * 100) / 100;
+      const requestDeductions = sumOf((t) => t.transaction_type === 'DEDUCTION' && t.request_id);
+      const reversals = sumOf((t) => t.transaction_type === 'REVERSAL');
+      const transactionSummary = {
+        count: transactions.length,
+        allocations: round2(sumOf((t) => t.transaction_type === 'ALLOCATION')),
+        top_ups: round2(sumOf((t) => t.transaction_type === 'TOP_UP')),
+        request_deductions: round2(requestDeductions),
+        reversals: round2(reversals),
+        manual_deductions: round2(sumOf((t) => t.transaction_type === 'DEDUCTION' && !t.request_id)),
+        net_request_spend: round2(requestDeductions - reversals)
+      };
 
       // Get request summary
       const requestSummary = await query(
@@ -868,6 +900,7 @@ class BudgetController {
         data: {
           ...budgetLines[0],
           transactions,
+          transactionSummary,
           requestSummary
         }
       });

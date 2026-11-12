@@ -137,12 +137,27 @@ export const buildTravelClaimPageHTML = (claim: any, requestCode: string): strin
 };
 
 /**
- * Returns an empty string — the digital watermark stamp has been disabled
- * for now in favour of clean printable signature lines on every PDF.
- * Kept exported so existing callers compile unchanged.
+ * The digital stamp in the top-right corner of a float requisition PDF.
+ *
+ * Only a RECONCILED request carries one — a green PAID stamp, since a
+ * reconciled float has been paid and closed (a float generated from a
+ * purchase request is reconciled when its last payment is made). Every other
+ * status prints no stamp, leaving the clean signature lines.
+ *
+ * downloadHTMLAsPDF finds the stamp by data-stamp and pins it to page one; in
+ * a print window it sits at the top right of the first page.
  */
-export const buildDigitalStamp = (_status?: string): string => {
-  return '';
+export const buildDigitalStamp = (status?: string, paidOn?: string | Date | null): string => {
+  if (String(status || '').toUpperCase() !== 'RECONCILED') return '';
+  const date = paidOn ? formatDate(paidOn) : '';
+  return `
+<div data-stamp="true" style="position:absolute;top:16px;right:22px;z-index:20;transform:rotate(-12deg);
+  border:3px solid #2e7d32;border-radius:8px;padding:5px 16px 4px;color:#2e7d32;text-align:center;
+  font-family:Arial,sans-serif;background:transparent;opacity:0.85;box-shadow:inset 0 0 0 2px rgba(46,125,50,0.25);">
+  <div style="font-size:28px;font-weight:900;letter-spacing:5px;line-height:1">PAID</div>
+  <div style="font-size:7.5px;font-weight:bold;letter-spacing:1.2px;margin-top:3px">ERP CONNECT &middot; RECONCILED</div>
+  ${date ? `<div style="font-size:7.5px;font-weight:bold;letter-spacing:0.5px;margin-top:1px">${date}</div>` : ''}
+</div>`;
 };
 
 export const downloadHTMLAsPDF = (htmlString: string, filename: string): void => {

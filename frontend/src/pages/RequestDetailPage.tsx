@@ -64,11 +64,12 @@ import attachmentService, { Attachment } from '../services/attachmentService';
 import perDiemService from '../services/perDiemService';
 import { Request, RequestItem, ApprovalLog, RequestStatus, PerDiemClaim } from '../types';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
-import { buildTravelClaimPageHTML, downloadHTMLAsPDF } from '../utils/pdfUtils';
+import { buildTravelClaimPageHTML, downloadHTMLAsPDF, buildDigitalStamp } from '../utils/pdfUtils';
 import { formatDate as formatCalendarDate, formatDateTime } from '../utils/datetime';
 import { formatRoleLabel } from '../utils/roleUtils';
 import { useGoBack } from '../utils/navigationState';
 import { isRequesterEditable } from '../utils/requestStatus';
+import { ReservationNotice } from '../components/procurement/PrFloatPanels';
 import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
@@ -366,6 +367,8 @@ const RequestDetailPage: React.FC = () => {
   };
 
   const canApprove = () => {
+    // A float generated from a purchase request is approved through the PR.
+    if ((request as any)?.source_proc_request_id) return false;
     if (!request || !user) return false;
 
     // Admin can approve at any pending stage
@@ -423,6 +426,8 @@ const RequestDetailPage: React.FC = () => {
 
   const canDispatch = () => {
     if (request?.status !== 'APPROVED') return false;
+    // A float generated from a purchase request is paid in batches from it.
+    if ((request as any)?.source_proc_request_id) return false;
     // Finance Clerk, Admin, and Finance HOP/Lead (FOS dept) can dispatch
     return hasRole('FINANCE_CLERK') || hasRole('ADMIN') || isFinanceManager();
   };
@@ -535,7 +540,8 @@ const RequestDetailPage: React.FC = () => {
     thead { display: table-header-group; }
     tr { page-break-inside: avoid; }
   }
-</style></head><body>
+</style></head><body style="position:relative">
+${buildDigitalStamp(request.status, (request as any).completed_at || request.updated_at)}
 
 <div class="doc-header">
   <div class="doc-header-left">
@@ -556,6 +562,7 @@ const RequestDetailPage: React.FC = () => {
 <h3>Requisition Details</h3>
 <div class="meta-grid">
   <div class="meta-item"><span class="meta-label">Reference Number</span><span class="meta-value">${request.request_code}</span></div>
+  ${(request as any).source_proc_request_code ? `<div class="meta-item"><span class="meta-label">Purchase Request Ref.</span><span class="meta-value">${(request as any).source_proc_request_code}</span></div>` : ''}
   <div class="meta-item"><span class="meta-label">Date Submitted</span><span class="meta-value">${request.submitted_at ? formatCalendarDate(request.submitted_at) : '—'}</span></div>
   <div class="meta-item"><span class="meta-label">Department</span><span class="meta-value">${request.department_name}</span></div>
   <div class="meta-item"><span class="meta-label">Status</span><span class="meta-value" style="color:${sc};font-weight:bold">${getStatusLabel(request.status)}</span></div>
@@ -792,6 +799,29 @@ ${buildClaimPage()}
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
           {error}
+        </Alert>
+      )}
+
+      {/* Funds held between Finance approval and dispatch (10 working days). */}
+      <ReservationNotice reservation={request.reservation} until="dispatch" />
+
+      {(request as any).source_proc_request_id && (
+        <Alert
+          severity="info" sx={{ mb: 3 }}
+          action={
+            <Button color="inherit" size="small"
+              onClick={() => navigate(`/procurement/requests/${(request as any).source_proc_request_id}`)}>
+              Open {(request as any).source_proc_request_code || 'purchase request'}
+            </Button>
+          }
+        >
+          <strong>Generated from purchase request {(request as any).source_proc_request_code}</strong> when the department
+          confirmed the award, with that request's approval trail.{' '}
+          {request.status === 'PENDING_FINANCE_APPROVAL' && <>It is now with <strong>Finance</strong> for approval and payment. </>}
+          {request.status === 'APPROVED' && <>Finance has approved it and it is being <strong>paid</strong>, in one or more batches. </>}
+          {request.status === 'RECONCILED' && <>It has been <strong>paid in full</strong> and is closed. </>}
+          Each payment is deducted from the budget as it is recorded, and it is marked reconciled once paid in full —
+          <strong> no reconciliation is needed</strong> because the supplier is paid the exact amount.
         </Alert>
       )}
 
@@ -1052,7 +1082,7 @@ ${buildClaimPage()}
             <Divider sx={{ mb: 2 }} />
             <Box display="flex" flexDirection="column" gap={2}>
               {/* Draft/Rejected owner actions */}
-              {isRequesterEditable(request.status) && request.requester_id === user?.id && (
+              {isRequesterEditable(request.status) && request.requester_id === user?.id && !(request as any).source_proc_request_id && (
                 <>
                   <Button
                     variant="outlined"
@@ -1259,7 +1289,12 @@ ${buildClaimPage()}
               <Box>
                 {/* Latest action first, so the collapsed view shows the two most recent. */}
                 {(showAllApprovalLogs ? [...approvalLogs].reverse() : [...approvalLogs].reverse().slice(0, 2)).map((log, index) => {
-                  const getActionColor = (action: string): 'success' | 'error' | 'warning' | 'info' | 'default' => {
+                  // A float generated from a purchase request carries that
+                  // request's trail, its actions prefixed PR_.
+                  const getActionColor = (rawAction: string): 'success' | 'error' | 'warning' | 'info' | 'default' => {
+                    const action = String(rawAction || '').replace(/^PR_/, '');
+                    if (['FINAL_APPROVED', 'DEPT_CONFIRMED', 'COMMITTEE_APPROVED', 'HIGH_VALUE_APPROVED', 'PAID_IN_FULL', 'GENERATED_FROM_PR'].includes(action)) return 'success';
+                    if (action.endsWith('_REJECTED')) return 'error';
                     if (action === 'APPROVED' || action === 'APPROVE') return 'success';
                     if (action === 'REJECTED' || action === 'REJECT') return 'error';
                     if (action === 'REVERSED') return 'warning';
@@ -1267,7 +1302,9 @@ ${buildClaimPage()}
                     return 'default';
                   };
 
-                  const getActionIcon = (action: string) => {
+                  const getActionIcon = (rawAction: string) => {
+                    const action = String(rawAction || '').replace(/^PR_/, '');
+                    if (getActionColor(rawAction) === 'success') return '✓';
                     if (action === 'APPROVED' || action === 'APPROVE') return '✓';
                     if (action === 'REJECTED' || action === 'REJECT') return '✗';
                     if (action === 'REVERSED') return '↩';
@@ -1289,7 +1326,7 @@ ${buildClaimPage()}
                         <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.5}>
                           <Box display="flex" alignItems="center" gap={1}>
                             <Chip
-                              label={`${getActionIcon(log.action)} ${log.action}`}
+                              label={`${getActionIcon(log.action)} ${String(log.action).startsWith('PR_') ? `PR · ${String(log.action).slice(3)}` : log.action}`.replace(/_/g, ' ')}
                               size="small"
                               color={getActionColor(log.action)}
                             />
