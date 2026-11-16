@@ -70,6 +70,7 @@ import { formatRoleLabel } from '../utils/roleUtils';
 import { useGoBack } from '../utils/navigationState';
 import { isRequesterEditable } from '../utils/requestStatus';
 import { ReservationNotice } from '../components/procurement/PrFloatPanels';
+import TrailCommentBox from '../components/common/TrailCommentBox';
 import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
@@ -460,7 +461,11 @@ const RequestDetailPage: React.FC = () => {
   };
 
   // ── HARDCODED BRANDING ────────────────────────────────────────────────────
-  const DOC_TITLE  = 'Float Requisition' as const;
+  // A requisition generated automatically through procurement is a Payment
+  // Requisition; every other one is a Float Requisition.
+  const isPaymentRequisition = Boolean((request as any)?.source_proc_request_id);
+  const DOC_TITLE  = isPaymentRequisition ? 'Payment Requisition' : 'Float Requisition';
+  const DOC_FILE   = isPaymentRequisition ? 'payment-requisition' : 'float-requisition';
   // ─────────────────────────────────────────────────────────────────────────
 
   const getStatusLabel = (status: string) => status.replace(/_/g, ' ');
@@ -627,7 +632,7 @@ ${buildClaimPage()}
     const html = buildFloatRequisitionHTML();
     if (!html || !request) return;
     try {
-      downloadHTMLAsPDF(html, `float-requisition-${request.request_code}`);
+      downloadHTMLAsPDF(html, `${DOC_FILE}-${request.request_code}`);
     } catch (err) {
       setError('Failed to generate the PDF. You can still use Print.');
     }
@@ -738,7 +743,7 @@ ${buildClaimPage()}
       XLSX.utils.book_append_sheet(wb, ws4, 'Travel Claim');
     }
 
-    XLSX.writeFile(wb, `float-requisition-${request.request_code}-${new Date().toISOString().slice(0,10)}.xlsx`);
+    XLSX.writeFile(wb, `${DOC_FILE}-${request.request_code}-${new Date().toISOString().slice(0,10)}.xlsx`);
   };
 
   if (isLoading) {
@@ -815,7 +820,7 @@ ${buildClaimPage()}
             </Button>
           }
         >
-          <strong>Generated from purchase request {(request as any).source_proc_request_code}</strong> when the department
+          <strong>Payment Requisition generated automatically through procurement</strong> from purchase request {(request as any).source_proc_request_code} when the department
           confirmed the award, with that request's approval trail.{' '}
           {request.status === 'PENDING_FINANCE_APPROVAL' && <>It is now with <strong>Finance</strong> for approval and payment. </>}
           {request.status === 'APPROVED' && <>Finance has approved it and it is being <strong>paid</strong>, in one or more batches. </>}
@@ -1271,7 +1276,7 @@ ${buildClaimPage()}
               <Box>
                 <Typography variant="h6">Approval Trail</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {approvalLogs.length} action{approvalLogs.length !== 1 ? 's' : ''} — click to {showApprovalTrail ? 'collapse' : 'expand'}
+                  {approvalLogs.length} action{approvalLogs.length !== 1 ? 's' : ''} — click to {showApprovalTrail ? 'collapse' : 'expand'} or add a comment
                 </Typography>
               </Box>
               <IconButton size="small">
@@ -1299,6 +1304,7 @@ ${buildClaimPage()}
                     if (action === 'REJECTED' || action === 'REJECT') return 'error';
                     if (action === 'REVERSED') return 'warning';
                     if (action === 'SUBMITTED') return 'info';
+                    if (action === 'COMMENT') return 'info';
                     return 'default';
                   };
 
@@ -1309,6 +1315,7 @@ ${buildClaimPage()}
                     if (action === 'REJECTED' || action === 'REJECT') return '✗';
                     if (action === 'REVERSED') return '↩';
                     if (action === 'SUBMITTED') return '→';
+                    if (action === 'COMMENT') return '💬';
                     return '•';
                   };
 
@@ -1371,6 +1378,10 @@ ${buildClaimPage()}
                 )}
               </Box>
             )}
+            <TrailCommentBox
+              onSubmit={(c) => requestService.addComment(requestId!, c)}
+              onAdded={() => { setShowAllApprovalLogs(false); fetchRequestDetails(); }}
+            />
             </Box>
             </Collapse>
           </Paper>

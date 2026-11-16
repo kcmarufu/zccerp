@@ -129,14 +129,17 @@ class ExportController {
       const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
 
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=float-requisition-${request.request_code}.pdf`);
+      // Generated automatically through procurement → Payment Requisition.
+      const isPaymentRequisition = Boolean(request.source_proc_request_id);
+      const docTitle = isPaymentRequisition ? 'Payment Requisition' : 'Float Requisition';
+      res.setHeader('Content-Disposition', `attachment; filename=${isPaymentRequisition ? 'payment' : 'float'}-requisition-${request.request_code}.pdf`);
       doc.pipe(res);
 
       // ── Header band ──────────────────────────────────────────────────────────
       const pageW = doc.page.width - 100; // usable width with 50px margins each side
       doc.rect(50, 40, pageW, 60).fill('#006064');
       doc.fillColor('white').fontSize(8).text('ERP Connect — Zimbabwe Council of Churches', 60, 50);
-      doc.fontSize(16).font('Helvetica-Bold').text('Float Requisition', 60, 62);
+      doc.fontSize(16).font('Helvetica-Bold').text(docTitle, 60, 62);
       doc.fontSize(9).font('Helvetica').text(`Department: ${request.department_name} (${request.department_code})`, 60, 84);
 
       // Reference block (top-right)
@@ -789,7 +792,7 @@ class ExportController {
         const request = requests[0];
 
         if (request.source_proc_request_id) {
-          throw new Error('This float requisition was generated from a purchase request and is paid in batches from that request. Record its payments on the purchase request.');
+          throw new Error('This payment requisition was generated automatically through procurement and is paid in batches from that request. Record its payments on the purchase request.');
         }
 
         if (request.status !== 'APPROVED') {
@@ -915,7 +918,7 @@ class ExportController {
         const request = requests[0];
 
         if (request.source_proc_request_id) {
-          throw new Error('This float requisition was generated from a purchase request and is paid in batches from that request. Record its payments on the purchase request.');
+          throw new Error('This payment requisition was generated automatically through procurement and is paid in batches from that request. Record its payments on the purchase request.');
         }
 
         if (request.status !== 'DISPATCHED') {

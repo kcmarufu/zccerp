@@ -233,6 +233,9 @@ const DispatchDesk: React.FC = () => {
       const resp = await requestService.getById(requestId);
       if (!resp.success || !resp.data) { toast.error('Could not load request data'); return; }
       const req = resp.data as any;
+      // Generated automatically through procurement → Payment Requisition.
+      const docTitle = req.source_proc_request_id ? 'Payment Requisition' : DOC_TITLE;
+      const docFile = req.source_proc_request_id ? 'payment-requisition' : 'float-requisition';
       const items: any[] = req.items || [];
       const trail: any[] = req.approvalTrail || [];
       const total = items.reduce((s: number, it: any) => s + Number(it.unit_price || 0) * Number(it.quantity || 0), 0);
@@ -256,7 +259,7 @@ const DispatchDesk: React.FC = () => {
           <td>${t.comments || t.comment || '—'}</td>
           <td>${t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy HH:mm') : '—'}</td>
         </tr>`).join('');
-      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${DOC_TITLE} — ${requestCode}</title>
+      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${docTitle} — ${requestCode}</title>
 <style>
   * {box-sizing:border-box;}
   body {font-family:Arial,sans-serif;font-size:13px;color:#1a1a1a;margin:0;padding:20px;}
@@ -280,7 +283,7 @@ const DispatchDesk: React.FC = () => {
 </style></head><body>
 <div class="doc-header">
   <div class="org">ERP Connect &mdash; Zimbabwe Council of Churches</div>
-  <h1>${DOC_TITLE}</h1>
+  <h1>${docTitle}</h1>
   <p><strong>${req.request_code}</strong> &nbsp;|&nbsp; ${req.department_name || ''} &nbsp;|&nbsp; ${req.requester_first_name || ''} ${req.requester_last_name || ''}</p>
   <p>Status: <strong>${req.status?.replace(/_/g,' ')}</strong> &nbsp;|&nbsp; Total: <strong>$${Number(req.total_amount||0).toLocaleString(undefined,{minimumFractionDigits:2})}</strong></p>
 </div>
@@ -312,7 +315,7 @@ ${trail.length>0?`<h3>Approval Trail</h3><table><thead><tr><th>Action</th><th>By
 ${buildDigitalStamp(req.status || '')}
 ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
 </body></html>`;
-      downloadHTMLAsPDF(html, `float-requisition-${requestCode}-${format(new Date(), 'yyyy-MM-dd')}`);
+      downloadHTMLAsPDF(html, `${docFile}-${requestCode}-${format(new Date(), 'yyyy-MM-dd')}`);
       toast.success('PDF downloaded');
     } catch (err) {
       toast.error('Failed to generate PDF');
@@ -407,7 +410,7 @@ ${perDiemClaim ? buildTravelClaimPageHTML(perDiemClaim, req.request_code) : ''}
         ws4['!cols'] = [22, 18, 18, 12, 12, 30, 14, 12, 12, 16, 16, 14].map(w => ({ wch: w }));
         XLSX.utils.book_append_sheet(wb, ws4, 'Travel Claim');
       }
-      XLSX.writeFile(wb, `float-requisition-${requestCode}-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+      XLSX.writeFile(wb, `${(req as any).source_proc_request_id ? 'payment-requisition' : 'float-requisition'}-${requestCode}-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
       toast.success('Excel exported successfully');
     } catch (err) {
       toast.error('Failed to export Excel');

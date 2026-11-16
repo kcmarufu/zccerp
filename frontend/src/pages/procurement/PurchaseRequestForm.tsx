@@ -97,6 +97,8 @@ const PurchaseRequestForm: React.FC = () => {
 
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // Optional note to the approvers when resubmitting a rejected request.
+  const [resubmitComment, setResubmitComment] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const [crossDeptWarning, setCrossDeptWarning] = useState<string | null>(null);
   const [reconBlock, setReconBlock] = useState<ReconRequestBlock | null>(null);
@@ -359,7 +361,7 @@ const PurchaseRequestForm: React.FC = () => {
         await updatePurchaseRequest(id!, getPayload());
       }
       await uploadPendingFiles(reqId!);
-      await submitPurchaseRequest(reqId!);
+      await submitPurchaseRequest(reqId!, isResubmission ? resubmitComment.trim() || undefined : undefined);
       toast.success('Request submitted for approval');
       navigate(`/procurement/requests/${reqId}`);
     } catch (e: any) {
@@ -789,6 +791,21 @@ const PurchaseRequestForm: React.FC = () => {
           Attach a specification, photo or proforma quotation for the items.
         </InlineTip>
       </Paper>
+
+      {isResubmission && (
+        <Paper elevation={0} variant="outlined" sx={{ p: 3, mb: 3, borderRadius: 2 }}>
+          <Typography variant="h6" fontWeight={700} gutterBottom>Comment to the approvers (optional)</Typography>
+          <TextField
+            fullWidth
+            multiline
+            minRows={2}
+            placeholder="e.g. what you changed in response to the rejection"
+            value={resubmitComment}
+            onChange={(e) => setResubmitComment(e.target.value.slice(0, 2000))}
+            helperText="Shown on the approval trail with your resubmission."
+          />
+        </Paper>
+      )}
 
       {/* Actions */}
       <Box display="flex" gap={2} justifyContent="flex-end" flexWrap="wrap">

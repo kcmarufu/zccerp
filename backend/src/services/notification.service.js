@@ -426,8 +426,8 @@ class NotificationService {
     const link = `/procurement/requests/${requestId}`;
     const title = completed ? `Purchase Request Paid: ${requestCode}` : `Payment Recorded: ${requestCode}`;
     const message = completed
-      ? `Payment is complete. Float requisition ${floatCode || ''} has been generated and closed — no reconciliation is needed.`
-      : `A payment batch has been recorded against float requisition ${floatCode || ''}. The balance will be paid in further batches.`;
+      ? `Payment is complete. Payment requisition ${floatCode || ''} has been generated and closed — no reconciliation is needed.`
+      : `A payment batch has been recorded against payment requisition ${floatCode || ''}. The balance will be paid in further batches.`;
     try {
       await this._create(requesterId, title, message, 'request_approved', 'proc_request', requestId, link);
     } catch (err) {
@@ -540,6 +540,26 @@ class NotificationService {
   // ─────────────────────────────────────────────────────────────────
 
   /** Get recent notifications for a user (latest 50, unread first) */
+  /**
+   * A comment was added to a float or purchase request. Everyone already in
+   * the conversation hears about it — the requester and anyone who has acted
+   * or commented on the request — except the person who wrote it.
+   */
+  async onCommentAdded(kind, requestId, requestCode, commenterId, commenterName, participantIds = []) {
+    try {
+      const isProc = kind === 'procurement';
+      const link = isProc ? `/procurement/requests/${requestId}` : `/finance/requests/${requestId}`;
+      const title = `New comment: ${requestCode}`;
+      const message = `${commenterName} commented on ${isProc ? 'purchase request' : 'float request'} ${requestCode}.`;
+      const ids = [...new Set(participantIds.map(Number))].filter(id => id && id !== Number(commenterId));
+      for (const id of ids) {
+        await this._create(id, title, message, 'info', isProc ? 'proc_request' : 'request', requestId, link);
+      }
+    } catch (err) {
+      console.error('[NotificationService] onCommentAdded error:', err.message);
+    }
+  }
+
   async getForUser(userId) {
     return await query(
       `SELECT * FROM notifications WHERE user_id = ? ORDER BY is_read ASC, created_at DESC LIMIT 50`,

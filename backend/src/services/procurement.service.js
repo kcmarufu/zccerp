@@ -830,7 +830,7 @@ class ProcurementService {
     });
   }
 
-  async submitPurchaseRequest(requestId, user) {
+  async submitPurchaseRequest(requestId, user, comment = null) {
     const existing = await this.getPurchaseRequestById(requestId);
     if (!existing) throw new Error('Request not found');
     if (!['DRAFT', 'REJECTED'].includes(existing.status)) throw new Error('Only DRAFT or REJECTED requests can be submitted');
@@ -961,7 +961,8 @@ class ProcurementService {
           isResubmission ? 'RESUBMITTED' : 'SUBMITTED',
           existing.status,
           targetStatus,
-          isResubmission ? 'Request resubmitted after revision' : 'Request submitted for approval'
+          // The requester's own note, when they give one, says more than the default.
+          comment || (isResubmission ? 'Request resubmitted after revision' : 'Request submitted for approval')
         ]
       );
       return { success: true, status: targetStatus, _notif: { requestCode: existing.request_code, requesterId: user.id, deptId: existing.department_id, routingDeptId: routingDepartmentId, targetStatus } };
@@ -2234,7 +2235,7 @@ class ProcurementService {
       const [floats] = await conn.execute(
         'SELECT id, request_code FROM requests WHERE id = ?', [locked[0].float_request_id]
       );
-      if (!floats.length) throw new Error('The float requisition for this request could not be found');
+      if (!floats.length) throw new Error('The payment requisition for this request could not be found');
 
       const [paidRows] = await conn.execute(
         'SELECT COALESCE(SUM(amount), 0) AS paid FROM proc_payment_batches WHERE request_id = ? AND reversed_at IS NULL', [requestId]
@@ -2286,7 +2287,7 @@ class ProcurementService {
 
       const [floats] = await conn.execute('SELECT id, request_code, status FROM requests WHERE id = ?', [batch.float_request_id]);
       const float = floats[0];
-      if (!float) throw new Error('The float requisition for this payment could not be found');
+      if (!float) throw new Error('The payment requisition for this payment could not be found');
 
       // The deductions this batch made, one per budget line.
       const [deductions] = await conn.execute(
@@ -2394,7 +2395,7 @@ class ProcurementService {
   async _generateFloat(conn, req, user, payable, status = 'APPROVED') {
     const code = await generateRequestCode(conn, req.donor_id, req.project_id);
     const justification =
-      `Float requisition generated from purchase request ${req.request_code} — ${req.title}\n\n${req.justification || ''}`.trim();
+      `Payment requisition generated automatically through procurement from purchase request ${req.request_code} — ${req.title}\n\n${req.justification || ''}`.trim();
 
     const [ins] = await conn.execute(
       `INSERT INTO requests
@@ -2414,7 +2415,7 @@ class ProcurementService {
       `INSERT INTO approval_logs (request_id, approver_id, approver_role, action, previous_status, new_status, comments)
        VALUES (?, ?, ?, 'GENERATED_FROM_PR', NULL, ?, ?)`,
       [floatId, user.id, user.role, status,
-       `Float requisition generated from purchase request ${req.request_code} when the department confirmed the award. `
+       `Payment requisition generated automatically through procurement from purchase request ${req.request_code} when the department confirmed the award. `
        + 'It is approved and paid through the purchase request — no reconciliation is required.']
     );
     return { id: floatId, code };
@@ -2688,7 +2689,7 @@ class ProcurementService {
     );
     const lines = rows.map((r) => ({ id: r.budget_line_id, weight: toCents(r.line_total) })).filter((l) => l.weight > 0);
     const totalWeight = lines.reduce((sum, l) => sum + l.weight, 0);
-    if (!totalWeight) throw new Error('The float requisition has no priced budget lines to charge');
+    if (!totalWeight) throw new Error('The payment requisition has no priced budget lines to charge');
 
     // Proportional split in whole cents; the rounding remainder goes to the
     // largest line so the deductions always add up to the payment exactly.
@@ -2899,7 +2900,7 @@ class ProcurementService {
     }
     if (isV2(req)) {
       throw new Error(
-        'Payments on this request have already been deducted from the budget through its float requisition, so its final approval cannot be reversed'
+        'Payments on this request have already been deducted from the budget through its payment requisition, so its final approval cannot be reversed'
       );
     }
     await query(
@@ -3983,6 +3984,53 @@ class ProcurementService {
   // ══════════════════════════════════════════════════════════════════════════
   // PROCUREMENT REPORTS & ANALYTICS
   // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Add a comment to a purchase request's trail. Comments go both ways — the
+   * requester can answer an approver, and anyone working the request can add a
+   * note — and never change its status.
+   *
+   * Allowed: the requester; anyone who has already acted or commented on it;
+   * org-wide procurement readers (Finance, Procurement, Committee, Admin & HR
+   * managers, Admin); and Leads/HODs of the department that raised it or that
+   * it is routed to.
+   */
+  async addComment(requestId, user, rawComment) {
+    const comment = typeof rawComment === 'string' ? rawComment.trim() : '';
+    if (!comment) { const e = new Error('Please type a comment'); e.status = 400; throw e; }
+    if (comment.length > 2000) { const e = new Error('Comments are limited to 2,000 characters'); e.status = 400; throw e; }
+
+    const rows = await query(
+      'SELECT id, request_code, requester_id, department_id, routing_department_id FROM proc_requests WHERE id = ?',
+      [requestId]
+    );
+    if (!rows.length) { const e = new Error('Request not found'); e.status = 404; throw e; }
+    const pr = rows[0];
+
+    const participants = await query(
+      'SELECT DISTINCT actor_id AS id FROM proc_approval_logs WHERE request_id = ?', [requestId]
+    );
+    const isParticipant = participants.some(p => Number(p.id) === Number(user.id));
+    const isDeptManager = [ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS].includes(user.role) &&
+      [pr.department_id, pr.routing_department_id].map(Number).includes(Number(user.department_id));
+    const allowed = Number(pr.requester_id) === Number(user.id) || isParticipant || isDeptManager ||
+      this.canViewAllProcurement(user);
+    if (!allowed) { const e = new Error('You can only comment on purchase requests you are involved in'); e.status = 403; throw e; }
+
+    await query(
+      `INSERT INTO proc_approval_logs (request_id, actor_id, actor_role, action, previous_status, new_status, comments)
+       VALUES (?, ?, ?, 'COMMENT', NULL, NULL, ?)`,
+      [requestId, user.id, user.role, comment]
+    );
+
+    notificationService.onCommentAdded(
+      'procurement', Number(requestId), pr.request_code, user.id,
+      `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'A user',
+      [pr.requester_id, ...participants.map(p => p.id)]
+    ).catch(() => {});
+
+    return { success: true };
+  }
 
   /**
    * Who sees the whole organisation's procurement, and who sees only their own

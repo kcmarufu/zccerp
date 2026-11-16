@@ -143,6 +143,8 @@ const RequestForm: React.FC = () => {
   const [existingAttachments, setExistingAttachments] = useState<any[]>([]);
   const [deletingAttachmentId, setDeletingAttachmentId] = useState<number | null>(null);
   const [existingStatus, setExistingStatus] = useState<string | null>(null);
+  // Optional note to the approvers when resubmitting a rejected request.
+  const [resubmitComment, setResubmitComment] = useState('');
   const [crossDeptWarning, setCrossDeptWarning] = useState<string | null>(null);
   const [overdueBlocked, setOverdueBlocked] = useState(false);
   const [reconBlock, setReconBlock] = useState<ReconRequestBlock | null>(null);
@@ -777,7 +779,10 @@ const RequestForm: React.FC = () => {
           }
           await savePerDiemIfNeeded(Number(requestId));
           const newCode = updateResponse.data?.requestCode;
-          const submitResponse = await requestService.submit(Number(requestId));
+          const submitResponse = await requestService.submit(
+            Number(requestId),
+            existingStatus === 'REJECTED' ? resubmitComment.trim() || undefined : undefined
+          );
           if (submitResponse.success) {
             if (newCode) toast.info(`Partner/project changed — new reference number: ${newCode}`);
             toast.success(existingStatus === 'REJECTED' ? 'Request edited and resubmitted successfully' : 'Request submitted successfully');
@@ -917,7 +922,7 @@ const RequestForm: React.FC = () => {
                     ))}
                   </Box>
                   <Typography variant="body2">
-                    The float requisition for a purchase request is generated automatically when Finance approves it.
+                    The payment requisition for a purchase request is generated automatically when Finance approves it.
                     Do not raise a separate float for those items.
                   </Typography>
                   <FormControlLabel
@@ -1541,6 +1546,21 @@ const RequestForm: React.FC = () => {
             budgetLines={budgetLines}
             rates={perDiemRates}
           />
+        )}
+
+        {isEditMode && existingStatus === 'REJECTED' && (
+          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>Comment to the approvers (optional)</Typography>
+            <TextField
+              fullWidth
+              multiline
+              minRows={2}
+              placeholder="e.g. what you changed in response to the rejection"
+              value={resubmitComment}
+              onChange={(e) => setResubmitComment(e.target.value.slice(0, 2000))}
+              helperText="Shown on the approval trail with your resubmission."
+            />
+          </Paper>
         )}
 
         <Paper elevation={2} sx={{ p: 3 }}>

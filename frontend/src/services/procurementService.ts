@@ -81,8 +81,14 @@ export const updatePurchaseRequest = async (id: number | string, payload: Partia
   await api.put(`${BASE}/requests/${id}`, payload);
 };
 
-export const submitPurchaseRequest = async (id: number | string): Promise<void> => {
-  await api.post(`${BASE}/requests/${id}/submit`);
+/** An optional comment (e.g. what changed after a rejection) goes on the trail. */
+export const submitPurchaseRequest = async (id: number | string, comment?: string): Promise<void> => {
+  await api.post(`${BASE}/requests/${id}/submit`, comment ? { comment } : {});
+};
+
+/** Add a comment to the approval trail (requester or anyone working the request). */
+export const addPurchaseRequestComment = async (id: number | string, comment: string): Promise<void> => {
+  await api.post(`${BASE}/requests/${id}/comments`, { comment });
 };
 
 export const deletePurchaseRequest = async (id: number | string): Promise<void> => {

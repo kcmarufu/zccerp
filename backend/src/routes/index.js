@@ -63,6 +63,7 @@ router.get('/requests', authenticateToken, paginationValidator, filterValidator,
 router.get('/requests/:requestId', authenticateToken, requireSameDepartment, requestController.getRequestById.bind(requestController));
 router.put('/requests/:requestId', authenticateToken, requirePermission(PERMISSIONS.EDIT_REQUEST), updateRequestValidator, requestController.updateRequest.bind(requestController));
 router.delete('/requests/:requestId', authenticateToken, requestController.deleteRequest.bind(requestController));
+router.post('/requests/:requestId/comments', authenticateToken, requireSameDepartment, requestController.addComment.bind(requestController));
 router.post('/requests/:requestId/submit', authenticateToken, requirePermission(PERMISSIONS.SUBMIT_REQUEST), requestController.submitRequest.bind(requestController));
 router.get('/requests/:requestId/budget-impact', authenticateToken, requestController.getBudgetImpact.bind(requestController));
 
@@ -211,6 +212,7 @@ router.post('/procurement/requests', authenticateToken, procurementController.cr
 router.get('/procurement/requests/:id', authenticateToken, procurementController.getPurchaseRequestById.bind(procurementController));
 router.put('/procurement/requests/:id', authenticateToken, procurementController.updatePurchaseRequest.bind(procurementController));
 router.delete('/procurement/requests/:id', authenticateToken, procurementController.deletePurchaseRequest.bind(procurementController));
+router.post('/procurement/requests/:id/comments', authenticateToken, procurementController.addComment.bind(procurementController));
 router.post('/procurement/requests/:id/submit', authenticateToken, procurementController.submitPurchaseRequest.bind(procurementController));
 router.post('/procurement/requests/:id/approve', authenticateToken, procurementController.approveDeptLevel.bind(procurementController));
 // Backward-compatibility alias for cached browsers that call the old approve-dept endpoint
@@ -325,6 +327,7 @@ router.get('/admin/users/:id', authenticateToken, requireRole(ROLES.ADMIN), admi
 router.put('/admin/users/:id', authenticateToken, requireRole(ROLES.ADMIN), adminController.updateUser.bind(adminController));
 router.delete('/admin/users/:id', authenticateToken, requireRole(ROLES.ADMIN), adminController.deleteUser.bind(adminController));
 router.post('/admin/users/:id/reset-password', authenticateToken, requireRole(ROLES.ADMIN), adminController.resetPassword.bind(adminController));
+router.post('/admin/users/:id/restore', authenticateToken, requireRole(ROLES.ADMIN), adminController.restoreUser.bind(adminController));
 router.patch('/admin/users/:id/toggle-active', authenticateToken, requireRole(ROLES.ADMIN), adminController.toggleActive.bind(adminController));
 router.get('/admin/users/:id/login-history', authenticateToken, requireRole(ROLES.ADMIN), adminController.getLoginHistory.bind(adminController));
 router.get('/admin/departments', authenticateToken, requireRole(ROLES.ADMIN), adminController.getDepartments.bind(adminController));

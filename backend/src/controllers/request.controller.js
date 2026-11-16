@@ -78,7 +78,7 @@ class RequestController {
           if (openPrs.length) {
             const err = new Error(
               `You have purchase request${openPrs.length === 1 ? '' : 's'} ${openPrs.map((r) => r.request_code).join(', ')} `
-              + 'in progress on this project. Their float requisition is generated automatically once Finance approves them — '
+              + 'in progress on this project. Their payment requisition is generated automatically once Finance approves them — '
               + 'do not raise a separate float for those items. If this float is for something else, confirm that on the form.'
             );
             err.openPurchaseRequests = openPrs.map((r) => r.request_code);
@@ -435,7 +435,7 @@ class RequestController {
         }
 
         if (requests[0].source_proc_request_id) {
-          throw new Error('This float requisition was generated from a purchase request — change the purchase request instead');
+          throw new Error('This payment requisition was generated automatically through procurement — change the purchase request instead');
         }
 
         if (requests[0].requester_id !== userId) {
@@ -718,7 +718,9 @@ class RequestController {
       const userId = req.user.id;
       const ipAddress = req.ip;
 
-      const result = await approvalService.submitRequest(requestId, userId, ipAddress);
+      // Optional note from the requester, e.g. what they changed after a rejection.
+      const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim().slice(0, 2000) : '';
+      const result = await approvalService.submitRequest(requestId, userId, ipAddress, comment || null);
 
       res.json({
         success: true,
@@ -730,6 +732,56 @@ class RequestController {
         success: false,
         error: error.message || 'Failed to submit request'
       });
+    }
+  }
+
+  /**
+   * Add a comment to a float request's approval trail.
+   * POST /api/requests/:requestId/comments
+   *
+   * Comments go both ways: the requester can answer an approver, and any
+   * approver can add a note, at any stage. Access is the same as viewing the
+   * request (requireSameDepartment on the route). A comment is a trail entry
+   * of its own and never changes the request's status.
+   */
+  async addComment(req, res) {
+    try {
+      const { requestId } = req.params;
+      const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() : '';
+      if (!comment) {
+        return res.status(400).json({ success: false, error: 'Please type a comment' });
+      }
+      if (comment.length > 2000) {
+        return res.status(400).json({ success: false, error: 'Comments are limited to 2,000 characters' });
+      }
+
+      const rows = await query('SELECT id, request_code, requester_id FROM requests WHERE id = ?', [requestId]);
+      if (rows.length === 0) {
+        return res.status(404).json({ success: false, error: 'Request not found' });
+      }
+
+      await query(
+        `INSERT INTO approval_logs
+         (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
+         VALUES (?, ?, ?, 'COMMENT', NULL, NULL, ?, ?)`,
+        [requestId, req.user.id, req.user.role || ROLES.GENERAL_USER, comment, req.ip]
+      );
+
+      // Everyone already in the conversation hears about it (in-app only).
+      const participants = await query(
+        'SELECT DISTINCT approver_id AS id FROM approval_logs WHERE request_id = ?',
+        [requestId]
+      );
+      notificationService.onCommentAdded(
+        'float', Number(requestId), rows[0].request_code, req.user.id,
+        `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() || 'A user',
+        [rows[0].requester_id, ...participants.map(p => p.id)]
+      ).catch(() => {});
+
+      res.status(201).json({ success: true, message: 'Comment added' });
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      res.status(500).json({ success: false, error: 'Failed to add comment' });
     }
   }
 
@@ -753,7 +805,7 @@ class RequestController {
         }
 
         if (requests[0].source_proc_request_id) {
-          throw new Error('This float requisition was generated from a purchase request and cannot be deleted');
+          throw new Error('This payment requisition was generated automatically through procurement and cannot be deleted');
         }
 
         if (requests[0].requester_id !== userId) {

@@ -57,8 +57,15 @@ export const requestService = {
   },
 
   // Submit request for approval
-  submit: async (requestId: number | string): Promise<ApiResponse<void>> => {
-    const response = await api.post(`/requests/${requestId}/submit`);
+  // An optional comment (e.g. what changed after a rejection) goes on the trail.
+  submit: async (requestId: number | string, comment?: string): Promise<ApiResponse<void>> => {
+    const response = await api.post(`/requests/${requestId}/submit`, comment ? { comment } : {});
+    return response.data;
+  },
+
+  // Add a comment to the approval trail (requester or approver, any stage)
+  addComment: async (requestId: number | string, comment: string): Promise<ApiResponse<void>> => {
+    const response = await api.post(`/requests/${requestId}/comments`, { comment });
     return response.data;
   },
 

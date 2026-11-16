@@ -238,7 +238,7 @@ export const FinanceApprovalNotice: React.FC<{ payable: number }> = ({ payable }
       </Alert>
     </Stack>
     <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
-      Approving also approves the float requisition generated for this purchase request. No reconciliation is needed —
+      Approving also approves the payment requisition generated automatically for this purchase request. No reconciliation is needed —
       the supplier is paid the exact amount.
     </Typography>
   </Box>
@@ -576,7 +576,7 @@ export const PaymentsPanel: React.FC<{
         </Typography>
         {float && (
           <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
-            <Typography variant="body2" color="text.secondary">Float requisition</Typography>
+            <Typography variant="body2" color="text.secondary">Payment requisition</Typography>
             <Button size="small" endIcon={<OpenIcon fontSize="small" />} sx={{ fontWeight: 600 }}
               onClick={() => navigate(`/finance/requests/${float.id}`)}>
               {float.request_code}
@@ -706,7 +706,7 @@ export const PaymentsPanel: React.FC<{
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2, mt: 1 }}>
             {money(reversing?.amount)} goes back to the budget lines it was deducted from and is reserved again for this
-            request, which reopens for payment{request.status === 'COMPLETED' ? ' (its float requisition reopens too)' : ''}.
+            request, which reopens for payment{request.status === 'COMPLETED' ? ' (its payment requisition reopens too)' : ''}.
             The payment stays on record, marked as reversed.
           </Alert>
           <TextField fullWidth multiline rows={3} label="Reason for the reversal *" value={reverseReason}
@@ -754,7 +754,7 @@ export const PaymentsPanel: React.FC<{
             onChange={e => setNotes(e.target.value)} sx={{ mt: 2 }} />
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1.5 }}>
             The amount is deducted from the budget lines straight away. Paying the full balance completes the request and
-            closes its float requisition.
+            closes its payment requisition.
           </Typography>
         </DialogContent>
         <DialogActions>

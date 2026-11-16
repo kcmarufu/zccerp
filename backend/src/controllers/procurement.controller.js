@@ -81,10 +81,20 @@ class ProcurementController {
 
   async submitPurchaseRequest(req, res) {
     try {
-      const result = await procurementService.submitPurchaseRequest(req.params.id, req.user);
+      const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim().slice(0, 2000) : '';
+      const result = await procurementService.submitPurchaseRequest(req.params.id, req.user, comment || null);
       res.json({ success: true, data: result, message: 'Purchase request submitted for approval' });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  async addComment(req, res) {
+    try {
+      await procurementService.addComment(req.params.id, req.user, req.body?.comment);
+      res.status(201).json({ success: true, message: 'Comment added' });
+    } catch (err) {
+      res.status(err.status || 500).json({ success: false, error: err.message || 'Failed to add comment' });
     }
   }
 

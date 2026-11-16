@@ -124,15 +124,18 @@ class AdminController {
    */
   async getAllUsers(req, res) {
     try {
+      // Archived (deleted) users are hidden unless the admin asks for them.
+      const archived = req.query.archived === '1' || req.query.archived === 'true';
       const users = await query(
         `SELECT u.id, u.email, u.first_name, u.last_name,
                 u.is_active, u.last_login, u.created_at, u.updated_at,
-                u.job_title,
+                u.job_title, u.deleted_at,
                 r.role_name as role, r.role_description,
                 d.department_name, d.department_code, u.department_id
          FROM users u
          LEFT JOIN roles r ON u.role_id = r.id
          LEFT JOIN departments d ON u.department_id = d.id
+         WHERE u.deleted_at IS ${archived ? 'NOT ' : ''}NULL
          ORDER BY u.created_at DESC`
       );
       res.json({ success: true, data: users });
@@ -188,9 +191,14 @@ class AdminController {
       }
 
       // Check if email already exists
-      const existing = await query('SELECT id FROM users WHERE email = ?', [email]);
+      const existing = await query('SELECT id, deleted_at FROM users WHERE email = ?', [email]);
       if (existing.length > 0) {
-        return res.status(400).json({ success: false, error: 'Email already registered' });
+        return res.status(400).json({
+          success: false,
+          error: existing[0].deleted_at
+            ? 'This email belongs to a deleted user. Restore that user from "Show deleted users" instead of creating a new account.'
+            : 'Email already registered'
+        });
       }
 
       // Get role ID
@@ -330,9 +338,12 @@ class AdminController {
         return res.status(400).json({ success: false, error: 'Cannot deactivate your own account' });
       }
 
-      const users = await query('SELECT id, is_active FROM users WHERE id = ?', [userId]);
+      const users = await query('SELECT id, is_active, deleted_at FROM users WHERE id = ?', [userId]);
       if (users.length === 0) {
         return res.status(404).json({ success: false, error: 'User not found' });
+      }
+      if (users[0].deleted_at) {
+        return res.status(400).json({ success: false, error: 'This user has been deleted. Restore the user first.' });
       }
 
       const newStatus = !users[0].is_active;
@@ -386,19 +397,47 @@ class AdminController {
         }
       }
 
-      // Check if user has associated requests — deactivate instead of hard delete if so
-      const requestCount = await query('SELECT COUNT(*) as cnt FROM requests WHERE requester_id = ?', [targetId]);
-      if ((requestCount[0]?.cnt || 0) > 0) {
-        // Soft delete — deactivate instead
-        await query('UPDATE users SET is_active = FALSE, updated_at = NOW() WHERE id = ?', [targetId]);
-        return res.json({ success: true, message: 'User has existing requests — account deactivated instead of deleted', softDelete: true });
-      }
-
-      await query('DELETE FROM users WHERE id = ?', [targetId]);
-      res.json({ success: true, message: 'User deleted successfully' });
+      // Never a hard DELETE. Requests, approvals, procurement, HR, asset and
+      // budget records all point at the user; deleting the row either failed
+      // on those links or quietly cut them. Archiving keeps every record and
+      // the name on it, removes the account from the user list, and blocks
+      // login immediately (authentication only accepts active users).
+      await query(
+        'UPDATE users SET is_active = FALSE, deleted_at = NOW(), deleted_by = ?, updated_at = NOW() WHERE id = ?',
+        [req.user.id, targetId]
+      );
+      res.json({
+        success: true,
+        message: 'User deleted. Their requests, approvals and other records are kept.'
+      });
     } catch (error) {
       console.error('Error deleting user:', error);
       res.status(500).json({ success: false, error: 'Failed to delete user' });
+    }
+  }
+
+  /**
+   * Restore a deleted (archived) user
+   * POST /api/admin/users/:id/restore
+   */
+  async restoreUser(req, res) {
+    try {
+      const targetId = parseInt(req.params.id);
+      const users = await query('SELECT id, deleted_at FROM users WHERE id = ?', [targetId]);
+      if (users.length === 0) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+      if (!users[0].deleted_at) {
+        return res.status(400).json({ success: false, error: 'This user is not deleted' });
+      }
+      await query(
+        'UPDATE users SET deleted_at = NULL, deleted_by = NULL, is_active = TRUE, updated_at = NOW() WHERE id = ?',
+        [targetId]
+      );
+      res.json({ success: true, message: 'User restored and reactivated' });
+    } catch (error) {
+      console.error('Error restoring user:', error);
+      res.status(500).json({ success: false, error: 'Failed to restore user' });
     }
   }
 

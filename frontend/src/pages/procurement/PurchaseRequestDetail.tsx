@@ -74,6 +74,7 @@ import {
   resubmitFromProcurement,
   ReturnTo,
   submitPurchaseRequest,
+  addPurchaseRequestComment,
   getVendors,
   isViewableInBrowser,
   viewRequestAttachment,
@@ -94,6 +95,7 @@ import { antiTerrorLabel, isAntiTerrorVerified, isVendorComplete } from '../../u
 import { downloadHTMLAsPDF, downloadPurchaseOrderPDF } from '../../utils/pdfUtils';
 import { formatRoleLabel } from '../../utils/roleUtils';
 import { useGoBack } from '../../utils/navigationState';
+import TrailCommentBox from '../../components/common/TrailCommentBox';
 import * as XLSX from 'xlsx';
 
 // ─── Quotation line items ─────────────────────────────────────────────────────
@@ -871,11 +873,17 @@ const PurchaseRequestDetail: React.FC = () => {
     }
   };
 
+  // Resubmitting a rejected request asks for an optional comment first.
+  const [resubmitNoteOpen, setResubmitNoteOpen] = useState(false);
+  const [resubmitNote, setResubmitNote] = useState('');
+
   const handleSubmitRequest = async () => {
     setActionLoading(true);
     try {
-      await submitPurchaseRequest(id!);
-      toast.success('Request submitted for approval');
+      await submitPurchaseRequest(id!, request?.status === 'REJECTED' ? resubmitNote.trim() || undefined : undefined);
+      toast.success(request?.status === 'REJECTED' ? 'Request resubmitted for approval' : 'Request submitted for approval');
+      setResubmitNoteOpen(false);
+      setResubmitNote('');
       invalidate();
     } catch (e: any) {
       toast.error(e?.response?.data?.error || 'Failed to submit');
@@ -1539,7 +1547,7 @@ ${allCommitteeApproved ? `
       {v2 && ['DRAFT', 'PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL', 'PENDING_PROCUREMENT', 'PENDING_COMMITTEE'].includes(request.status) && (
         <Alert severity="info" sx={{ mb: 3 }}>
           After the Committee, the department confirms the award, then Finance approves it.
-          Finance's approval generates this request's <strong>float requisition</strong> automatically, so
+          Finance's approval generates this request's <strong>payment requisition</strong> automatically, so
           <strong> do not raise a separate float</strong> for these items.
         </Alert>
       )}
@@ -1914,7 +1922,9 @@ ${allCommitteeApproved ? `
                 </Typography>
               )}
               {canSubmit && (
-                <Button fullWidth variant="contained" startIcon={<SendIcon />} onClick={handleSubmitRequest} disabled={actionLoading}>
+                <Button fullWidth variant="contained" startIcon={<SendIcon />}
+                  onClick={() => (request.status === 'REJECTED' ? setResubmitNoteOpen(true) : handleSubmitRequest())}
+                  disabled={actionLoading}>
                   {request.status === 'REJECTED' ? 'Resubmit for Approval' : 'Submit for Approval'}
                 </Button>
               )}
@@ -2371,7 +2381,7 @@ ${allCommitteeApproved ? `
                                 <Typography variant="body2" fontWeight={600}>{log.actor_first_name} {log.actor_last_name}</Typography>
                                 <Chip
                                   label={log.action.replace(/_/g, ' ')} size="small"
-                                  color={isAmendmentAction(log.action) ? 'warning' : log.action.includes('APPROVED') ? 'success' : log.action.includes('REJECT') ? 'error' : 'info'}
+                                  color={log.action === 'COMMENT' ? 'default' : isAmendmentAction(log.action) ? 'warning' : log.action.includes('APPROVED') ? 'success' : log.action.includes('REJECT') ? 'error' : 'info'}
                                   sx={{ height: 20, fontSize: '0.65rem' }}
                                 />
                               </Box>
@@ -2398,9 +2408,37 @@ ${allCommitteeApproved ? `
                   })}
                 </List>
               )}
+              <TrailCommentBox
+                onSubmit={(c) => addPurchaseRequestComment(id!, c)}
+                onAdded={invalidate}
+              />
             </Paper>
         </Grid>
       </Grid>
+
+      {/* Optional comment when resubmitting a rejected request */}
+      <Dialog open={resubmitNoteOpen} onClose={() => !actionLoading && setResubmitNoteOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Resubmit for Approval</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            multiline
+            minRows={3}
+            sx={{ mt: 1 }}
+            label="Comment to the approvers (optional)"
+            placeholder="e.g. what you changed in response to the rejection"
+            value={resubmitNote}
+            onChange={(e) => setResubmitNote(e.target.value.slice(0, 2000))}
+            helperText="Shown on the approval trail with your resubmission."
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResubmitNoteOpen(false)} disabled={actionLoading}>Cancel</Button>
+          <Button variant="contained" startIcon={<SendIcon />} onClick={handleSubmitRequest} disabled={actionLoading}>
+            Resubmit
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Action Dialog */}
       <Dialog open={Boolean(actionDialog)} onClose={() => !actionLoading && setActionDialog(null)} maxWidth={actionDialog === 'submit_committee' && splitAward ? 'md' : 'sm'} fullWidth>

@@ -361,6 +361,9 @@ const RequestsListPage: React.FC = () => {
                     </TableCell>
                     <TableCell onClick={() => navigate(`/finance/requests/${request.id}`)}>
                       <Typography fontWeight={600} variant="body2" color="primary.main">{request.request_code}</Typography>
+                      {(request as any).source_proc_request_id && (
+                        <Chip label="Payment Requisition · via Procurement" size="small" color="secondary" variant="outlined" sx={{ mt: 0.5, height: 20, fontSize: '0.65rem' }} />
+                      )}
                     </TableCell>
                     <TableCell onClick={() => navigate(`/finance/requests/${request.id}`)}>{request.department_name}</TableCell>
                     <TableCell onClick={() => navigate(`/finance/requests/${request.id}`)}>

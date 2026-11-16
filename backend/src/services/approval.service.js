@@ -27,7 +27,7 @@ class ApprovalService {
   /**
    * Submit request for approval (User submits draft)
    */
-  async submitRequest(requestId, userId, ipAddress) {
+  async submitRequest(requestId, userId, ipAddress, comment = null) {
     const result = await transaction(async (connection) => {
       // Lock the request row
       const [requests] = await connection.execute(
@@ -44,7 +44,7 @@ class ApprovalService {
 
       const request = requests[0];
       if (request.source_proc_request_id) {
-        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+        throw new Error('This payment requisition was generated automatically through procurement. It is approved and paid through the purchase request, not as an ordinary float.');
       }
 
       // Verify ownership
@@ -204,8 +204,8 @@ class ApprovalService {
       // Log the submission/resubmission for a complete audit trail.
       await connection.execute(
         `INSERT INTO approval_logs
-         (request_id, approver_id, approver_role, action, previous_status, new_status, ip_address)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (request_id, approver_id, approver_role, action, previous_status, new_status, comments, ip_address)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           requestId,
           userId,
@@ -213,6 +213,7 @@ class ApprovalService {
           isResubmission ? 'RESUBMITTED' : 'SUBMITTED',
           request.status,
           targetStatus,
+          comment || null,
           ipAddress
         ]
       );
@@ -268,7 +269,7 @@ class ApprovalService {
 
       const request = requests[0];
       if (request.source_proc_request_id) {
-        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+        throw new Error('This payment requisition was generated automatically through procurement. It is approved and paid through the purchase request, not as an ordinary float.');
       }
 
       // Validate status — Lead can act at PENDING_LEAD_APPROVAL or PENDING_ADMIN_APPROVAL
@@ -352,7 +353,7 @@ class ApprovalService {
 
       const request = requests[0];
       if (request.source_proc_request_id) {
-        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+        throw new Error('This payment requisition was generated automatically through procurement. It is approved and paid through the purchase request, not as an ordinary float.');
       }
 
       // HOP can approve at PENDING_ADMIN_APPROVAL, PENDING_LEAD_APPROVAL or PENDING_HOP_APPROVAL
@@ -431,7 +432,7 @@ class ApprovalService {
 
       const request = requests[0];
       if (request.source_proc_request_id) {
-        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+        throw new Error('This payment requisition was generated automatically through procurement. It is approved and paid through the purchase request, not as an ordinary float.');
       }
 
       if (request.version !== expectedVersion) {
@@ -546,7 +547,7 @@ class ApprovalService {
 
       const request = requests[0];
       if (request.source_proc_request_id) {
-        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+        throw new Error('This payment requisition was generated automatically through procurement. It is approved and paid through the purchase request, not as an ordinary float.');
       }
 
       if (request.status !== REQUEST_STATUS.PENDING_FINANCE_APPROVAL) {
@@ -619,7 +620,7 @@ class ApprovalService {
 
       const request = requests[0];
       if (request.source_proc_request_id) {
-        throw new Error('This float requisition was generated from a purchase request. It is approved and paid through the purchase request, not as an ordinary float.');
+        throw new Error('This payment requisition was generated automatically through procurement. It is approved and paid through the purchase request, not as an ordinary float.');
       }
       const previousStatus = request.status;
 
@@ -901,7 +902,7 @@ class ApprovalService {
       const request = requests[0];
 
       if (request.source_proc_request_id) {
-        throw new Error('This float requisition was generated from a purchase request. Its approvals and payments are managed on the purchase request.');
+        throw new Error('This payment requisition was generated automatically through procurement. Its approvals and payments are managed on the purchase request.');
       }
       
       // Whose approval may be undone: your own, except for a system
@@ -1095,7 +1096,7 @@ class ApprovalService {
       const request = requests[0];
 
       if (request.source_proc_request_id) {
-        throw new Error('This float requisition was generated from a purchase request. Its approvals and payments are managed on the purchase request.');
+        throw new Error('This payment requisition was generated automatically through procurement. Its approvals and payments are managed on the purchase request.');
       }
 
       if (![REQUEST_STATUS.APPROVED, 'DISPATCHED'].includes(request.status)) {

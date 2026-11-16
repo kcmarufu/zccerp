@@ -30,7 +30,8 @@ import {
   ManageAccounts as ManageIcon,
   GetApp as ExportIcon,
   PictureAsPdf as PdfIcon,
-  TableChart as ExcelIcon
+  TableChart as ExcelIcon,
+  RestoreFromTrash as RestoreIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { format } from '../../utils/datetime';
@@ -51,6 +52,7 @@ interface UserRecord {
   department_name?: string;
   department_code?: string;
   is_active: boolean;
+  deleted_at?: string | null;
   last_login?: string;
   created_at: string;
   updated_at?: string;
@@ -110,10 +112,13 @@ const UserManagementPage: React.FC = () => {
   const [profileUser, setProfileUser] = useState<UserRecord | null>(null);
   const [loginHistory, setLoginHistory] = useState<any[]>([]);
 
+  // Deleted users are archived, not erased; this switch lists them for restoring.
+  const [showDeleted, setShowDeleted] = useState(false);
+
   const fetchUsers = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await api.get('/admin/users');
+      const response = await api.get('/admin/users', { params: showDeleted ? { archived: 1 } : {} });
       if (response.data.success) {
         setUsers(response.data.data);
       }
@@ -123,7 +128,7 @@ const UserManagementPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [showDeleted]);
 
   const fetchLookups = useCallback(async () => {
     try {
@@ -250,17 +255,23 @@ const UserManagementPage: React.FC = () => {
     try {
       setIsDeleting(true);
       const res = await api.delete(`/admin/users/${deleteTarget.id}`);
-      if (res.data.softDelete) {
-        toast.info(res.data.message);
-      } else {
-        toast.success('User deleted successfully');
-      }
+      toast.success(res.data.message || 'User deleted');
       setDeleteTarget(null);
       fetchUsers();
     } catch (error: any) {
       toast.error(error?.response?.data?.error || 'Failed to delete user');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleRestoreUser = async (u: any) => {
+    try {
+      const res = await api.post(`/admin/users/${u.id}/restore`);
+      toast.success(res.data.message || 'User restored');
+      fetchUsers();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Failed to restore user');
     }
   };
 
@@ -408,6 +419,11 @@ const UserManagementPage: React.FC = () => {
                 PDF
               </Button>
             </Tooltip>
+            <FormControlLabel
+              sx={{ color: 'white', ml: 0.5 }}
+              control={<Switch size="small" color="default" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} />}
+              label={<Typography variant="body2">Show deleted users</Typography>}
+            />
             <Button variant="contained" startIcon={<AddIcon />}
               onClick={openCreateDialog}
               sx={{ bgcolor: 'rgba(255,255,255,0.2)', '&:hover': { bgcolor: 'rgba(255,255,255,0.3)' } }}>
@@ -555,8 +571,8 @@ const UserManagementPage: React.FC = () => {
                         sx={{ fontSize: '0.68rem', height: 20, '& .MuiChip-label': { px: 0.8 } }} />
                     </TableCell>
                     <TableCell sx={{ py: 0.8, px: 1.5 }}>
-                      <Chip label={u.is_active ? 'Active' : 'Inactive'} size="small"
-                        color={u.is_active ? 'success' : 'default'}
+                      <Chip label={u.deleted_at ? 'Deleted' : u.is_active ? 'Active' : 'Inactive'} size="small"
+                        color={u.deleted_at ? 'error' : u.is_active ? 'success' : 'default'}
                         sx={{ fontWeight: 600, fontSize: '0.68rem', height: 20, '& .MuiChip-label': { px: 0.8 } }} />
                     </TableCell>
                     <TableCell sx={{ py: 0.8, px: 1.5, fontSize: '0.75rem', color: 'text.secondary' }}>
@@ -567,6 +583,13 @@ const UserManagementPage: React.FC = () => {
                         <Tooltip title="View Profile">
                           <IconButton size="small" sx={{ p: 0.4 }} onClick={() => openProfileDialog(u)}><ViewIcon sx={{ fontSize: 16 }} /></IconButton>
                         </Tooltip>
+                        {u.deleted_at ? (
+                        <Tooltip title={`Deleted ${format(new Date(u.deleted_at), 'MMM d, yyyy')} — restore and reactivate`}>
+                          <IconButton size="small" sx={{ p: 0.4 }} color="success" onClick={() => handleRestoreUser(u)}>
+                            <RestoreIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                        </Tooltip>
+                        ) : (<>
                         <Tooltip title="Edit User">
                           <IconButton size="small" sx={{ p: 0.4 }} onClick={() => openEditDialog(u)}><EditIcon sx={{ fontSize: 16 }} /></IconButton>
                         </Tooltip>
@@ -591,6 +614,7 @@ const UserManagementPage: React.FC = () => {
                             </IconButton>
                           </span>
                         </Tooltip>
+                        </>)}
                       </Box>
                     </TableCell>
                   </TableRow>
@@ -845,8 +869,9 @@ const UserManagementPage: React.FC = () => {
                 You are about to delete <strong>{deleteTarget.first_name} {deleteTarget.last_name}</strong> ({deleteTarget.email}).
               </Alert>
               <Typography variant="body2" color="text.secondary">
-                If this user has existing requests, the account will be deactivated instead of permanently deleted.
-                This action cannot be undone.
+                The user is removed from this list and can no longer log in. <strong>No data is lost:</strong> their
+                requests, approvals, procurement, HR and other records stay, with their name on them.
+                You can bring the account back with <strong>Show deleted users → Restore</strong>.
               </Typography>
             </Box>
           )}
