@@ -50,6 +50,7 @@ import {
   OpenInNew as OpenInNewIcon
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
+import { describeActivityPeriod, ACTIVITY_RECON_WORKING_DAYS } from '../../utils/activityPeriod';
 import { v4 as uuidv4 } from 'uuid';
 
 import {
@@ -761,8 +762,6 @@ const RequestForm: React.FC = () => {
       if (!data.activityStartDate) { toast.error('Activity Start Date is required for Activity Requests'); return; }
       if (!data.activityEndDate)   { toast.error('Activity End Date is required for Activity Requests'); return; }
       if (data.activityEndDate < data.activityStartDate) { toast.error('Activity End Date cannot be before the Start Date'); return; }
-    } else {
-      toast.info('Note: This request is not marked as an Activity Request.');
     }
     try {
       setIsSubmitting(true);
@@ -1002,9 +1001,9 @@ const RequestForm: React.FC = () => {
                       <Box display="flex" alignItems="center" gap={1}>
                         <ActivityIcon color={field.value ? 'warning' : 'disabled'} fontSize="small" />
                         <Box>
-                          <Typography variant="body1">Activity Request</Typography>
+                          <Typography variant="body1">Activity request</Typography>
                           <Typography variant="caption" color="text.secondary">
-                            Tick if this float is for a scheduled activity
+                            For a workshop, meeting or other dated activity
                           </Typography>
                         </Box>
                       </Box>
@@ -1031,12 +1030,12 @@ const RequestForm: React.FC = () => {
                     render={({ field }) => (
                       <TextField
                         {...field}
-                        label="Activity Start Date *"
+                        label="Start date *"
                         type="date"
                         fullWidth
                         InputLabelProps={{ shrink: true }}
                         error={!!errors.activityStartDate}
-                        helperText={errors.activityStartDate?.message || 'Enter the date the activity begins'}
+                        helperText={errors.activityStartDate?.message || ' '}
                       />
                     )}
                   />
@@ -1049,21 +1048,44 @@ const RequestForm: React.FC = () => {
                     render={({ field }) => (
                       <TextField
                         {...field}
-                        label="Activity End Date *"
+                        label="End date *"
                         type="date"
                         fullWidth
                         InputLabelProps={{ shrink: true }}
+                        inputProps={{ min: watchedActivityStart || undefined }}
                         error={!!errors.activityEndDate}
-                        helperText={errors.activityEndDate?.message || 'Reconciliation is due 4 working days after this date'}
+                        helperText={errors.activityEndDate?.message || ' '}
                       />
                     )}
                   />
                 </Grid>
                 <Grid item xs={12}>
-                  <Alert severity="warning" icon={<ActivityIcon />}>
-                    <strong>Activity Request:</strong> Reconciliation must be submitted within{' '}
-                    <strong>4 working days</strong> of the Activity End Date. Submissions after this deadline will be marked as <strong>Late</strong>.
-                  </Alert>
+                  {(() => {
+                    const ap = describeActivityPeriod(watchedActivityStart, watchedActivityEnd);
+                    if (!watchedActivityStart || !watchedActivityEnd) {
+                      return (
+                        <Typography variant="body2" color="text.secondary">
+                          Reconciliation is due {ACTIVITY_RECON_WORKING_DAYS} working days after the activity ends.
+                        </Typography>
+                      );
+                    }
+                    if (!ap) {
+                      return <Typography variant="body2" color="error">The end date is before the start date.</Typography>;
+                    }
+                    return (
+                      <Box display="flex" flexWrap="wrap" columnGap={3} rowGap={0.5}
+                        sx={{ px: 2, py: 1.25, borderRadius: 1, bgcolor: 'action.hover' }}>
+                        <Typography variant="body2">
+                          <Box component="span" color="text.secondary">Activity: </Box>
+                          <strong>{ap.period}</strong> ({ap.days} day{ap.days !== 1 ? 's' : ''})
+                        </Typography>
+                        <Typography variant="body2">
+                          <Box component="span" color="text.secondary">Reconcile by: </Box>
+                          <strong>{ap.reconDue}</strong>
+                        </Typography>
+                      </Box>
+                    );
+                  })()}
                 </Grid>
               </>
             )}

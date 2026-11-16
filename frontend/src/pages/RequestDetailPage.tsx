@@ -30,11 +30,8 @@ import {
   Step,
   StepLabel,
   StepContent,
-  Card,
-  CardContent,
   IconButton,
   Tooltip,
-  Collapse,
   useTheme,
   useMediaQuery
 } from '@mui/material';
@@ -51,9 +48,7 @@ import {
   TableChart as ExcelIcon,
   Undo as ReverseIcon,
   AccessTime as TimeIcon,
-  Print as PrintIcon,
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon
+  Print as PrintIcon
 } from '@mui/icons-material';
 
 import { useAuthStore } from '../store/authStore';
@@ -70,7 +65,8 @@ import { formatRoleLabel } from '../utils/roleUtils';
 import { useGoBack } from '../utils/navigationState';
 import { isRequesterEditable } from '../utils/requestStatus';
 import { ReservationNotice } from '../components/procurement/PrFloatPanels';
-import TrailCommentBox from '../components/common/TrailCommentBox';
+import { RequestDiscussion, CommentsDigest } from '../components/common/RequestDiscussion';
+import { describeActivityPeriod } from '../utils/activityPeriod';
 import * as XLSX from 'xlsx';
 
 const APPROVAL_STEPS = [
@@ -105,8 +101,6 @@ const RequestDetailPage: React.FC = () => {
   const [showReverseDialog, setShowReverseDialog] = useState(false);
   const [reverseComment, setReverseComment] = useState('');
   const [reversalInfo, setReversalInfo] = useState<{ canReverse: boolean; hoursRemaining?: string } | null>(null);
-  const [showAllApprovalLogs, setShowAllApprovalLogs] = useState(false);
-  const [showApprovalTrail, setShowApprovalTrail] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const [perDiemClaim, setPerDiemClaim] = useState<PerDiemClaim | null>(null);
@@ -574,14 +568,12 @@ ${buildDigitalStamp(request.status, (request as any).completed_at || request.upd
   <div class="meta-item"><span class="meta-label">Total Amount</span><span class="meta-value" style="font-weight:bold">$${Number(request.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
   ${(request as any).donor_name ? `<div class="meta-item"><span class="meta-label">Partner / Donor</span><span class="meta-value">${(request as any).donor_name}${(request as any).donor_code ? ` (${(request as any).donor_code})` : ''}</span></div>` : ''}
   ${(request as any).project_name ? `<div class="meta-item"><span class="meta-label">Project</span><span class="meta-value">${(request as any).project_name}${(request as any).project_code ? ` (${(request as any).project_code})` : ''}</span></div>` : ''}
-  ${(request as any).is_activity_request ? `
-    <div class="meta-item meta-full" style="background:#fff8e1;border-left:4px solid #f9a825;padding:8px 12px;border-radius:0 4px 4px 0;">
-      <span class="meta-label" style="color:#f57f17">Activity Request</span>
-      <span class="meta-value" style="font-weight:bold;color:#f57f17">YES — Scheduled Activity</span>
-    </div>
-    <div class="meta-item"><span class="meta-label">Activity Start Date</span><span class="meta-value">${(request as any).activity_start_date ? formatCalendarDate((request as any).activity_start_date) : '—'}</span></div>
-    <div class="meta-item"><span class="meta-label">Activity End Date</span><span class="meta-value">${(request as any).activity_end_date ? formatCalendarDate((request as any).activity_end_date) : '—'}</span></div>
-  ` : ''}
+  ${(request as any).is_activity_request ? (() => {
+    const ap = describeActivityPeriod((request as any).activity_start_date, (request as any).activity_end_date);
+    return `
+    <div class="meta-item"><span class="meta-label">Activity Period</span><span class="meta-value">${ap ? `${ap.period} (${ap.days} day${ap.days !== 1 ? 's' : ''})` : '—'}</span></div>
+    <div class="meta-item"><span class="meta-label">Reconciliation Due</span><span class="meta-value">${ap ? ap.reconDue : '—'}</span></div>`;
+  })() : ''}
   ${(request as any).justification ? `<div class="meta-item meta-full"><span class="meta-label">Event / Purpose</span><span class="meta-value">${(request as any).justification}</span></div>` : ''}
   ${approvalLogs.filter(l => l.action === 'REJECTED').length > 0 ? `<div class="meta-item rejection-box"><span class="meta-label">Rejection Reason</span><span class="meta-value">${approvalLogs.filter(l => l.action === 'REJECTED').map(l => l.comment || l.comments || '').join('; ')}</span></div>` : ''}
 </div>
@@ -895,41 +887,27 @@ ${buildClaimPage()}
                   <Typography variant="body1">{(request as any).justification}</Typography>
                 </Grid>
               )}
-              {/* Activity Request info — visible to all viewers including approvers */}
-              {(request as any).is_activity_request ? (
-                <>
+              {/* Activity dates — one line, with the actual reconciliation deadline */}
+              {(request as any).is_activity_request ? (() => {
+                const ap = describeActivityPeriod((request as any).activity_start_date, (request as any).activity_end_date);
+                return (
                   <Grid item xs={12}>
-                    <Alert severity="warning" icon={false} sx={{ py: 0.5 }}>
-                      <Typography variant="body2" fontWeight={700}>Activity Request</Typography>
-                      <Typography variant="caption">
-                        Reconciliation is due <strong>4 working days</strong> after the Activity End Date.
-                      </Typography>
-                    </Alert>
+                    <Box display="flex" flexWrap="wrap" alignItems="center" columnGap={4} rowGap={1}
+                      sx={{ px: 2, py: 1.5, borderRadius: 1, bgcolor: 'action.hover' }}>
+                      <Box>
+                        <Typography variant="body2" color="text.secondary">Activity period</Typography>
+                        <Typography variant="body1" fontWeight="medium">
+                          {ap ? <>{ap.period} <Typography component="span" variant="body2" color="text.secondary">({ap.days} day{ap.days !== 1 ? 's' : ''})</Typography></> : '—'}
+                        </Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="body2" color="text.secondary">Reconciliation due</Typography>
+                        <Typography variant="body1" fontWeight="medium">{ap ? ap.reconDue : '—'}</Typography>
+                      </Box>
+                    </Box>
                   </Grid>
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="body2" color="text.secondary">Activity Start Date</Typography>
-                    <Typography variant="body1" fontWeight="medium">
-                      {(request as any).activity_start_date
-                        ? formatCalendarDate((request as any).activity_start_date)
-                        : '—'}
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="body2" color="text.secondary">Activity End Date</Typography>
-                    <Typography variant="body1" fontWeight="medium">
-                      {(request as any).activity_end_date
-                        ? formatCalendarDate((request as any).activity_end_date)
-                        : '—'}
-                    </Typography>
-                  </Grid>
-                </>
-              ) : (
-                <Grid item xs={12}>
-                  <Typography variant="body2" color="text.secondary">
-                    Activity Request: <strong>No</strong>
-                  </Typography>
-                </Grid>
-              )}
+                );
+              })() : null}
             </Grid>
           </Paper>
 
@@ -1075,6 +1053,15 @@ ${buildClaimPage()}
               </Table>
             )}
           </Paper>
+
+          {/* Comments & approval trail — the conversation, newest at the bottom by the reply box */}
+          <Box sx={{ mt: 3 }}>
+            <RequestDiscussion
+              logs={approvalLogs}
+              onPost={(c) => requestService.addComment(requestId!, c)}
+              onPosted={fetchRequestDetails}
+            />
+          </Box>
         </Grid>
 
         {/* Sidebar */}
@@ -1266,125 +1253,6 @@ ${buildClaimPage()}
             )}
           </Paper>
 
-          {/* Approval Trail */}
-          <Paper elevation={2} sx={{ p: 0 }}>
-            <Box
-              display="flex" alignItems="center" justifyContent="space-between"
-              sx={{ px: 3, py: 2, cursor: 'pointer', borderRadius: showApprovalTrail ? '8px 8px 0 0' : 2 }}
-              onClick={() => setShowApprovalTrail(v => !v)}
-            >
-              <Box>
-                <Typography variant="h6">Approval Trail</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {approvalLogs.length} action{approvalLogs.length !== 1 ? 's' : ''} — click to {showApprovalTrail ? 'collapse' : 'expand'} or add a comment
-                </Typography>
-              </Box>
-              <IconButton size="small">
-                {showApprovalTrail ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </IconButton>
-            </Box>
-            <Collapse in={showApprovalTrail}>
-            <Divider />
-            <Box sx={{ p: 3 }}>
-            {approvalLogs.length === 0 ? (
-              <Typography color="text.secondary">
-                No approval actions yet
-              </Typography>
-            ) : (
-              <Box>
-                {/* Latest action first, so the collapsed view shows the two most recent. */}
-                {(showAllApprovalLogs ? [...approvalLogs].reverse() : [...approvalLogs].reverse().slice(0, 2)).map((log, index) => {
-                  // A float generated from a purchase request carries that
-                  // request's trail, its actions prefixed PR_.
-                  const getActionColor = (rawAction: string): 'success' | 'error' | 'warning' | 'info' | 'default' => {
-                    const action = String(rawAction || '').replace(/^PR_/, '');
-                    if (['FINAL_APPROVED', 'DEPT_CONFIRMED', 'COMMITTEE_APPROVED', 'HIGH_VALUE_APPROVED', 'PAID_IN_FULL', 'GENERATED_FROM_PR'].includes(action)) return 'success';
-                    if (action.endsWith('_REJECTED')) return 'error';
-                    if (action === 'APPROVED' || action === 'APPROVE') return 'success';
-                    if (action === 'REJECTED' || action === 'REJECT') return 'error';
-                    if (action === 'REVERSED') return 'warning';
-                    if (action === 'SUBMITTED') return 'info';
-                    if (action === 'COMMENT') return 'info';
-                    return 'default';
-                  };
-
-                  const getActionIcon = (rawAction: string) => {
-                    const action = String(rawAction || '').replace(/^PR_/, '');
-                    if (getActionColor(rawAction) === 'success') return '✓';
-                    if (action === 'APPROVED' || action === 'APPROVE') return '✓';
-                    if (action === 'REJECTED' || action === 'REJECT') return '✗';
-                    if (action === 'REVERSED') return '↩';
-                    if (action === 'SUBMITTED') return '→';
-                    if (action === 'COMMENT') return '💬';
-                    return '•';
-                  };
-
-                  return (
-                    <Card
-                      key={log.id}
-                      variant="outlined"
-                      sx={{
-                        mb: 2,
-                        borderLeft: 4,
-                        borderLeftColor: `${getActionColor(log.action)}.main`
-                      }}
-                    >
-                      <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
-                        <Box display="flex" alignItems="center" justifyContent="space-between" mb={0.5}>
-                          <Box display="flex" alignItems="center" gap={1}>
-                            <Chip
-                              label={`${getActionIcon(log.action)} ${String(log.action).startsWith('PR_') ? `PR · ${String(log.action).slice(3)}` : log.action}`.replace(/_/g, ' ')}
-                              size="small"
-                              color={getActionColor(log.action)}
-                            />
-                            <Typography variant="body2" fontWeight="medium">
-                              {log.actor_name || `${log.approver_first_name} ${log.approver_last_name}`}
-                            </Typography>
-                          </Box>
-                          <Typography variant="caption" color="text.secondary">
-                            {formatDate(log.created_at)}
-                          </Typography>
-                        </Box>
-                        <Typography variant="caption" color="text.secondary">
-                          {formatRoleLabel(log.actor_role || log.approver_role, log.actor_job_title)}
-                        </Typography>
-                        {log.previous_status && log.new_status && (
-                          <Box sx={{ mt: 0.5 }}>
-                            <Typography variant="caption" color="text.secondary">
-                              Status: {log.previous_status.replace(/_/g, ' ')} → {log.new_status.replace(/_/g, ' ')}
-                            </Typography>
-                          </Box>
-                        )}
-                        {(log.comment || log.comments) && (
-                          <Box sx={{ mt: 1, p: 1, bgcolor: 'grey.100', borderRadius: 1 }}>
-                            <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
-                              "{log.comment || log.comments}"
-                            </Typography>
-                          </Box>
-                        )}
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-                {approvalLogs.length > 2 && (
-                  <Box textAlign="center" mt={1}>
-                    <Button
-                      size="small"
-                      onClick={() => setShowAllApprovalLogs(!showAllApprovalLogs)}
-                    >
-                      {showAllApprovalLogs ? 'Show Less' : `View All (${approvalLogs.length} entries)`}
-                    </Button>
-                  </Box>
-                )}
-              </Box>
-            )}
-            <TrailCommentBox
-              onSubmit={(c) => requestService.addComment(requestId!, c)}
-              onAdded={() => { setShowAllApprovalLogs(false); fetchRequestDetails(); }}
-            />
-            </Box>
-            </Collapse>
-          </Paper>
         </Grid>
 
         {/* Travel & Per Diem Claim — full width below both columns */}
@@ -1399,6 +1267,7 @@ ${buildClaimPage()}
       <Dialog open={showApproveDialog} onClose={() => setShowApproveDialog(false)} maxWidth="lg" fullWidth fullScreen={isMobile}>
         <DialogTitle>Approve Request</DialogTitle>
         <DialogContent>
+          <CommentsDigest logs={approvalLogs} />
           <Typography gutterBottom>
             Are you sure you want to approve this request?
           </Typography>
@@ -1436,6 +1305,7 @@ ${buildClaimPage()}
       <Dialog open={showRejectDialog} onClose={() => setShowRejectDialog(false)} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>Reject Request</DialogTitle>
         <DialogContent>
+          <CommentsDigest logs={approvalLogs} />
           <Typography gutterBottom>
             Please provide a reason for rejecting this request.
           </Typography>

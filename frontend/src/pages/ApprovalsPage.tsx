@@ -85,6 +85,8 @@ import { useAuthStore } from '../store/authStore';
 import TravelClaimSection from '../components/requests/TravelClaimSection';
 import { reconciliationService, LeadDeskBacklog, FinanceDeskBacklog } from '../services/reconciliationService';
 import { formatRoleLabel } from '../utils/roleUtils';
+import { RequestDiscussion } from '../components/common/RequestDiscussion';
+import { describeActivityPeriod } from '../utils/activityPeriod';
 import { usePersistentState } from '../utils/navigationState';
 
 /**
@@ -339,6 +341,15 @@ const ApprovalsPage: React.FC = () => {
     if (action === 'approve' || action === 'view') {
       handleViewBudgetImpact(request);
     }
+  };
+
+  /** After a comment is posted from the dialog, reload the open request's trail. */
+  const refreshDialogTrail = async () => {
+    if (!selectedRequest) return;
+    try {
+      const response = await requestService.getById(selectedRequest.id);
+      if (response.success && response.data) setFullRequestDetails(response.data as any);
+    } catch { /* the comment is saved; the trail refreshes next time */ }
   };
 
   const handleSubmit = async () => {
@@ -1298,31 +1309,28 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 </CardContent>
               </Card>
 
-              {/* Activity Dates (shown when it is an activity request) */}
-              {((fullRequestDetails as any)?.is_activity_request || (fullRequestDetails as any)?.activity_start_date || (fullRequestDetails as any)?.activity_end_date ||
-                (selectedRequest as any)?.is_activity_request || (selectedRequest as any)?.activity_start_date || (selectedRequest as any)?.activity_end_date) && (
-                <Alert severity="warning" icon={<ScheduleIcon />} sx={{ mb: 2 }}>
-                  <Typography variant="subtitle2" fontWeight={700}>Activity Dates</Typography>
-                  <Grid container spacing={2} mt={0.5}>
-                    <Grid item xs={6}>
-                      <Typography variant="body2" color="text.secondary">Activity Start Date</Typography>
-                      <Typography fontWeight={600}>
-                        {((fullRequestDetails as any)?.activity_start_date || (selectedRequest as any)?.activity_start_date)
-                          ? format(new Date((fullRequestDetails as any)?.activity_start_date || (selectedRequest as any)?.activity_start_date), 'dd MMM yyyy')
-                          : '—'}
-                      </Typography>
-                    </Grid>
-                    <Grid item xs={6}>
-                      <Typography variant="body2" color="text.secondary">Activity End Date</Typography>
-                      <Typography fontWeight={600}>
-                        {((fullRequestDetails as any)?.activity_end_date || (selectedRequest as any)?.activity_end_date)
-                          ? format(new Date((fullRequestDetails as any)?.activity_end_date || (selectedRequest as any)?.activity_end_date), 'dd MMM yyyy')
-                          : '—'}
-                      </Typography>
-                    </Grid>
-                  </Grid>
-                </Alert>
-              )}
+              {/* Activity dates (activity requests only) */}
+              {((fullRequestDetails as any)?.is_activity_request || (selectedRequest as any)?.is_activity_request) ? (() => {
+                const src: any = fullRequestDetails || selectedRequest;
+                const ap = describeActivityPeriod(src?.activity_start_date, src?.activity_end_date);
+                return (
+                  <Card variant="outlined" sx={{ mb: 2 }}>
+                    <CardContent sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 4, rowGap: 1, alignItems: 'center' }}>
+                      <ScheduleIcon color="action" />
+                      <Box>
+                        <Typography variant="body2" color="text.secondary">Activity period</Typography>
+                        <Typography fontWeight={600}>
+                          {ap ? `${ap.period} (${ap.days} day${ap.days !== 1 ? 's' : ''})` : '—'}
+                        </Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="body2" color="text.secondary">Reconciliation due</Typography>
+                        <Typography fontWeight={600}>{ap ? ap.reconDue : '—'}</Typography>
+                      </Box>
+                    </CardContent>
+                  </Card>
+                );
+              })() : null}
 
               {/* Event / Purpose */}
               <Card variant="outlined" sx={{ mb: 2 }}>
@@ -1497,60 +1505,17 @@ ${buildDigitalStamp(type === 'approved' ? 'APPROVED' : type === 'rejected' ? 'RE
                 <Alert severity="warning" sx={{ mb: 2 }}>Warning: One or more budget lines have insufficient funds.</Alert>
               )}
 
-              {/* Approval Trail */}
-              {((fullRequestDetails as any)?.approvalTrail?.length > 0) && (
+              {/* Comments & approval trail — read what has been said, reply, then decide below */}
+              {fullRequestDetails && (
                 <Card variant="outlined" sx={{ mb: 2 }}>
                   <CardContent>
-                    <Typography variant="subtitle2" color="primary" gutterBottom>
-                      Approval Trail ({(fullRequestDetails as any).approvalTrail.length} actions)
-                    </Typography>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow sx={{ bgcolor: 'grey.50' }}>
-                          <TableCell sx={{ fontWeight: 700, fontSize: '0.75rem' }}>Date &amp; Time</TableCell>
-                          <TableCell sx={{ fontWeight: 700, fontSize: '0.75rem' }}>Actor</TableCell>
-                          <TableCell sx={{ fontWeight: 700, fontSize: '0.75rem' }}>Role</TableCell>
-                          <TableCell sx={{ fontWeight: 700, fontSize: '0.75rem' }}>Action</TableCell>
-                          <TableCell sx={{ fontWeight: 700, fontSize: '0.75rem' }}>Comments</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {/* Latest action first */}
-                        {[...(fullRequestDetails as any).approvalTrail].reverse().map((log: any, idx: number) => (
-                          <TableRow key={log.id || idx} hover>
-                            <TableCell sx={{ fontSize: '0.75rem' }}>
-                              {format(new Date(log.created_at), 'dd MMM yyyy HH:mm')}
-                            </TableCell>
-                            <TableCell sx={{ fontSize: '0.75rem', fontWeight: 500 }}>
-                              {log.actor_name || `${log.approver_first_name || ''} ${log.approver_last_name || ''}`.trim()}
-                            </TableCell>
-                            <TableCell sx={{ fontSize: '0.75rem' }}>
-                              <Chip
-                                label={formatRoleLabel(log.actor_role || log.approver_role, log.actor_job_title)}
-                                size="small"
-                                variant="outlined"
-                                sx={{ fontSize: '0.65rem', height: 20 }}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Chip
-                                label={log.action.replace(/_/g, ' ')}
-                                size="small"
-                                color={
-                                  log.action.includes('APPROVED') ? 'success'
-                                  : log.action.includes('REJECT') ? 'error'
-                                  : 'info'
-                                }
-                                sx={{ fontSize: '0.65rem', height: 20 }}
-                              />
-                            </TableCell>
-                            <TableCell sx={{ fontSize: '0.75rem', color: 'text.secondary', fontStyle: 'italic' }}>
-                              {log.comment || log.comments || '—'}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                    <RequestDiscussion
+                      bare
+                      initialVisible={4}
+                      logs={(fullRequestDetails as any).approvalTrail || []}
+                      onPost={(c) => requestService.addComment(selectedRequest.id, c)}
+                      onPosted={refreshDialogTrail}
+                    />
                   </CardContent>
                 </Card>
               )}

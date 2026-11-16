@@ -8,7 +8,7 @@ import {
   Box, Paper, Typography, Grid, Chip, Button, Divider, CircularProgress, Alert,
   Table, TableContainer, TableHead, TableRow, TableCell, TableBody, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, IconButton, Tooltip, Stack,
-  Stepper, Step, StepLabel, Avatar, List, ListItem, ListItemText,
+  Stepper, Step, StepLabel, List, ListItem, ListItemText,
   ListItemAvatar, alpha, useTheme, MenuItem, Switch
 } from '@mui/material';
 import {
@@ -22,7 +22,6 @@ import {
   Send as SendIcon,
   Edit as EditIcon,
   AttachFile as FileIcon,
-  Timeline as TimelineIcon,
   Store as VendorIcon,
   Assignment as RequestIcon,
   PictureAsPdf as PdfIcon,
@@ -95,7 +94,7 @@ import { antiTerrorLabel, isAntiTerrorVerified, isVendorComplete } from '../../u
 import { downloadHTMLAsPDF, downloadPurchaseOrderPDF } from '../../utils/pdfUtils';
 import { formatRoleLabel } from '../../utils/roleUtils';
 import { useGoBack } from '../../utils/navigationState';
-import TrailCommentBox from '../../components/common/TrailCommentBox';
+import { RequestDiscussion, CommentsDigest } from '../../components/common/RequestDiscussion';
 import * as XLSX from 'xlsx';
 
 // ─── Quotation line items ─────────────────────────────────────────────────────
@@ -122,6 +121,10 @@ const QUOTATION_CURRENCIES = ['USD', 'ZWG', 'ZAR', 'GBP', 'EUR'];
  */
 const isAmendmentAction = (action: string) =>
   /^(EDITED|QUOTATION_|ATTACHMENT_|POP_|RECALLED_)/.test(action);
+
+/** Role shown beside a name on the trail. */
+const procTrailRole = (log: any) =>
+  log.actor_role === 'PROCUREMENT_COMMITTEE' ? 'Committee Member' : formatRoleLabel(log.actor_role, log.actor_job_title);
 
 /** Keeps a legacy free-text value from landing outside the select's options. */
 const safeCurrency = (value?: string | null) => {
@@ -2337,82 +2340,13 @@ ${allCommitteeApproved ? `
             into a tall block and the trail became a scroll. Across the page it
             reads as a two-column timeline instead. */}
         <Grid item xs={12}>
-            <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
-              <Typography variant="h6" gutterBottom>Approval Trail</Typography>
-              <Divider sx={{ mb: 1 }} />
-              {(!request.approvalTrail || request.approvalTrail.length === 0) ? (
-                <Box textAlign="center" py={3}>
-                  <TimelineIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
-                  <Typography color="text.secondary">No activity recorded yet</Typography>
-                </Box>
-              ) : (
-                <List
-                  disablePadding
-                  sx={{
-                    // Two columns from md up, so a long comment fills the width
-                    // it is given instead of stacking the whole trail downward.
-                    display: 'grid',
-                    gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
-                    columnGap: 3,
-                  }}
-                >
-                  {/* Latest action first; the API returns the trail oldest first. */}
-                  {[...request.approvalTrail].reverse().map((log, idx) => {
-                    const tone = isAmendmentAction(log.action)
-                      ? theme.palette.warning.main
-                      : log.action.includes('APPROVED')
-                        ? theme.palette.success.main
-                        : log.action.includes('REJECT') ? theme.palette.error.main : theme.palette.primary.main;
-                    return (
-                      <React.Fragment key={log.id}>
-                        <ListItem
-                          alignItems="flex-start"
-                          disableGutters
-                          sx={{ borderBottom: '1px solid', borderColor: 'divider', py: 1.25 }}
-                        >
-                          <ListItemAvatar sx={{ minWidth: 44 }}>
-                            <Avatar sx={{ bgcolor: alpha(tone, 0.15), color: tone, width: 32, height: 32, fontSize: '0.7rem' }}>
-                              {(log.actor_first_name?.[0] || '') + (log.actor_last_name?.[0] || '')}
-                            </Avatar>
-                          </ListItemAvatar>
-                          <ListItemText
-                            primary={
-                              <Box display="flex" alignItems="center" gap={0.5} flexWrap="wrap">
-                                <Typography variant="body2" fontWeight={600}>{log.actor_first_name} {log.actor_last_name}</Typography>
-                                <Chip
-                                  label={log.action.replace(/_/g, ' ')} size="small"
-                                  color={log.action === 'COMMENT' ? 'default' : isAmendmentAction(log.action) ? 'warning' : log.action.includes('APPROVED') ? 'success' : log.action.includes('REJECT') ? 'error' : 'info'}
-                                  sx={{ height: 20, fontSize: '0.65rem' }}
-                                />
-                              </Box>
-                            }
-                            secondary={
-                              <Box component="span" display="block">
-                                <Typography component="span" variant="caption" color="text.secondary" display="block">
-                                  {log.actor_role === 'PROCUREMENT_COMMITTEE' ? 'Committee Member' : formatRoleLabel(log.actor_role, log.actor_job_title)}
-                                </Typography>
-                                {log.comments && (
-                                  <Typography component="span" variant="body2" color="text.secondary" display="block" sx={{ fontStyle: 'italic' }}>
-                                    "{log.comments}"
-                                  </Typography>
-                                )}
-                                <Typography component="span" variant="caption" color="text.disabled" display="block">
-                                  {format(new Date(log.created_at), 'dd MMM yyyy HH:mm')}
-                                </Typography>
-                              </Box>
-                            }
-                          />
-                        </ListItem>
-                      </React.Fragment>
-                    );
-                  })}
-                </List>
-              )}
-              <TrailCommentBox
-                onSubmit={(c) => addPurchaseRequestComment(id!, c)}
-                onAdded={invalidate}
-              />
-            </Paper>
+            <RequestDiscussion
+              logs={request.approvalTrail || []}
+              roleLabel={procTrailRole}
+              isAmendment={isAmendmentAction}
+              onPost={(c) => addPurchaseRequestComment(id!, c)}
+              onPosted={invalidate}
+            />
         </Grid>
       </Grid>
 
@@ -2452,6 +2386,7 @@ ${allCommitteeApproved ? `
           {actionDialog === 'confirm_dept' && 'Confirm the Award'}
         </DialogTitle>
         <DialogContent>
+          {actionDialog && <Box sx={{ mt: 1 }}><CommentsDigest logs={request.approvalTrail || []} roleLabel={procTrailRole} /></Box>}
           {actionDialog === 'confirm_dept' && (
             <Box sx={{ mt: 1 }}>
               <AwardComparison request={request} />
