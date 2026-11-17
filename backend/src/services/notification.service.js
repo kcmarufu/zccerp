@@ -84,6 +84,7 @@ class NotificationService {
       console.error('[NotificationService] onRequestSubmitted error:', err.message);
     }
     this._email(workflowEmail.floatAtDepartmentDesk('float', requestId));
+    this._email(workflowEmail.financeDeskNotice('float', requestId, 'raised'));
   }
 
   /**
@@ -120,6 +121,7 @@ class NotificationService {
     if (kind !== 'proc_request') {
       this._email(workflowEmail.floatSubmitted(kind === 'reconciliation' ? 'reconciliation' : 'float', requestId));
     }
+    if (kind === 'request') this._email(workflowEmail.financeDeskNotice('float', requestId, 'raised'));
   }
 
   /**
@@ -173,6 +175,7 @@ class NotificationService {
       'approval_pending', 'request', requestId, financeLink
     );
     this._email(workflowEmail.floatGsApproved('float', requestId, approverName));
+    this._email(workflowEmail.financeDeskNotice('float', requestId, 'finance'));
   }
 
   /** Finance approved — notify requester + Admin */

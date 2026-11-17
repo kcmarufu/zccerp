@@ -10,8 +10,8 @@
  *   HEAD_OF_PROGRAMS → any ADMIN
  *   ADMIN            → any other ADMIN (self-approval blocked)
  *
- * On top of this table the HR Office (Super Admin, and the HOD/Lead of Admin &
- * HR) may approve any request but their own.
+ * There is no override: the HR Office (Admin & HR HOD/Lead) and the Super
+ * Admin follow the same table as everyone else (user decision 2026-11-17).
  *
  * The service exposes:
  *   - resolveApprover(requester)         — for create-time validation / display
@@ -20,7 +20,7 @@
  */
 
 const { query } = require('../config/database');
-const { ROLES, hasFullHrAccess, hasDepartmentHrAccess } = require('../config/roles');
+const { ROLES } = require('../config/roles');
 
 const NON_PRIVILEGED_ROLES = [
   ROLES.GENERAL_USER,
@@ -103,6 +103,14 @@ async function resolveApprover({ userId, role, departmentId }) {
  * Guard at approve/reject time. Throws on failure.
  *   approver    : { id, role, department_id }   (from req.user)
  *   requester   : { userId, role, departmentId } of the leave requester
+ *
+ * One routing table, applied to everyone (user decision 2026-11-17 — there is
+ * no HR Office override any more):
+ *   staff  → the Lead or HOD of their own department
+ *   Lead   → the HOD of their own department only
+ *   HOD    → a Super Admin
+ *   Admin  → another Super Admin
+ *   (a department with nobody to approve falls back to a Super Admin)
  */
 async function assertCanApprove(approver, requester) {
   if (!approver || !approver.role) {
@@ -111,14 +119,8 @@ async function assertCanApprove(approver, requester) {
   if (!requester) {
     throw new Error('Requester context is required');
   }
-  if (approver.id && requester.userId && approver.id === requester.userId) {
+  if (approver.id && requester.userId && Number(approver.id) === Number(requester.userId)) {
     throw new Error('You cannot approve your own leave request');
-  }
-
-  // The HR Office — Super Admin, and the HOP/Lead of Admin & HR — may approve
-  // leave for any department. Everyone else follows the routing table below.
-  if (hasFullHrAccess(approver)) {
-    return;
   }
 
   const target = await resolveApprover(requester);
@@ -130,21 +132,24 @@ async function assertCanApprove(approver, requester) {
     );
   }
 
-  // Department match (only relevant for a Lead/HOP approving their own staff).
+  // Department match (a Lead/HOD approves only their own department).
   if (target.approverDepartmentId
       && Number(approver.department_id) !== Number(target.approverDepartmentId)) {
     throw new Error('You can only approve leave from your own department');
   }
 
   // Self-exclusion (ADMIN approving another ADMIN).
-  if (target.excludeUserId && approver.id === target.excludeUserId) {
+  if (target.excludeUserId && Number(approver.id) === Number(target.excludeUserId)) {
     throw new Error('You cannot approve your own leave request');
   }
 }
 
 /**
  * Build a parameterised WHERE fragment + params for "PENDING requests that
- * this approver can act on". Returns { sql, params }.
+ * this approver can act on". Returns { sql, params }. Mirrors
+ * resolveApprover/assertCanApprove exactly, so the queue never offers a
+ * request the approve call would refuse. `scope` is accepted for backward
+ * compatibility and ignored: nobody approves outside the routing table.
  *
  * Intended to be appended to an existing WHERE clause.
  *   joins required: hr_leave_requests lr
@@ -157,102 +162,58 @@ function pendingForApproverWhereClause(approver, scope = 'department') {
     return { sql: '1 = 0', params: [] };
   }
 
-  // ── HR Office (Super Admin / Admin & HR HOP or Lead) ────────────────────
-  // Their queue defaults to their own department so day-to-day work stays
-  // focused; 'all' opens it to every pending request in the organisation,
-  // which is how they approve on another department's behalf. Their own
-  // request never appears in either view.
-  if (hasFullHrAccess(approver)) {
-    if (scope === 'all') {
-      return {
-        sql: '(req_u.id IS NULL OR req_u.id <> ?)',
-        params: [approver.id],
-      };
-    }
+  const reqRole = 'COALESCE(req_r.role_name, ?)';   // no user link → ordinary staff
+  const notMe   = '(req_u.id IS NULL OR req_u.id <> ?)';
 
-    // The Super Admin / General Secretary is not a departmental desk: the
-    // department they sit in is incidental. Their own desk is the Heads of
-    // Department — every department's Head routes leave to the GS — so that is
-    // exactly what this view holds, whichever department each Head belongs to.
-    // Staff leave stays with the staff's own Head; anything else the Super
-    // Admin may act on (another Super Admin, a department with no Head) is
-    // under 'all'.
-    if (approver.role === ROLES.ADMIN) {
-      return {
-        sql: '(req_r.role_name = ? AND req_u.id <> ?)',
-        params: [ROLES.HEAD_OF_PROGRAMS, approver.id],
-      };
-    }
-
-    // The Admin & HR Lead/HOP *is* their department's desk, so theirs is the
-    // ordinary department queue.
+  // ── Department Lead: own department's staff (not Leads, HODs or Admins) ──
+  if (approver.role === ROLES.PROGRAM_LEAD) {
+    if (!approver.department_id) return { sql: '1 = 0', params: [] };
     return {
-      sql: '(e.department_id = ? AND (req_u.id IS NULL OR req_u.id <> ?))',
-      params: [approver.department_id, approver.id],
-    };
-  }
-
-  // ── Department HOP/Lead (CPJS, FOS, HSD) ────────────────────────────────
-  // Their own department only. Requests raised by a HOP or Admin route upward
-  // to the HR Office instead, so they are excluded here — and a Lead does not
-  // see a fellow Lead's request, which belongs to the Head of Department.
-  if (hasDepartmentHrAccess(approver)) {
-    const routedElsewhere = approver.role === ROLES.PROGRAM_LEAD
-      ? [ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN, ROLES.PROGRAM_LEAD]
-      : [ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN];
-    return {
-      sql: `(
-        e.department_id = ?
-        AND COALESCE(req_r.role_name, ?) NOT IN (${routedElsewhere.map(() => '?').join(', ')})
-        AND (req_u.id IS NULL OR req_u.id <> ?)
-      )`,
+      sql: `(e.department_id = ? AND ${reqRole} NOT IN (?, ?, ?) AND ${notMe})`,
       params: [
-        approver.department_id,
-        ROLES.GENERAL_USER,
-        ...routedElsewhere,
+        approver.department_id, ROLES.GENERAL_USER,
+        ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN,
         approver.id,
       ],
     };
   }
 
+  // ── Head of Department: own department's staff and Leads ────────────────
   if (approver.role === ROLES.HEAD_OF_PROGRAMS) {
+    if (!approver.department_id) return { sql: '1 = 0', params: [] };
     return {
-      sql: `(
-        e.department_id = ?
-        AND COALESCE(req_r.role_name, ?) NOT IN (?, ?)
-        AND (req_u.id IS NULL OR req_u.id <> ?)
-      )`,
+      sql: `(e.department_id = ? AND ${reqRole} NOT IN (?, ?) AND ${notMe})`,
       params: [
-        approver.department_id,
-        ROLES.GENERAL_USER,                 // default when employee has no user link
+        approver.department_id, ROLES.GENERAL_USER,
         ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN,
         approver.id,
       ],
     };
   }
 
+  // ── Super Admin: every HOD, other Super Admins, and the fallback cases ──
   if (approver.role === ROLES.ADMIN) {
+    const noOneInDept = (roles) => `NOT EXISTS (
+            SELECT 1 FROM users u2
+            JOIN roles r2 ON u2.role_id = r2.id
+            WHERE u2.department_id = e.department_id
+              AND r2.role_name IN (${roles.map(() => '?').join(', ')})
+              AND u2.is_active = TRUE
+          )`;
     return {
       sql: `(
         req_r.role_name = ?
         OR (req_r.role_name = ? AND req_u.id <> ?)
-        OR (
-          COALESCE(req_r.role_name, ?) NOT IN (?, ?)
-          AND NOT EXISTS (
-            SELECT 1 FROM users u2
-            JOIN roles r2 ON u2.role_id = r2.id
-            WHERE u2.department_id = e.department_id
-              AND r2.role_name = ?
-              AND u2.is_active = TRUE
-          )
-        )
+        OR (req_r.role_name = ? AND ${noOneInDept([ROLES.HEAD_OF_PROGRAMS])})
+        OR (${reqRole} NOT IN (?, ?, ?)
+            AND ${noOneInDept([ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS])})
       )`,
       params: [
         ROLES.HEAD_OF_PROGRAMS,
         ROLES.ADMIN, approver.id,
-        ROLES.GENERAL_USER,
-        ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN,
-        ROLES.HEAD_OF_PROGRAMS,
+        ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS,
+        ROLES.GENERAL_USER, ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS, ROLES.ADMIN,
+        ROLES.PROGRAM_LEAD, ROLES.HEAD_OF_PROGRAMS,
       ],
     };
   }

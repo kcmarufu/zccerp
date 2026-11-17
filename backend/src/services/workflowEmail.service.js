@@ -13,7 +13,14 @@
  *     the General Secretary)
  *   - A Head of Department's work → the General Secretary, then Finance's HOD
  *   - High-value purchase requests → the General Secretary and Finance's HOD
- *   The Finance and Procurement desks keep in-app notifications only.
+ *   The Procurement desk keeps in-app notifications only.
+ *
+ * Finance desk — "a float or purchase request for your department" (2026-11-17)
+ *   Each department's float and purchase requests are followed by named Finance
+ *   staff (FINANCE_DESK below): one message when a request is raised, and one
+ *   when it reaches Finance. To the department's Finance officer(s), copied to
+ *   Bryne Nhendere and Abraham Zvinoitavamwe. Switch off with
+ *   FINANCE_DESK_EMAILS=off in .env.
  *
  * Requesters — "your request was decided"
  *   - Float: finally approved, rejected, dispatched, or auto-rejected unpaid
@@ -42,6 +49,20 @@ const KINDS = {
   float: { label: 'float request', approvalsLink: '/finance/approvals', requesterLink: (id) => `/finance/requests/${id}` },
   reconciliation: { label: 'reconciliation', approvalsLink: '/finance/reconciliation', requesterLink: () => '/finance/reconciliation' }
 };
+
+/**
+ * Finance staff who follow each department's float and purchase requests, by
+ * user id (ids, not addresses, so a changed email follows the account).
+ *   CPJS → Chenai Chitumba          HSD → Patience Kasirori, Sean Mkosana
+ *   AHR  → Tatenda Muchena          all copied to Bryne Nhendere and Abraham Zvinoitavamwe
+ */
+const FINANCE_DESK_CC = [87, 88];
+const FINANCE_DESK = {
+  CPJS: { to: [150], cc: FINANCE_DESK_CC },
+  HSD: { to: [145, 90], cc: FINANCE_DESK_CC },
+  AHR: { to: [91], cc: FINANCE_DESK_CC }
+};
+const financeDeskEnabled = () => String(process.env.FINANCE_DESK_EMAILS || 'on').toLowerCase() !== 'off';
 
 const money = (amount) => `USD ${Number(amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fullName = (row) => `${row.first_name} ${row.last_name}`;
@@ -169,6 +190,60 @@ class WorkflowEmailService {
       seen.add(Number(person.id));
       await emailService.send({ ...mail, to: person.email });
     }
+  }
+
+  /** The Finance followers of a department: { code, to: [emails], cc: [emails] } or null. */
+  async _financeDesk(departmentId) {
+    if (!departmentId) return null;
+    const [dept] = await query('SELECT department_code FROM departments WHERE id = ?', [departmentId]);
+    const desk = dept && FINANCE_DESK[dept.department_code];
+    if (!desk) return null;
+    const ids = [...desk.to, ...desk.cc];
+    const people = await query(
+      `SELECT id, email FROM users WHERE id IN (${ids.map(() => '?').join(', ')}) AND is_active = 1`, ids
+    );
+    const emailOf = (id) => people.find((p) => Number(p.id) === Number(id))?.email;
+    return {
+      code: dept.department_code,
+      to: desk.to.map(emailOf).filter(Boolean),
+      cc: desk.cc.map(emailOf).filter(Boolean)
+    };
+  }
+
+  /**
+   * Tell the department's Finance followers about a float or purchase request.
+   *   stage: 'raised' (just submitted) or 'finance' (now waiting on Finance)
+   */
+  async financeDeskNotice(kind, requestId, stage) {
+    if (!financeDeskEnabled()) return;
+    const isProc = kind === 'proc_request';
+    const record = isProc ? await this._loadProcurement(requestId) : await this._loadFloat(requestId);
+    if (!record || (!isProc && record.source_proc_request_id)) return;
+    const desk = await this._financeDesk(record.routing_department_id || record.department_id);
+    if (!desk || !desk.to.length) return;
+    const label = isProc ? 'purchase request' : 'float request';
+    const amount = isProc ? (record.awarded_amount ?? record.amount) : record.amount;
+    // A request sent straight back to Finance is "ready for Finance", whatever the caller said.
+    const atFinance = ['PENDING_FINANCE_APPROVAL', 'PENDING_FINAL_FINANCE'].includes(record.status);
+    const raised = stage === 'raised' && !atFinance;
+    await emailService.send({
+      to: desk.to,
+      cc: desk.cc,
+      subject: raised
+        ? `New ${label} ${record.code} from ${fullName(record)} (${desk.code})`
+        : `Ready for Finance: ${label} ${record.code} (${desk.code})`,
+      heading: raised ? `A new ${label} has been raised` : `A ${label} is now with Finance`,
+      tone: raised ? 'info' : 'action',
+      intro: raised
+        ? `${fullName(record)} has raised a ${label} for ${record.department_name || desk.code}. It is with the department for approval; you will be told again when it reaches Finance.`
+        : `This ${label} for ${record.department_name || desk.code} has cleared its approvals and is waiting for Finance. Please review it.`,
+      details: [
+        ...this._baseDetails({ ...record, amount }, label),
+        ['Status', String(record.status || '').replace(/_/g, ' ').toLowerCase()],
+        ...(isProc ? [['Supplier', record.suppliers]] : [])
+      ],
+      link: isProc ? `/procurement/requests/${requestId}` : (raised ? `/finance/requests/${requestId}` : '/finance/approvals')
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -397,6 +472,14 @@ class WorkflowEmailService {
       return;
     }
     if (record.status === previousStatus) return;
+
+    // Finance followers of the department: raised, and again on reaching Finance.
+    if (['PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL'].includes(record.status)
+        && !['PENDING_DEPT_APPROVAL', 'PENDING_GS_APPROVAL'].includes(previousStatus)) {
+      await this.financeDeskNotice('proc_request', requestId, 'raised');
+    } else if (record.status === 'PENDING_FINAL_FINANCE') {
+      await this.financeDeskNotice('proc_request', requestId, 'finance');
+    }
 
     switch (record.status) {
       case 'PENDING_DEPT_APPROVAL':

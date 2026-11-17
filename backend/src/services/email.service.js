@@ -107,7 +107,8 @@ class EmailService {
 
   /**
    * @param {object}   mail
-   * @param {string}   mail.to       one address
+   * @param {string|string[]} mail.to  one address, or several for one shared message
+   * @param {string[]} mail.cc       optional copy addresses (skipped domains are dropped)
    * @param {string}   mail.subject
    * @param {string}   mail.heading  first line of the message
    * @param {string}   mail.intro    what happened and what is needed
@@ -115,14 +116,21 @@ class EmailService {
    * @param {string}   mail.link     path inside the app, e.g. /finance/approvals
    * @param {string}   mail.tone     badge above the heading: action, approved, rejected or info
    */
-  async _send({ to, subject, heading, intro, details = [], link = null, tone = 'info' }) {
-    if (!to) return false;
-    const skip = this._skipReason(to);
-    if (skip) {
-      console.log(`[EmailService] Skipped (${skip}) to=${to} subject="${subject}"`);
-      await this._log(to, subject, 'SKIPPED', skip);
-      return false;
-    }
+  async _send({ to, cc = [], subject, heading, intro, details = [], link = null, tone = 'info', sections = [] }) {
+    if (!to || (Array.isArray(to) && !to.length)) return false;
+    // Several "to" addresses share one message; unusable ones are dropped
+    // (and logged) rather than failing the whole message.
+    const toList = (Array.isArray(to) ? to : [to]).filter((addr) => {
+      const why = this._skipReason(addr);
+      if (why) {
+        console.log(`[EmailService] Skipped (${why}) to=${addr} subject="${subject}"`);
+        this._log(addr, subject, 'SKIPPED', why);
+      }
+      return !why;
+    });
+    const ccList = [...new Set(cc.filter((addr) => !this._skipReason(addr) && !toList.includes(addr)))];
+    if (!toList.length) return false;
+    to = toList.join(', ');
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
       console.log(`[EmailService] Not sent (no RESEND_API_KEY) to=${to} subject="${subject}"`);
@@ -140,9 +148,10 @@ class EmailService {
 
     const body = JSON.stringify({
       from: process.env.EMAIL_FROM || DEFAULT_FROM,
-      to: [to],
+      to: toList,
+      ...(ccList.length ? { cc: ccList } : {}),
       subject,
-      html: this._render({ heading, intro, details, link, tone })
+      html: this._render({ heading, intro, details, link, tone, sections })
     });
 
     let lastError = null;
@@ -156,8 +165,8 @@ class EmailService {
         });
         this._lastSentAt = Date.now();
         if (res.ok) {
-          console.log(`[EmailService] Sent to=${to} subject="${subject}"`);
-          await this._log(to, subject, 'SENT');
+          console.log(`[EmailService] Sent to=${to}${ccList.length ? ` cc=${ccList.join(', ')}` : ''} subject="${subject}"`);
+          await this._log(to, subject, 'SENT', ccList.length ? `cc: ${ccList.join(', ')}` : null);
           return true;
         }
         lastError = `Resend ${res.status}: ${await res.text()}`;
@@ -173,7 +182,19 @@ class EmailService {
     return false;
   }
 
-  _render({ heading, intro, details, link, tone }) {
+  /** Optional summary tables under the details: [{ title, columns: [..], rows: [[..], ..] }]. */
+  _renderSections(sections = []) {
+    return sections.map(({ title, columns = [], rows = [], empty = 'Nothing to show.' }) => {
+      const head = columns.map((c, i) => `<th align="${i === columns.length - 1 ? 'right' : 'left'}" style="padding:10px 12px;font-size:12px;font-weight:700;color:#ffffff;background-color:#006064;text-align:${i === columns.length - 1 ? 'right' : 'left'}">${escapeHtml(c)}</th>`).join('');
+      const body = rows.length
+        ? rows.map((r, ri) => `<tr style="background-color:${ri % 2 ? '#f8fafc' : '#ffffff'}">${r.map((v, i) => `<td style="padding:9px 12px;font-size:13px;color:#0f172a;border-top:1px solid #e2e8f0;text-align:${i === r.length - 1 ? 'right' : 'left'};${i === 0 ? 'font-weight:600;white-space:nowrap;' : ''}">${escapeHtml(v)}</td>`).join('')}</tr>`).join('')
+        : `<tr><td colspan="${columns.length || 1}" style="padding:12px;font-size:13px;color:#64748b;font-style:italic">${escapeHtml(empty)}</td></tr>`;
+      return `<div style="font-size:15px;font-weight:700;color:#006064;margin:0 0 8px">${escapeHtml(title)}</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-radius:10px;border-collapse:separate;overflow:hidden;margin-bottom:24px"><tr>${head}</tr>${body}</table>`;
+    }).join('');
+  }
+
+  _render({ heading, intro, details, link, tone, sections = [] }) {
     const appUrl = (process.env.APP_URL || DEFAULT_APP_URL).replace(/\/+$/, '');
     const badge = TONES[tone] || TONES.info;
     const rows = details
@@ -210,6 +231,7 @@ class EmailService {
               <p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#334155">${escapeHtml(intro)}</p>
               ${rows ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-radius:10px;border-collapse:separate;background-color:#f8fafc;margin-bottom:28px">${rows}
               </table>` : ''}
+              ${this._renderSections(sections)}
               ${link ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="background-color:#006064;border-radius:8px"><a href="${escapeHtml(appUrl + link)}" style="display:inline-block;padding:13px 26px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none">Open in ERP Connect &rarr;</a></td></tr></table>` : ''}
             </td>
           </tr>

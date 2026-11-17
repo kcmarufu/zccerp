@@ -21,7 +21,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Grid, TextField,
   CircularProgress, Alert, Tabs, Tab, Tooltip, Badge, Divider, Card,
   CardContent, LinearProgress, Select, FormControl, InputLabel, Menu,
-  InputAdornment, ToggleButton, ToggleButtonGroup,
+  InputAdornment,
   alpha, useTheme
 } from '@mui/material';
 import {
@@ -668,9 +668,6 @@ const LeaveManagementPage: React.FC = () => {
   const [roleFilter, setRoleFilter]   = useState('');
   const [departments, setDepartments] = useState<{ id: number; department_name: string }[]>([]);
 
-  /** Approval queue breadth: own department, or the whole organisation. */
-  const [queueScope, setQueueScope] = useState<'department' | 'all'>('department');
-
   /** The request being edited or resubmitted. */
   const [editReq, setEditReq]       = useState<HRLeaveRequest | null>(null);
   const [editFiles, setEditFiles]   = useState<File[]>([]);
@@ -734,9 +731,8 @@ const LeaveManagementPage: React.FC = () => {
       if (tab === TAB_MY) {
         filters.scope = 'mine';
       } else if (tab === TAB_APPROVAL) {
-        // The HR Office can widen the queue past their own department, which is
-        // how they approve on another department's behalf.
-        filters.scope = (isHrOffice && queueScope === 'all') ? 'pending-all' : 'pending-mine';
+        // One routing table for everyone: nobody approves outside it.
+        filters.scope = 'pending-mine';
         // The queue is pending-only by definition; a status filter would fight it.
         delete filters.status;
       }
@@ -768,7 +764,7 @@ const LeaveManagementPage: React.FC = () => {
       setLoading(false);
     }
   }, [page, rowsPerPage, statusFilter, yearFilter, tab, isApprover,
-      typeFilter, searchTerm, fromDate, toDate, queueScope, isHrOffice,
+      typeFilter, searchTerm, fromDate, toDate,
       deptFilter, roleFilter]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -977,8 +973,10 @@ const LeaveManagementPage: React.FC = () => {
           <Typography variant="body2" color="text.secondary" mt={0.5}>
             {isHrOffice
               ? (user?.role === 'ADMIN'
-                  ? 'Leave across all departments. Heads of Department send their leave to you for approval.'
-                  : 'HR Office. Leave across all departments; you may approve on any department’s behalf.')
+                  ? 'Leave across all departments. You approve the Heads of Department’s leave; staff and Leads are approved within their own department.'
+                  : (user?.role === 'PROGRAM_LEAD'
+                      ? 'HR Office. Leave across all departments; you approve your own department’s staff leave, and your own leave goes to your Head of Department.'
+                      : 'HR Office. Leave across all departments; you approve your own department’s staff and Leads, and your own leave goes to a Super Admin.'))
               : isDeptHead
               ? (user?.role === 'PROGRAM_LEAD'
                   ? 'Department Lead. You approve your department’s staff leave; your own leave goes to your Head of Department.'
@@ -1064,38 +1062,14 @@ const LeaveManagementPage: React.FC = () => {
       </Tabs>
 
       {/* ── Contextual banners ── */}
-      {tab === TAB_APPROVAL && isHrOffice && (
-        <Box mb={2} display="flex" alignItems="center" gap={1.5} flexWrap="wrap">
-          <Typography variant="body2" color="text.secondary" fontWeight={600}>
-            Show requests from:
-          </Typography>
-          <ToggleButtonGroup
-            exclusive size="small" value={queueScope}
-            onChange={(_, v) => { if (v) { setQueueScope(v); setPage(0); } }}
-          >
-            <ToggleButton value="department">My Department</ToggleButton>
-            <ToggleButton value="all">All Departments</ToggleButton>
-          </ToggleButtonGroup>
-          {queueScope === 'all' && (
-            <Typography variant="caption" color="text.secondary">
-              Approving on another department's behalf — recorded against your name.
-            </Typography>
-          )}
-        </Box>
-      )}
-
       {tab === TAB_APPROVAL && (
         <Alert severity="info" icon={<InfoIcon />} sx={{ mb: 2 }}>
           <strong>Your approval queue</strong> — only requests you are the designated
           approver for appear here.{' '}
-          {isHrOffice && user?.role === 'ADMIN'
-            ? 'As Super Admin you approve the Heads of Department. '
-              + 'My Department therefore lists only leave applied for by the Heads of Department, from every department — their staff’s leave sits on their desk, not yours. '
-              + 'Use All Departments to act on anything else.'
-            : isHrOffice
-              ? 'My Department lists your own department’s staff; use All Departments to approve on another department’s behalf. Your own leave goes to a Super Admin.'
-              : user?.role === 'PROGRAM_LEAD'
-              ? 'You approve leave for staff in your department. Leave from the Head of Department and other Leads is approved elsewhere.'
+          {user?.role === 'ADMIN'
+            ? 'As Super Admin you approve leave applied for by the Heads of Department (and by other Super Admins, or staff in a department with no Lead or Head).'
+            : user?.role === 'PROGRAM_LEAD'
+              ? 'You approve leave for staff in your department. Leave from Leads goes to your Head of Department, and your own leave goes to your Head of Department.'
               : 'You approve leave for staff and Leads in your department. Your own leave goes to a Super Admin.'}
         </Alert>
       )}

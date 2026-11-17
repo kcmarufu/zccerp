@@ -308,6 +308,7 @@ export const buildPurchaseOrderHTML = (request: any, supplierQuotation?: any, po
   .org-name { font-size: 11px; font-weight: bold; color: #006064; }
   .po-title { font-size: 22px; font-weight: bold; color: #006064; margin: 4px 0 2px; }
   .po-sub { font-size: 11px; color: #555; }
+  .org-address { font-size: 10px; color: #444; line-height: 1.5; margin-top: 8px; }
   .po-ref-box { text-align: right; }
   .po-ref { font-size: 15px; font-weight: bold; color: #006064; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
@@ -321,6 +322,12 @@ export const buildPurchaseOrderHTML = (request: any, supplierQuotation?: any, po
     <div class="org-name">ZIMBABWE COUNCIL OF CHURCHES (ZCC)</div>
     <div class="po-title">PURCHASE ORDER</div>
     <div class="po-sub">Official Procurement Document</div>
+    <div class="org-address">
+      27 St Patricks Rd, Hatfield, Harare<br>
+      Email Address: procurement@zccinzim.org<br>
+      Phone Number: +263 4 572122 / 573073<br>
+      Our Website: https://www.zimbabwecouncilofchurches.org/
+    </div>
   </div>
   <div class="po-ref-box">
     <div class="po-ref">PO-${reqCode}</div>
