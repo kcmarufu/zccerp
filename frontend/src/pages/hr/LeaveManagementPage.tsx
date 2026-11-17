@@ -56,7 +56,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { toast } from 'react-toastify';
 import {
   getLeaveRequests, createLeaveRequest, approveLeaveRequest, getLeaveTypes,
-  getMyLeaveBalances, getLeaveAuditTrail, downloadLeaveRequestPDF,
+  getMyLeaveBalances, getMyLeaveZeroRate, getLeaveAuditTrail, downloadLeaveRequestPDF,
   downloadLeaveRegisterPDF, downloadLeaveExcel,
   getLeaveAttachments, uploadLeaveAttachment, deleteLeaveAttachment,
   viewLeaveAttachment, downloadLeaveAttachment, updateLeaveRequest,
@@ -645,6 +645,11 @@ const LeaveManagementPage: React.FC = () => {
   const [requests, setRequests]         = useState<HRLeaveRequest[]>([]);
   const [leaveTypes, setLeaveTypes]     = useState<HRLeaveType[]>([]);
   const [balances, setBalances]         = useState<HRLeaveBalance[]>([]);
+  /** This account accrues no leave (rate 0): it may not apply for any. */
+  const [zeroRate, setZeroRate]         = useState(false);
+  useEffect(() => {
+    getMyLeaveZeroRate().then(setZeroRate).catch(() => setZeroRate(false));
+  }, []);
   const [loading, setLoading]           = useState(true);
   const [page, setPage]                 = useState(0);
   const [rowsPerPage, setRowsPerPage]   = useState(25);
@@ -1008,11 +1013,20 @@ const LeaveManagementPage: React.FC = () => {
               </Menu>
             </>
           )}
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => { reset(); setPendingFiles([]); setDialogOpen(true); }}>
-            Apply for Leave
-          </Button>
+          {!zeroRate && (
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => { reset(); setPendingFiles([]); setDialogOpen(true); }}>
+              Apply for Leave
+            </Button>
+          )}
         </Stack>
       </Box>
+
+      {zeroRate && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          <strong>This account cannot apply for leave.</strong> It has a zero leave-accrual rate.
+          Please apply from your main staff account, or contact the system administrator.
+        </Alert>
+      )}
 
       {/* A rejected request is not the end of the road — say so. */}
       {tab === TAB_MY && requests.some((r) => r.status === 'REJECTED') && (
@@ -1220,7 +1234,7 @@ const LeaveManagementPage: React.FC = () => {
                 ? 'Nothing is waiting for your approval.'
                 : 'No requests match your current filters.'}
             </Typography>
-            {tab === TAB_MY && (
+            {tab === TAB_MY && !zeroRate && (
               <Button variant="outlined" startIcon={<AddIcon />} sx={{ mt: 2 }}
                 onClick={() => { reset(); setPendingFiles([]); setDialogOpen(true); }}>
                 Apply for Leave

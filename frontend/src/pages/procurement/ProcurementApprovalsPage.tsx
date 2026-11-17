@@ -188,6 +188,13 @@ const ProcurementApprovalsPage: React.FC = () => {
   const [approvalSearch, setApprovalSearch] = usePersistentState('procApprovals.search', '');
   const [approvalDeptFilter, setApprovalDeptFilter] = usePersistentState('procApprovals.dept', '');
   const [approvalPriorityFilter, setApprovalPriorityFilter] = usePersistentState('procApprovals.priority', '');
+  const [approvalDonorFilter, setApprovalDonorFilter] = usePersistentState('procApprovals.donor', '');
+  const [approvalProjectFilter, setApprovalProjectFilter] = usePersistentState('procApprovals.project', '');
+  const [approvalStatusFilter, setApprovalStatusFilter] = usePersistentState('procApprovals.status', '');
+  const [approvalFrom, setApprovalFrom] = usePersistentState('procApprovals.from', '');
+  const [approvalTo, setApprovalTo] = usePersistentState('procApprovals.to', '');
+  const [approvalMinAmount, setApprovalMinAmount] = usePersistentState('procApprovals.min', '');
+  const [approvalMaxAmount, setApprovalMaxAmount] = usePersistentState('procApprovals.max', '');
   const [departments, setDepartments] = useState<{id: number; department_name: string}[]>([]);
 
   useEffect(() => {
@@ -240,7 +247,7 @@ const ProcurementApprovalsPage: React.FC = () => {
 
   const { data: rawRequests = [], isLoading, error, refetch } = useQuery({
     queryKey: ['proc-approvals', role, currentStatus, isActedOnTab],
-    queryFn: () => getPurchaseRequests(isActedOnTab ? { limit: 100 } : { status: currentStatus, limit: 100 }),
+    queryFn: () => getPurchaseRequests(isActedOnTab ? { limit: 1000 } : { status: currentStatus, limit: 1000 }),
     enabled: Boolean(currentTab),
     refetchInterval: 30000
   });
@@ -267,6 +274,29 @@ const ProcurementApprovalsPage: React.FC = () => {
     ? (rawRequests as ProcRequest[]).filter(r => !ACTED_ON_EXCLUDED.includes(r.status))
     : rawRequests as ProcRequest[];
 
+  // Choices for the donor / project / category / status pickers come from the
+  // requests actually in this queue, so no option ever yields an empty list.
+  const uniqueOptions = (pick: (r: ProcRequest) => [string, string] | null) => {
+    const map = new Map<string, string>();
+    rawFiltered.forEach(r => { const o = pick(r); if (o && o[0]) map.set(o[0], o[1]); });
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  };
+  const donorOptions = uniqueOptions(r => r.donor_id ? [String(r.donor_id), r.donor_name || r.donor_code || `Donor ${r.donor_id}`] : null);
+  const projectOptions = uniqueOptions(r => r.project_id ? [String(r.project_id), [r.project_code, r.project_name].filter(Boolean).join(' — ')] : null);
+  const statusOptions = uniqueOptions(r => r.status ? [r.status, r.status.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase())] : null);
+  const amountOf = (r: ProcRequest) => Number((r as any).selected_quotation_amount ?? r.total_estimated_amount ?? 0);
+  const dateOf = (r: ProcRequest) => String(r.submitted_at || r.created_at || '').slice(0, 10);
+
+  const anyFilter = Boolean(approvalSearch || approvalDeptFilter || approvalPriorityFilter || approvalDonorFilter
+    || approvalProjectFilter || approvalStatusFilter || approvalFrom || approvalTo
+    || approvalMinAmount || approvalMaxAmount);
+  const clearFilters = () => {
+    setApprovalSearch(''); setApprovalDeptFilter(''); setApprovalPriorityFilter('');
+    setApprovalDonorFilter(''); setApprovalProjectFilter('');
+    setApprovalStatusFilter(''); setApprovalFrom(''); setApprovalTo('');
+    setApprovalMinAmount(''); setApprovalMaxAmount(''); setPage(0);
+  };
+
   const requests = rawFiltered
     .filter(r => {
       if (approvalSearch) {
@@ -274,11 +304,25 @@ const ProcurementApprovalsPage: React.FC = () => {
         if (!(
           r.request_code?.toLowerCase().includes(s) ||
           (r.title || '').toLowerCase().includes(s) ||
-          `${r.first_name} ${r.last_name}`.toLowerCase().includes(s)
+          `${r.first_name} ${r.last_name}`.toLowerCase().includes(s) ||
+          (r.project_name || '').toLowerCase().includes(s) ||
+          (r.project_code || '').toLowerCase().includes(s) ||
+          (r.donor_name || '').toLowerCase().includes(s)
         )) return false;
       }
-      if (approvalDeptFilter && String((r as any).department_id) !== approvalDeptFilter) return false;
+      // A request belongs to the requester's department and, for cross-department
+      // work, to the department that owns the project.
+      if (approvalDeptFilter
+        && String(r.department_id) !== approvalDeptFilter
+        && String(r.routing_department_id ?? '') !== approvalDeptFilter) return false;
       if (approvalPriorityFilter && r.priority !== approvalPriorityFilter) return false;
+      if (approvalDonorFilter && String(r.donor_id ?? '') !== approvalDonorFilter) return false;
+      if (approvalProjectFilter && String(r.project_id ?? '') !== approvalProjectFilter) return false;
+      if (isActedOnTab && approvalStatusFilter && r.status !== approvalStatusFilter) return false;
+      if (approvalFrom && dateOf(r) < approvalFrom) return false;
+      if (approvalTo && dateOf(r) > approvalTo) return false;
+      if (approvalMinAmount !== '' && amountOf(r) < Number(approvalMinAmount)) return false;
+      if (approvalMaxAmount !== '' && amountOf(r) > Number(approvalMaxAmount)) return false;
       return true;
     })
     .sort((a, b) => new Date(b.updated_at ?? b.created_at).getTime() - new Date(a.updated_at ?? a.created_at).getTime());
@@ -659,14 +703,48 @@ const ProcurementApprovalsPage: React.FC = () => {
               <MenuItem key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</MenuItem>
             ))}
           </TextField>
-          {(approvalSearch || approvalDeptFilter || approvalPriorityFilter) && (
-            <Button size="small" startIcon={<ClearIcon />} onClick={() => { setApprovalSearch(''); setApprovalDeptFilter(''); setApprovalPriorityFilter(''); }}>
+          {anyFilter && (
+            <Button size="small" startIcon={<ClearIcon />} onClick={clearFilters}>
               Clear
             </Button>
           )}
           <Typography variant="caption" color="text.secondary" sx={{ ml: { sm: 'auto' }, whiteSpace: 'nowrap' }}>
             {requests.length} {requests.length === 1 ? 'request' : 'requests'}
           </Typography>
+        </Stack>
+
+        {/* More filters */}
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }} useFlexGap flexWrap="wrap"
+          sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider', bgcolor: 'grey.50' }}>
+          <TextField select size="small" label="Donor" sx={{ minWidth: 150, flex: 1, bgcolor: 'background.paper' }}
+            value={approvalDonorFilter} onChange={e => { setApprovalDonorFilter(e.target.value); setPage(0); }}>
+            <MenuItem value="">All donors</MenuItem>
+            {donorOptions.map(([id, name]) => <MenuItem key={id} value={id}>{name}</MenuItem>)}
+          </TextField>
+          <TextField select size="small" label="Project" sx={{ minWidth: 180, flex: 1.5, bgcolor: 'background.paper' }}
+            value={approvalProjectFilter} onChange={e => { setApprovalProjectFilter(e.target.value); setPage(0); }}>
+            <MenuItem value="">All projects</MenuItem>
+            {projectOptions.map(([id, name]) => <MenuItem key={id} value={id}>{name}</MenuItem>)}
+          </TextField>
+          {isActedOnTab && (
+            <TextField select size="small" label="Status" sx={{ minWidth: 160, flex: 1, bgcolor: 'background.paper' }}
+              value={approvalStatusFilter} onChange={e => { setApprovalStatusFilter(e.target.value); setPage(0); }}>
+              <MenuItem value="">All statuses</MenuItem>
+              {statusOptions.map(([id, name]) => <MenuItem key={id} value={id}>{name}</MenuItem>)}
+            </TextField>
+          )}
+          <TextField type="date" size="small" label="Submitted from" InputLabelProps={{ shrink: true }}
+            sx={{ width: { sm: 150 }, bgcolor: 'background.paper' }}
+            value={approvalFrom} onChange={e => { setApprovalFrom(e.target.value); setPage(0); }} />
+          <TextField type="date" size="small" label="Submitted to" InputLabelProps={{ shrink: true }}
+            sx={{ width: { sm: 150 }, bgcolor: 'background.paper' }}
+            value={approvalTo} onChange={e => { setApprovalTo(e.target.value); setPage(0); }} />
+          <TextField type="number" size="small" label="Min amount" inputProps={{ min: 0 }}
+            sx={{ width: { sm: 120 }, bgcolor: 'background.paper' }}
+            value={approvalMinAmount} onChange={e => { setApprovalMinAmount(e.target.value); setPage(0); }} />
+          <TextField type="number" size="small" label="Max amount" inputProps={{ min: 0 }}
+            sx={{ width: { sm: 120 }, bgcolor: 'background.paper' }}
+            value={approvalMaxAmount} onChange={e => { setApprovalMaxAmount(e.target.value); setPage(0); }} />
         </Stack>
 
         {isLoading ? (

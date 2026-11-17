@@ -552,6 +552,7 @@ class ProcurementService {
         u.first_name, u.last_name, u.email AS requester_email,
         d.department_name, d.department_code,
         dn.donor_name, dn.donor_code,
+        pj.project_name, pj.project_code,
         (SELECT COUNT(*) FROM proc_quotations q WHERE q.request_id = pr.id) AS quotation_count,
         (SELECT SUM(${AWARDED_VALUE_SQL()}) FROM proc_quotations q
           WHERE q.request_id = pr.id AND q.is_selected = TRUE) AS selected_quotation_amount,
@@ -564,6 +565,7 @@ class ProcurementService {
       JOIN users u ON pr.requester_id = u.id
       LEFT JOIN departments d ON pr.department_id = d.id
       LEFT JOIN donors dn ON pr.donor_id = dn.id
+      LEFT JOIN projects pj ON pr.project_id = pj.id
       ${where}
       ORDER BY pr.created_at DESC
       LIMIT ${parseInt(filters.limit) || 50} OFFSET ${parseInt(filters.offset) || 0}

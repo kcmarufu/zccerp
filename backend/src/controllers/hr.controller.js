@@ -445,7 +445,13 @@ class HRController {
       const employeeId = await this.getEmployeeIdForUser(req.user.id);
       if (!employeeId) return res.json({ success: true, data: [], employee_id: null });
       const balances = await hrService.getLeaveBalances(employeeId, req.query.year);
-      res.json({ success: true, data: balances, employee_id: employeeId });
+      // zero_rate: this account accrues no leave and may not apply for any.
+      const [emp] = await query(
+        'SELECT accrual_enabled, monthly_accrual_days FROM hr_employees WHERE id = ?', [employeeId]
+      );
+      const zeroRate = !!emp && (Number(emp.accrual_enabled) === 0
+        || (emp.monthly_accrual_days !== null && Number(emp.monthly_accrual_days) === 0));
+      res.json({ success: true, data: balances, employee_id: employeeId, zero_rate: zeroRate });
     } catch (error) {
       console.error('Error fetching own leave balances:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch leave balances' });

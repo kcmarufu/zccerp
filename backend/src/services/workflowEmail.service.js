@@ -420,6 +420,49 @@ class WorkflowEmailService {
     }, [record.requester_id]);
   }
 
+  /**
+   * Where a person really reads mail. zcc-eco.org (and the mistyped gmail.org)
+   * mailboxes do not work, so the same person's @zccinzim.org account is used:
+   * same mailbox name first, then the same first and last name.
+   */
+  async _deliverableEmail(person) {
+    const address = String(person.email || '').trim().toLowerCase();
+    const [local, domain] = address.split('@');
+    if (domain && !['zcc-eco.org', 'gmail.org'].includes(domain)) return address;
+    const clean = (v) => String(v || '').replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const rows = await query(
+      `SELECT email, first_name, last_name FROM users
+        WHERE is_active = 1 AND LOWER(email) LIKE '%@zccinzim.org'`
+    );
+    const byMailbox = local && rows.find((r) => r.email.toLowerCase() === `${local}@zccinzim.org`);
+    if (byMailbox) return byMailbox.email;
+    const byName = rows.find((r) => clean(r.first_name) === clean(person.first_name)
+      && clean(r.last_name) === clean(person.last_name));
+    return byName ? byName.email : null;
+  }
+
+  /** The System rejected leave raised from a zero-rate account: tell the person where they read mail. */
+  async leaveZeroRateRejected(leaveRequestId) {
+    const record = await this._loadLeave(leaveRequestId);
+    if (!record) return;
+    const to = await this._deliverableEmail(record);
+    if (!to) {
+      console.error(`[WorkflowEmail] No working mailbox for ${fullName(record)} (${record.email}); leave ${leaveRequestId} rejection not emailed`);
+      return;
+    }
+    await emailService.send({
+      to,
+      subject: 'Your leave request was rejected: account has a zero accrual rate',
+      heading: 'Leave request rejected automatically',
+      tone: 'rejected',
+      intro: `Dear ${String(record.first_name).trim()}, your leave request was rejected automatically by the system because you used an account with a zero leave-accrual rate (${record.email}). `
+        + 'Accounts with a zero rate cannot be used for leave. Please apply again from your main staff account, '
+        + 'or contact the system administrator if you believe this account should accrue leave.',
+      details: [...this._leaveDetails(record), ['Account used', record.email], ['Rejected by', 'System (automatic)']],
+      link: '/hr/leave'
+    });
+  }
+
   async leaveDecided(leaveRequestId) {
     const record = await this._loadLeave(leaveRequestId);
     if (!record || !['APPROVED', 'REJECTED'].includes(record.status)) return;

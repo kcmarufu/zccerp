@@ -11,6 +11,14 @@ const leaveApproval = require('./leaveApproval.service');
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
                      'July', 'August', 'September', 'October', 'November', 'December'];
 
+
+const ZERO_RATE_LEAVE_MESSAGE =
+  'This account does not accrue leave (0 days a month), so it cannot be used to apply for leave. '
+  + 'Please apply from your main staff account, or contact the system administrator.';
+const ZERO_RATE_AUTO_REJECT_REASON =
+  'Rejected automatically by the system: this leave was applied for from an account with a zero leave-accrual rate. '
+  + 'Please apply from your main staff account, or contact the system administrator.';
+
 class HRService {
 
   // ========================================================================
@@ -697,6 +705,76 @@ class HRService {
   }
 
   /**
+   * Leave belongs only to accounts that accrue it. An employee record with
+   * accrual switched off, or a monthly rate of 0, is a secondary/system/
+   * procurement login, and may not apply for leave at all (user decision
+   * 2026-11-17).
+   */
+  async isZeroRateEmployee(connection, employeeId) {
+    const [rows] = await connection.execute(
+      `SELECT accrual_enabled, monthly_accrual_days FROM hr_employees WHERE id = ?`,
+      [employeeId]
+    );
+    if (!rows.length) return false;
+    const e = rows[0];
+    return Number(e.accrual_enabled) === 0
+      || (e.monthly_accrual_days !== null && Number(e.monthly_accrual_days) === 0);
+  }
+
+  async assertAccruingEmployee(connection, employeeId) {
+    if (await this.isZeroRateEmployee(connection, employeeId)) {
+      throw new Error(ZERO_RATE_LEAVE_MESSAGE);
+    }
+  }
+
+  /**
+   * Reject, as the System account, every PENDING leave request raised from a
+   * zero-rate account. Nothing was ever deducted for a pending request, so the
+   * balance is untouched. Returns the ids rejected (the caller sends the emails).
+   */
+  async autoRejectZeroRatePending() {
+    const [sys] = await query("SELECT id FROM users WHERE employee_id = 'SYSTEM' LIMIT 1");
+    const systemUserId = sys ? sys.id : null;
+    const pending = await query(
+      `SELECT lr.id, lr.employee_id, lr.leave_type_id, lr.days_requested,
+              lr.start_date, lt.is_deductible
+         FROM hr_leave_requests lr
+         JOIN hr_employees   e  ON e.id  = lr.employee_id
+         JOIN hr_leave_types lt ON lt.id = lr.leave_type_id
+        WHERE lr.status = 'PENDING'
+          AND (e.accrual_enabled = 0 OR e.monthly_accrual_days = 0)`
+    );
+    const rejected = [];
+    for (const r of pending) {
+      await transaction(async (connection) => {
+        const [res] = await connection.execute(
+          `UPDATE hr_leave_requests
+              SET status = 'REJECTED', approved_by = ?, approved_at = NOW(), rejection_reason = ?
+            WHERE id = ? AND status = 'PENDING'`,
+          [systemUserId, ZERO_RATE_AUTO_REJECT_REASON, r.id]
+        );
+        if (!res.affectedRows) return;
+        await this.recordLeaveAudit(connection, {
+          leave_request_id: r.id,
+          employee_id: r.employee_id,
+          leave_type_id: r.leave_type_id,
+          action: 'REJECTED',
+          from_status: 'PENDING',
+          to_status: 'REJECTED',
+          actor_user_id: systemUserId,
+          actor_role: 'SYSTEM',
+          comments: ZERO_RATE_AUTO_REJECT_REASON,
+          days_affected: 0,
+          is_deductible: r.is_deductible,
+          fiscal_year: new Date(r.start_date).getFullYear(),
+        });
+        rejected.push(r.id);
+      });
+    }
+    return rejected;
+  }
+
+  /**
    * Append one immutable row to hr_leave_audit. Never throws into the caller's
    * transaction for cosmetic reasons — but it IS part of the transaction, so a
    * genuine failure correctly rolls the whole action back.
@@ -989,6 +1067,9 @@ class HRService {
         if (target.length === 0) throw new Error('Target employee not found');
       }
 
+      // An account that accrues no leave may not apply for any.
+      await this.assertAccruingEmployee(connection, employeeId);
+
       // Validate dates.
       const startDate = new Date(data.start_date);
       const endDate   = new Date(data.end_date);
@@ -1151,6 +1232,8 @@ class HRService {
       // and the audit trail then records a decision on something the employee
       // never submitted. Approvers reject with a reason instead, and the
       // employee amends and resubmits.
+      await this.assertAccruingEmployee(connection, request.employee_id);
+
       const isOwner = Number(request.employee_user_id) === Number(actor.id);
       if (!isOwner) {
         throw new Error(
@@ -1342,6 +1425,9 @@ class HRService {
       };
 
       await leaveApproval.assertCanApprove(approver, requesterContext);
+
+      // Leave raised from a zero-rate account is never approved; rejecting is still allowed.
+      if (approved) await this.assertAccruingEmployee(connection, request.employee_id);
 
       const newStatus = approved ? 'APPROVED' : 'REJECTED';
 

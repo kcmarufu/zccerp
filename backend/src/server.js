@@ -13,6 +13,7 @@ const jwt = require('jsonwebtoken');
 const { testConnection, logger } = require('./config/database');
 const routes = require('./routes');
 const leaveAccrualScheduler = require('./scheduler/leaveAccrual.scheduler');
+const zeroRateLeaveScheduler = require('./scheduler/zeroRateLeave.scheduler');
 const budgetReservationScheduler = require('./scheduler/budgetReservation.scheduler');
 
 const app = express();
@@ -166,6 +167,9 @@ const startServer = async () => {
 
       // Reject approved requests whose 10-working-day budget reservation ran out
       budgetReservationScheduler.start();
+
+      // Reject pending leave raised from zero-accrual-rate accounts (boot + hourly)
+      zeroRateLeaveScheduler.start();
     });
   } catch (error) {
     logger.error('Failed to start server:', error);

@@ -346,6 +346,12 @@ export const getMyLeaveBalances = async (year?: number): Promise<HRLeaveBalance[
   return response.data.data;
 };
 
+/** True when the caller's account accrues no leave (rate 0) and so may not apply for any. */
+export const getMyLeaveZeroRate = async (): Promise<boolean> => {
+  const response = await api.get('/hr/my-leave-balances');
+  return response.data?.zero_rate === true;
+};
+
 export const getLeaveBalances = async (employeeId: number, year?: number): Promise<HRLeaveBalance[]> => {
   const params = year ? { year } : {};
   const response = await api.get(`/hr/employees/${employeeId}/leave-balances`, { params });
